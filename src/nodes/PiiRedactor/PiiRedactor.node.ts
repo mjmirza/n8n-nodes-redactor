@@ -160,7 +160,7 @@ export class PiiRedactor implements INodeType {
         type: 'options',
         displayOptions: {
           show: {
-            operation: ['redact', 'detect', 'verify'],
+            operation: ['redact'],
           },
         },
         options: [
@@ -188,7 +188,7 @@ export class PiiRedactor implements INodeType {
         type: 'multiOptions',
         displayOptions: {
           show: {
-            operation: ['redact', 'detect', 'verify'],
+            operation: ['redact'],
             detectionScope: ['select'],
           },
         },
@@ -314,7 +314,7 @@ export class PiiRedactor implements INodeType {
         },
         displayOptions: {
           show: {
-            operation: ['redact', 'detect', 'verify'],
+            operation: ['redact'],
           },
         },
         default: {},
@@ -482,28 +482,12 @@ export class PiiRedactor implements INodeType {
     const items = this.getInputData();
     const operation = this.getNodeParameter('operation', 0) as string;
 
-    // ─── DETECT / VERIFY (no vault storage needed) ──
+    // ─── DETECT / VERIFY (zero-config, scans everything) ──
     if (operation === 'detect' || operation === 'verify') {
-      let enabledPatterns: string[];
-      try {
-        const detectionScope = this.getNodeParameter('detectionScope', 0, 'all') as string;
-        enabledPatterns = detectionScope === 'all'
-          ? getPatternOptions().map((p) => p.value)
-          : this.getNodeParameter('piiTypes', 0) as string[];
-      } catch {
-        // Fallback: detect all patterns
-        enabledPatterns = getPatternOptions().map((p) => p.value);
-      }
-
-      let customPatterns: CustomPattern[] = [];
-      try {
-        const raw = this.getNodeParameter('customPatterns', 0, {}) as {
-          patterns?: CustomPattern[];
-        };
-        customPatterns = raw.patterns ?? [];
-      } catch {
-        // No custom patterns defined
-      }
+      // Detect and Verify always scan ALL 216 patterns.
+      // No parameters needed. Simple, reliable, no "Could not get parameter".
+      const enabledPatterns = getPatternOptions().map((p) => p.value);
+      const customPatterns: CustomPattern[] = [];
 
       const tempVault = createVault('memory');
       const tempSessionId = `${operation}_${Date.now()}`;
