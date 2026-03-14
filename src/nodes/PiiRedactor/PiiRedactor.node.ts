@@ -441,9 +441,74 @@ export class PiiRedactor implements INodeType {
   async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
     const items = this.getInputData();
     const operation = this.getNodeParameter('operation', 0) as string;
-    const vaultStorage = this.getNodeParameter('vaultStorage', 0, 'memory') as VaultStorage;
-    const vaultDir = this.getNodeParameter('vaultDir', 0, '') as string;
 
+    // ─── DETECT / VERIFY (no vault storage needed) ──
+    if (operation === 'detect' || operation === 'verify') {
+      const detectionScope = this.getNodeParameter('detectionScope', 0, 'all') as string;
+      const enabledPatterns = detectionScope === 'all'
+        ? getPatternOptions().map((p) => p.value)
+        : this.getNodeParameter('piiTypes', 0) as string[];
+
+      let customPatterns: CustomPattern[] = [];
+      try {
+        const raw = this.getNodeParameter('customPatterns', 0, {}) as {
+          patterns?: CustomPattern[];
+        };
+        customPatterns = raw.patterns ?? [];
+      } catch {
+        // No custom patterns defined
+      }
+
+      const tempVault = createVault('memory');
+      const tempSessionId = `${operation}_${Date.now()}`;
+      tempVault.getOrCreateSession(tempSessionId, 60000);
+
+      const ctx: RedactionContext = {
+        enabledPatterns,
+        customPatterns,
+        mode: 'token',
+        dedup: true,
+        fieldRules: [],
+        fieldMode: 'all',
+      };
+
+      const allHits: RedactionHit[] = [];
+      for (let i = 0; i < items.length; i++) {
+        const hits: RedactionHit[] = [];
+        redactValue(items[i].json, ctx, tempVault, tempSessionId, hits, i);
+        allHits.push(...hits);
+      }
+      tempVault.deleteSession(tempSessionId);
+
+      if (operation === 'detect') {
+        const returnData = items.map((item) => ({ json: item.json }));
+        const report = buildReport(tempSessionId, allHits);
+        return [returnData, [{ json: report as unknown as IDataObject }]];
+      }
+
+      // Verify
+      const passed = allHits.length === 0;
+      return [[{
+        json: {
+          verified: passed,
+          status: passed ? 'PASS' : 'FAIL',
+          leaksFound: allHits.length,
+          message: passed
+            ? 'No PII detected. Data appears clean.'
+            : `Found ${allHits.length} potential PII leak(s) in the data.`,
+          leaks: allHits.map((h) => ({
+            field: h.field,
+            patternLabel: h.patternLabel,
+            category: h.category,
+            itemIndex: h.itemIndex,
+          })),
+        } as unknown as IDataObject,
+      }]];
+    }
+
+    // All other operations (redact, restore, stats, purge) use vault
+    const vaultStorage = this.getNodeParameter('vaultStorage', 0, 'file') as VaultStorage;
+    const vaultDir = this.getNodeParameter('vaultDir', 0, '') as string;
     const vault = createVault(vaultStorage, vaultDir || undefined);
 
     // ─── STATS ───────────────────────────────
@@ -572,105 +637,6 @@ export class PiiRedactor implements INodeType {
       if (deleteAfterRestore) {
         vault.deleteSession(actualSessionId);
       }
-
-      return [returnData];
-    }
-
-    // ─── DETECT (scan only, no modification) ──
-    if (operation === 'detect') {
-      const detectionScope = this.getNodeParameter('detectionScope', 0, 'all') as string;
-      const enabledPatterns = detectionScope === 'all'
-        ? getPatternOptions().map((p) => p.value)
-        : this.getNodeParameter('piiTypes', 0) as string[];
-
-      const customPatternsRaw = this.getNodeParameter('customPatterns', 0, {}) as {
-        patterns?: CustomPattern[];
-      };
-      const customPatterns = customPatternsRaw.patterns ?? [];
-
-      const tempVault = createVault('memory');
-      const tempSessionId = `detect_${Date.now()}`;
-      tempVault.getOrCreateSession(tempSessionId, 60000);
-
-      const ctx: RedactionContext = {
-        enabledPatterns,
-        customPatterns,
-        mode: 'token',
-        dedup: true,
-        fieldRules: [],
-        fieldMode: 'all',
-      };
-
-      const allHits: RedactionHit[] = [];
-      const returnData: INodeExecutionData[] = [];
-
-      for (let i = 0; i < items.length; i++) {
-        const hits: RedactionHit[] = [];
-        // Run detection but return ORIGINAL data (not modified)
-        redactValue(items[i].json, ctx, tempVault, tempSessionId, hits, i);
-        allHits.push(...hits);
-        // Pass through original data unchanged
-        returnData.push({ json: items[i].json });
-      }
-
-      const report = buildReport(tempSessionId, allHits);
-      tempVault.deleteSession(tempSessionId);
-
-      // Output 1: original data (unchanged), Output 2: detection report
-      return [returnData, [{ json: report as unknown as IDataObject }]];
-    }
-
-    // ─── VERIFY (post-redaction leak check) ──
-    if (operation === 'verify') {
-      const detectionScope = this.getNodeParameter('detectionScope', 0, 'all') as string;
-      const enabledPatterns = detectionScope === 'all'
-        ? getPatternOptions().map((p) => p.value)
-        : this.getNodeParameter('piiTypes', 0) as string[];
-
-      const customPatternsRaw = this.getNodeParameter('customPatterns', 0, {}) as {
-        patterns?: CustomPattern[];
-      };
-      const customPatterns = customPatternsRaw.patterns ?? [];
-
-      const tempVault = createVault('memory');
-      const tempSessionId = `verify_${Date.now()}`;
-      tempVault.getOrCreateSession(tempSessionId, 60000);
-
-      const ctx: RedactionContext = {
-        enabledPatterns,
-        customPatterns,
-        mode: 'token',
-        dedup: true,
-        fieldRules: [],
-        fieldMode: 'all',
-      };
-
-      const allHits: RedactionHit[] = [];
-      for (let i = 0; i < items.length; i++) {
-        const hits: RedactionHit[] = [];
-        redactValue(items[i].json, ctx, tempVault, tempSessionId, hits, i);
-        allHits.push(...hits);
-      }
-
-      tempVault.deleteSession(tempSessionId);
-
-      const passed = allHits.length === 0;
-      const returnData: INodeExecutionData[] = [{
-        json: {
-          verified: passed,
-          status: passed ? 'PASS' : 'FAIL',
-          leaksFound: allHits.length,
-          message: passed
-            ? 'No PII detected. Data appears clean.'
-            : `Found ${allHits.length} potential PII leak(s) in redacted data.`,
-          leaks: allHits.map((h) => ({
-            field: h.field,
-            patternLabel: h.patternLabel,
-            category: h.category,
-            itemIndex: h.itemIndex,
-          })),
-        } as unknown as IDataObject,
-      }];
 
       return [returnData];
     }
