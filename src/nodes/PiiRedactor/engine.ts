@@ -558,8 +558,8 @@ export function redactValue(
 
     // Semantic field-name detection: if the field name tells us what this is,
     // redact the ENTIRE value without needing regex to match.
-    // Also uses context: if sibling fields indicate PII record, ambiguous
-    // fields like bare "id" get redacted too.
+    // Skipped in verify mode (we only care about actual PII values, not field names).
+    if (!ctx.skipSemantic) {
     const semantic = getSemanticLabel(currentPath, siblingKeys);
     if (semantic && semantic.label && value.trim().length > 0) {
       const replacement = applyRedaction(
@@ -577,12 +577,13 @@ export function redactValue(
       });
       return replacement;
     }
+    } // end skipSemantic check
 
     // Fall through to regex-based detection
     return redactText(value, ctx, vault, sessionId, hits, itemIndex, currentPath);
   }
 
-  if (typeof value === 'number') {
+  if (typeof value === 'number' && !ctx.skipSemantic) {
     // Semantic detection for numeric values (salary, age, etc.)
     const semantic = getSemanticLabel(currentPath, siblingKeys);
     if (semantic && semantic.label && value !== 0) {

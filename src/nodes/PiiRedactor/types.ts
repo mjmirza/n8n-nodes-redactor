@@ -85,4 +85,5 @@ export interface RedactionContext {
   dedup: boolean;
   fieldRules: FieldRule[];
   fieldMode: 'all' | 'allowlist' | 'denylist';
+  skipSemantic?: boolean;
 }

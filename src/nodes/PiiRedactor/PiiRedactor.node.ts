@@ -499,6 +499,9 @@ export class PiiRedactor implements INodeType {
         dedup: true,
         fieldRules: [],
         fieldMode: 'all',
+        // Verify mode: skip semantic field-name detection.
+        // Only check if actual PII VALUES leaked through (regex only).
+        skipSemantic: operation === 'verify',
       };
 
       const allHits: RedactionHit[] = [];
