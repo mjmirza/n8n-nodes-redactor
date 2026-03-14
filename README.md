@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://unpkg.com/n8n-nodes-redactor@1.0.3/dist/nodes/PiiRedactor/redact.png" alt="PII Redactor" width="80" />
+</p>
+
 <h1 align="center">n8n-nodes-redactor</h1>
 
 <p align="center">

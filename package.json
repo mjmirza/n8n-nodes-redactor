@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-redactor",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Stop sending customer PII to LLMs unprotected. 30+ PII types, reversible vault, 4 redaction modes, field targeting, audit trail. 100% local - no cloud, no third-party. GDPR/HIPAA ready. Built by next8n.",
   "keywords": [
     "n8n-community-node-package",
