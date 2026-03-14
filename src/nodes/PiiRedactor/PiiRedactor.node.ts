@@ -513,26 +513,48 @@ export class PiiRedactor implements INodeType {
       tempVault.deleteSession(tempSessionId);
 
       if (operation === 'detect') {
+        // Always return original data + detection summary as last item
         const returnData = items.map((item) => ({ json: item.json }));
         const report = buildReport(tempSessionId, allHits);
+
+        // Summary always appended so user sees results
+        const summary = {
+          _redactorScan: true,
+          status: allHits.length === 0 ? 'CLEAN' : 'PII_FOUND',
+          totalPiiFound: allHits.length,
+          itemsScanned: items.length,
+          hitsByCategory: report.hitsByCategory,
+          hitsByPattern: report.hitsByPattern,
+          timestamp: report.timestamp,
+        };
+
         let includeReport = false;
         try { includeReport = this.getNodeParameter('includeReport', 0, false) as boolean; } catch {}
+
         if (includeReport) {
-          return [returnData, [{ json: report as unknown as IDataObject }]];
+          // Full report on second output
+          return [returnData, [{ json: { ...summary, hits: report.hits } as unknown as IDataObject }]];
         }
+
+        // Append summary as last item in single output
+        returnData.push({ json: summary as unknown as IDataObject });
         return [returnData];
       }
 
       // Verify
       const passed = allHits.length === 0;
+      const verifyReport = buildReport(tempSessionId, allHits);
       return [[{
         json: {
           verified: passed,
           status: passed ? 'PASS' : 'FAIL',
           leaksFound: allHits.length,
+          itemsScanned: items.length,
           message: passed
-            ? 'No PII detected. Data appears clean.'
-            : `Found ${allHits.length} potential PII leak(s) in the data.`,
+            ? 'No PII detected in values. Data appears properly redacted.'
+            : `Found ${allHits.length} potential PII leak(s). Values contain detectable sensitive data.`,
+          hitsByCategory: verifyReport.hitsByCategory,
+          hitsByPattern: verifyReport.hitsByPattern,
           leaks: allHits.map((h) => ({
             field: h.field,
             patternLabel: h.patternLabel,
@@ -552,11 +574,21 @@ export class PiiRedactor implements INodeType {
     if (operation === 'stats') {
       vault.cleanup();
       const sessions = vault.listSessions();
+      const totalEntries = sessions.reduce((sum, s) => sum + s.entryCount, 0);
       return [[
         {
           json: {
             totalSessions: sessions.length,
-            sessions,
+            totalEntries,
+            vaultStorage: vaultStorage,
+            timestamp: new Date().toISOString(),
+            sessions: sessions.map((s) => ({
+              sessionId: s.sessionId,
+              entryCount: s.entryCount,
+              createdAt: s.createdAt,
+              ttl: s.ttl,
+              ttlMinutes: s.ttl > 0 ? Math.round(s.ttl / 60000) : 'no expiry',
+            })),
           } as unknown as IDataObject,
         },
       ]];
