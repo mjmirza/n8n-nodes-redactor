@@ -32,10 +32,7 @@ export class PiiRedactor implements INodeType {
       name: 'Redactor',
     },
     inputs: ['main'],
-    // @ts-ignore n8n supports dynamic outputs via expressions
-    outputs: '={{ $parameter["includeReport"] ? ["main", "main"] : ["main"] }}',
-    // @ts-ignore n8n supports dynamic output names via expressions
-    outputNames: '={{ $parameter["includeReport"] ? ["Data", "Report"] : ["Data"] }}',
+    outputs: ['main'],
 
     properties: [
       // ═══════════════════════════════════════
@@ -517,7 +514,7 @@ export class PiiRedactor implements INodeType {
         let includeReport = false;
         try { includeReport = this.getNodeParameter('includeReport', 0, false) as boolean; } catch {}
         if (includeReport) {
-          return [returnData, [{ json: report as unknown as IDataObject }]];
+          returnData.push({ json: report as unknown as IDataObject });
         }
         return [returnData];
       }
@@ -626,7 +623,7 @@ export class PiiRedactor implements INodeType {
 
       if (includeReport) {
         const report = buildReport(sessionId, allHits);
-        return [returnData, [{ json: report as unknown as IDataObject }]];
+        returnData.push({ json: report as unknown as IDataObject });
       }
       return [returnData];
     }
