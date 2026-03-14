@@ -118,6 +118,8 @@ export class FileVault implements IVault {
     if (!fs.existsSync(this.dir)) {
       fs.mkdirSync(this.dir, { recursive: true });
     }
+    // Auto-cleanup expired files on every instantiation
+    this.cleanup();
   }
 
   private filePath(sessionId: string): string {
@@ -150,6 +152,8 @@ export class FileVault implements IVault {
   }
 
   getOrCreateSession(sessionId: string, ttl: number): VaultSession {
+    // Auto-cleanup expired files before creating new sessions
+    this.cleanup();
     const existing = this.load(sessionId);
     if (existing) return existing;
     const session: VaultSession = {

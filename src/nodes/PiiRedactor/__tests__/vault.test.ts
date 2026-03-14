@@ -207,8 +207,12 @@ describe('FileVault', () => {
       // busy wait
     }
 
-    const removed = vault.cleanup();
-    expect(removed).toBeGreaterThanOrEqual(1);
+    // Auto-cleanup fires on getOrCreateSession and constructor,
+    // so the expired file may already be gone. Verify it's not accessible.
+    const vault2 = new FileVault(testDir);
+    expect(vault2.getSession('expired-file')).toBeNull();
+    // The alive session should still exist
+    expect(vault2.getSession('alive-file')).not.toBeNull();
   });
 
   test('findByOriginal works with file vault', () => {
