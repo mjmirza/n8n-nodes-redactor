@@ -154,7 +154,7 @@ describe('Semantic detection: Employee / HR data', () => {
       createContext(),
       vault, 'hr5', hits, 0,
     ) as any;
-    expect(result.hireDate).toContain('[HIRE_DATE_');
+    expect(result.hireDate).toContain('[EMPLOYMENT_DATE_');
     // Should NOT be broken into postal code + card expiry
     expect(result.hireDate).not.toContain('POSTCODE');
     expect(result.hireDate).not.toContain('CARD_EXPIRY');
@@ -310,7 +310,7 @@ describe('Semantic detection: Full round-trip with real-world data', () => {
     expect(redacted.email).toContain('['); // caught by regex or semantic
     expect(redacted.department).toContain('[DEPARTMENT_');
     expect(redacted.position).toContain('[JOB_TITLE_');
-    expect(redacted.hireDate).toContain('[HIRE_DATE_');
+    expect(redacted.hireDate).toContain('[EMPLOYMENT_DATE_');
     expect(redacted.salary).toContain('[SALARY_');
     expect(redacted.company).toContain('[COMPANY_');
     expect(redacted.address).toContain('[ADDRESS_');

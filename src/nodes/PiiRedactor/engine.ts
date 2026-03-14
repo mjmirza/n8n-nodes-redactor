@@ -172,112 +172,271 @@ const SEMANTIC_FIELD_MAP: Array<{
   label: string;
   category: PiiCategory;
 }> = [
-  // Person names
+  // ═══════════════════════════════════════════
+  // PERSON NAMES (EN/DE/FR/ES/IT/PT/NL/SV/NO/DA/PL/RU/JA/KO/ZH/AR/TR)
+  // Covers: camelCase, snake_case, PascalCase, abbreviations, prefixed, suffixed
+  // ═══════════════════════════════════════════
   {
-    keys: /^(?:name|first_?name|last_?name|full_?name|given_?name|family_?name|surname|maiden_?name|vorname|nachname|familienname|prenom|nom|nombre|apellido|displayName|display_name|contactName|contact_name|customerName|customer_name|userName|user_name|recipient|sender|author|owner)$/i,
+    keys: /^(?:name|first_?name|last_?name|full_?name|given_?name|family_?name|middle_?name|surname|maiden_?name|nick_?name|alias|prefix|suffix|salutation|display_?name|display|contact_?name|customer_?name|client_?name|patient_?name|user_?name|member_?name|subscriber_?name|account_?name|holder_?name|card_?holder|cardholder_?name|beneficiary_?name|recipient_?name|sender_?name|author_?name|owner_?name|guardian_?name|parent_?name|spouse_?name|partner_?name|emergency_?contact|next_?of_?kin|applicant_?name|candidate_?name|student_?name|teacher_?name|employee_?name|manager_?name|supervisor_?name|assignee|reporter|creator|modifier|approver|reviewer|guarantor|witness|signatory|cosigner|fname|lname|mname|fn|ln|mn|firstname|lastname|middlename|fullname|givenname|familyname|sur_?name|name_?first|name_?last|name_?full|name_?prefix|name_?suffix|legal_?name|birth_?name|married_?name|former_?name|known_?as|aka|vorname|nachname|familienname|geburtsname|anzeige_?name|benutzername|kundenname|prenom|nom|nom_?de_?famille|nom_?complet|nom_?de_?jeune_?fille|nombre|apellido|apellidos|nombre_?completo|nome|cognome|nome_?completo|naam|achternaam|voornaam|volledige_?naam|fornamn|efternamn|fornavn|etternavn|imie|nazwisko|imya|familiya|sei|mei|shimei|seimei|xing|ming|xingming|isim|soyisim|ad|soyad|ism|nasab)$/i,
     label: 'PERSON_NAME',
     category: 'identity',
   },
-  // Employee / Staff IDs
+
+  // ═══════════════════════════════════════════
+  // EMPLOYEE / STAFF / WORKER IDs
+  // ═══════════════════════════════════════════
   {
-    keys: /^(?:employee_?id|staff_?id|personnel_?(?:id|number|nr)|personalnummer|mitarbeiter_?(?:id|nummer|nr)|worker_?id|emp_?id|empId|staffNumber|badge_?(?:id|number))$/i,
+    keys: /^(?:employee_?id|emp_?id|emp_?no|emp_?num|emp_?number|staff_?id|staff_?no|staff_?number|personnel_?(?:id|number|no|nr)|worker_?id|worker_?number|workforce_?id|badge_?(?:id|number|no)|clock_?(?:id|number)|payroll_?(?:id|number|no)|hr_?id|hr_?number|contractor_?id|temp_?id|intern_?id|associate_?id|team_?member_?id|personalnummer|mitarbeiter_?(?:id|nummer|nr|number)|arbeitnehmer_?nr|numero_?employe|matricule|numero_?dipendente|medewerkernummer|personeelsnummer|anstallningsnummer|ansattnummer|numer_?pracownika)$/i,
     label: 'EMPLOYEE_ID',
     category: 'identity',
   },
-  // Department
+
+  // ═══════════════════════════════════════════
+  // DEPARTMENT / DIVISION / TEAM / BUSINESS UNIT
+  // ═══════════════════════════════════════════
   {
-    keys: /^(?:department|dept|abteilung|division|business_?unit|team|group|service|unit)$/i,
+    keys: /^(?:department|dept|department_?name|dept_?name|dept_?code|division|division_?name|business_?unit|bu|cost_?center|cost_?centre|profit_?center|team|team_?name|group|group_?name|unit|unit_?name|section|section_?name|branch|branch_?name|office|office_?name|site|site_?name|location_?name|work_?location|facility|plant|factory|warehouse|abteilung|abteilungsname|bereich|referat|dienststelle|departement|service|direction|dipartimento|reparto|ufficio|afdeling|divisie|avdelning|avdeling|wydzial|dzial|otdel|bu_?name|org_?unit)$/i,
     label: 'DEPARTMENT',
     category: 'identity',
   },
-  // Job title / position / role
+
+  // ═══════════════════════════════════════════
+  // JOB TITLE / POSITION / ROLE / DESIGNATION / OCCUPATION
+  // ═══════════════════════════════════════════
   {
-    keys: /^(?:position|job_?title|title|role|designation|occupation|berufsbezeichnung|stelle|poste|titulo|function|jobRole|job_role)$/i,
+    keys: /^(?:position|job_?title|title|role|designation|occupation|profession|job_?role|job_?function|job_?type|job_?name|job_?description|job_?code|job_?level|job_?grade|job_?band|job_?family|job_?category|grade|level|rank|seniority|career_?level|function|functional_?title|working_?title|official_?title|classification|employment_?type|contract_?type|work_?type|engagement_?type|berufsbezeichnung|stelle|stellenbezeichnung|position_?title|funktion|dienstbezeichnung|rang|beruf|taetigkeit|poste|fonction|intitule_?du_?poste|titulo|cargo|puesto|posizione|ruolo|qualifica|mansione|functie|functietitel|befattning|stilling|stanowisko|zawod|dolzhnost|shokumei|yakushoku|zhiwei|zhicheng|gorev|unvan|pozisyon)$/i,
     label: 'JOB_TITLE',
     category: 'identity',
   },
-  // Salary / compensation
+
+  // ═══════════════════════════════════════════
+  // SALARY / COMPENSATION / PAY / INCOME / WAGES
+  // ═══════════════════════════════════════════
   {
-    keys: /^(?:salary|compensation|wage|wages|income|pay|pay_?rate|hourly_?rate|annual_?salary|monthly_?salary|gehalt|lohn|remuneration|base_?pay|gross_?pay|net_?pay|bonus|commission)$/i,
+    keys: /^(?:salary|compensation|wage|wages|income|pay|pay_?rate|hourly_?rate|daily_?rate|annual_?salary|monthly_?salary|weekly_?salary|yearly_?salary|base_?pay|base_?salary|gross_?pay|gross_?salary|net_?pay|net_?salary|take_?home|total_?comp|total_?compensation|total_?pay|total_?earnings|earnings|remuneration|stipend|allowance|bonus|bonus_?amount|commission|commission_?amount|overtime|overtime_?pay|severance|severance_?pay|pension|pension_?amount|retirement_?contribution|stock_?options|equity|rsu|vesting|deduction|deductions|tax_?withholding|withholding|benefits_?value|ctc|cost_?to_?company|package|comp_?package|offer_?amount|starting_?salary|current_?salary|previous_?salary|expected_?salary|desired_?salary|salary_?range|pay_?grade|pay_?band|pay_?scale|gehalt|brutto_?gehalt|netto_?gehalt|grundgehalt|jahresgehalt|monatsgehalt|lohn|bruttolohn|nettolohn|verguetung|entgelt|bezuege|zuschlag|praemie|provision|salaire|remuneration_?brute|remuneration_?nette|stipendio|retribuzione|salario|sueldo|remuneracao|loon|salaris|lon|lonn|wynagrodzenie|pensja|zarplata|oklad|kyuyo|nenshu|gongzi|xinshui|maas|ucret)$/i,
     label: 'SALARY',
     category: 'financial',
   },
-  // Hire / start date
+
+  // ═══════════════════════════════════════════
+  // DATES: Hire, Start, End, Termination, Birth, Death, etc.
+  // ═══════════════════════════════════════════
   {
-    keys: /^(?:hire_?date|start_?date|joining_?date|date_?of_?hire|employment_?date|eintrittsdatum|einstellungsdatum|onboarding_?date|termination_?date|end_?date|leaving_?date|resignation_?date)$/i,
-    label: 'HIRE_DATE',
+    keys: /^(?:hire_?date|start_?date|joining_?date|date_?of_?hire|date_?of_?joining|employment_?date|employment_?start|onboarding_?date|effective_?date|commencement_?date|appointment_?date|probation_?(?:start|end)_?date|termination_?date|end_?date|leaving_?date|resignation_?date|separation_?date|exit_?date|last_?day|last_?working_?day|notice_?date|retirement_?date|contract_?(?:start|end)_?date|trial_?(?:start|end)_?date|review_?date|appraisal_?date|promotion_?date|transfer_?date|anniversary_?date|tenure_?start|eintrittsdatum|einstellungsdatum|austrittsdatum|kuendigungsdatum|probezeitende|vertragsbeginn|vertragsende|date_?embauche|date_?de_?debut|date_?de_?fin|date_?sortie|fecha_?de_?inicio|fecha_?de_?fin|data_?assunzione|data_?cessazione|datum_?indiensttreding|datum_?uitdiensttreding|anstallningsdatum|ansettelsesdato|data_?zatrudnienia)$/i,
+    label: 'EMPLOYMENT_DATE',
     category: 'temporal',
   },
-  // Date of birth
   {
-    keys: /^(?:dob|date_?of_?birth|birth_?date|birthday|geburtsdatum|born|fecha_?de_?nacimiento|data_?di_?nascita)$/i,
+    keys: /^(?:dob|date_?of_?birth|birth_?date|birthday|birth_?day|born|born_?on|born_?date|geburtsdatum|geburtstag|date_?de_?naissance|fecha_?de_?nacimiento|data_?di_?nascita|geboortedatum|fodelsedatum|fodselsdato|syntymapaiva|data_?de_?nascimento|data_?urodzenia|den_?rozhdeniya|seinengappi|shengri|dogum_?tarihi)$/i,
     label: 'DOB',
     category: 'temporal',
   },
-  // Address
   {
-    keys: /^(?:address|street_?address|home_?address|mailing_?address|shipping_?address|billing_?address|postal_?address|residence|domicile|anschrift|adresse|wohnadresse|wohnort|street|street_?line|address_?line|city|state|province|country|region|zip|zip_?code|postal_?code|plz|postleitzahl)$/i,
+    keys: /^(?:date_?of_?death|death_?date|deceased_?date|died_?on|died|sterbedatum|todesdatum|date_?de_?deces|fecha_?de_?defuncion|data_?di_?morte)$/i,
+    label: 'DATE_OF_DEATH',
+    category: 'temporal',
+  },
+  {
+    keys: /^(?:age|alter|edad|eta|age_?years|current_?age|yaş|wiek|vozrast|nenrei|nianling)$/i,
+    label: 'AGE',
+    category: 'temporal',
+  },
+
+  // ═══════════════════════════════════════════
+  // ADDRESS / LOCATION (every variation in 15+ languages)
+  // ═══════════════════════════════════════════
+  {
+    keys: /^(?:address|street_?address|home_?address|mailing_?address|shipping_?address|billing_?address|postal_?address|residential_?address|permanent_?address|temporary_?address|current_?address|previous_?address|work_?address|office_?address|business_?address|delivery_?address|correspondence_?address|legal_?address|registered_?address|address_?line_?[123]|addr_?[123]|addr|street|street_?name|street_?line|street_?line_?[12]|house_?number|house_?no|building|apartment|apt|flat|suite|floor|room|unit_?number|block|lot|po_?box|post_?box|city|town|municipality|village|locality|suburb|district|borough|county|state|province|region|territory|country|country_?code|country_?name|nation|zip|zip_?code|zipcode|postal_?code|postcode|post_?code|pin_?code|area_?code|geo_?location|latitude|longitude|lat|lng|coordinates|place|place_?of_?birth|birth_?place|place_?of_?residence|domicile|residence|neighborhood|neighbourhood|quarter|canton|prefecture|commune|departement|land|bundesland|kreis|bezirk|ortsteil|stadtteil|gemeinde|anschrift|adresse|wohnadresse|wohnort|strasse|hausnummer|plz|postleitzahl|ort|stadt|wohnhaft|rue|ville|code_?postal|cedex|calle|direccion|codigo_?postal|localidad|poblacion|provincia|comunidad|via|indirizzo|cap|citta|comune|straat|huisnummer|postbus|plaats|woonplaats|gata|postnummer|sted|ulica|kod_?pocztowy|miasto|adres|gorod|pochta|jyusho|jutaku|dizhi|chengshi|youbian|adres|mahalle|ilce|il|posta_?kodu)$/i,
     label: 'ADDRESS',
     category: 'location',
   },
-  // Phone
+
+  // ═══════════════════════════════════════════
+  // PHONE / MOBILE / FAX / CONTACT NUMBERS
+  // ═══════════════════════════════════════════
   {
-    keys: /^(?:phone|phone_?number|mobile|cell|telephone|tel|fax|contact_?number|telefon|telefonnummer|handy|rufnummer|numero_?de_?telephone)$/i,
+    keys: /^(?:phone|phone_?number|phone_?no|mobile|mobile_?number|mobile_?no|cell|cell_?phone|cell_?number|telephone|tel|tel_?number|fax|fax_?number|fax_?no|contact_?number|contact_?phone|home_?phone|work_?phone|office_?phone|business_?phone|direct_?line|direct_?dial|extension|ext|callback|callback_?number|sms_?number|whatsapp|whatsapp_?number|primary_?phone|secondary_?phone|alternate_?phone|emergency_?phone|telefon|telefonnummer|mobilnummer|handy|handynummer|festnetz|rufnummer|durchwahl|faxnummer|telephone_?portable|portable|fixe|numero_?de_?telephone|numero_?de_?portable|telefono|cellulare|numero_?di_?telefono|numero_?de_?telefone|celular|telefoon|mobiel|telefoonnummer|mobilnummer_?2|telefonnr|tlf|telefon_?komorkowy|telefon_?stacjonarny|nomer_?telefona|denwabangou|keitai|dianhua|shouji|telefon_?numarasi|cep_?telefonu)$/i,
     label: 'PHONE',
     category: 'contact',
   },
-  // SSN / National ID
+
+  // ═══════════════════════════════════════════
+  // EMAIL (every variation)
+  // ═══════════════════════════════════════════
   {
-    keys: /^(?:ssn|social_?security|social_?security_?number|national_?id|national_?id_?number|identity_?number|id_?number|tax_?id|tax_?number|steuer_?id|steuer_?nummer|nif|nie|dni|bsn|nino|pps|pesel|cpf|aadhaar|pan)$/i,
+    keys: /^(?:email|email_?address|e_?mail|mail|mail_?address|primary_?email|secondary_?email|work_?email|personal_?email|business_?email|contact_?email|login_?email|notification_?email|recovery_?email|backup_?email|alternate_?email|alt_?email|reply_?to|from_?email|to_?email|cc|bcc|email_?id|e_?mail_?adresse|elektronische_?post|correo|correo_?electronico|indirizzo_?email|posta_?elettronica|emailadres|epostadress|epost|adres_?email|pochta|mail_?adresi|eposta)$/i,
+    label: 'EMAIL',
+    category: 'contact',
+  },
+
+  // ═══════════════════════════════════════════
+  // SSN / NATIONAL ID / TAX ID / GOV ID
+  // ═══════════════════════════════════════════
+  {
+    keys: /^(?:ssn|social_?security|social_?security_?number|social_?insurance|social_?insurance_?number|sin|national_?id|national_?id_?number|national_?identity|identity_?number|identity_?card|id_?number|id_?card|id_?no|id_?document|personal_?id|personal_?number|personal_?code|citizen_?id|resident_?id|registration_?number|civil_?id|civil_?registration|gov_?id|government_?id|tax_?id|tax_?number|tax_?identification|taxpayer_?id|tin|itin|ein|vat_?number|vat_?id|steuer_?id|steuer_?nummer|steueridentifikationsnummer|steuernummer|sozialversicherungsnummer|personalausweisnummer|ausweisnummer|nif|nie|dni|cif|nif_?numero|bsn|burger_?service_?nummer|nino|national_?insurance|national_?insurance_?number|pps|pps_?number|pesel|nip|regon|personnummer|fodselsnummer|cpr|cpr_?nummer|hetu|henkilotunnus|cpf|rg|cnpj|curp|rfc|aadhaar|aadhar|pan|pan_?number|nric|fin|my_?number|rrn|ahv|avs|codice_?fiscale|carta_?identita|carte_?identite|numero_?securite_?sociale|nir|rijksregisternummer|numero_?identite|kimlik|tc_?kimlik|emirates_?id|iqama)$/i,
     label: 'NATIONAL_ID',
     category: 'identity',
   },
-  // Account numbers
+
+  // ═══════════════════════════════════════════
+  // BANK ACCOUNT / FINANCIAL ACCOUNTS
+  // ═══════════════════════════════════════════
   {
-    keys: /^(?:account_?number|account_?no|acct|acct_?number|bank_?account|iban|routing_?number|sort_?code|kontonummer|bankleitzahl)$/i,
+    keys: /^(?:account_?number|account_?no|acct|acct_?number|acct_?no|bank_?account|bank_?account_?number|bank_?acct|checking_?account|savings_?account|current_?account|deposit_?account|iban|bic|swift|swift_?code|routing_?number|routing_?no|aba|sort_?code|bsb|bsb_?number|clabe|transit_?number|branch_?code|branch_?number|kontonummer|bankleitzahl|blz|konto|girokonto|sparkonto|numero_?de_?compte|rib|numero_?conto|numero_?de_?cuenta|rekeningnummer|bankgiro|plusgiro|numer_?konta|schet|kouza_?bangou)$/i,
     label: 'ACCOUNT_NUMBER',
     category: 'financial',
   },
-  // Credit card
+
+  // ═══════════════════════════════════════════
+  // CREDIT / DEBIT CARD
+  // ═══════════════════════════════════════════
   {
-    keys: /^(?:card_?number|credit_?card|cc_?number|pan|card_?no|kartennummer)$/i,
+    keys: /^(?:card_?number|credit_?card|credit_?card_?number|debit_?card|debit_?card_?number|cc_?number|cc_?no|pan|card_?no|card_?num|payment_?card|kartennummer|kreditkarte|kreditkartennummer|numero_?de_?carte|numero_?carta|numero_?de_?tarjeta|kaartnummer|cvv|cvc|cvv2|cvc2|cid|security_?code|card_?verification|card_?expiry|expiry_?date|expiration_?date|exp_?date|valid_?thru|valid_?through|card_?holder|cardholder_?name)$/i,
     label: 'CREDIT_CARD',
     category: 'financial',
   },
-  // Insurance
+
+  // ═══════════════════════════════════════════
+  // INSURANCE (health, life, auto, property, etc.)
+  // ═══════════════════════════════════════════
   {
-    keys: /^(?:insurance_?(?:id|number|policy|no)|policy_?(?:number|no|id)|health_?plan|member_?id|subscriber_?id|beneficiary_?id|versicherungsnummer|krankenversicherung)$/i,
+    keys: /^(?:insurance|insurance_?(?:id|number|no|policy|claim|type|provider|company|plan|group)|policy_?(?:number|no|id)|policy_?holder|claim_?(?:number|no|id|ref|reference)|health_?plan|health_?plan_?id|member_?id|member_?number|subscriber_?id|subscriber_?number|beneficiary_?id|beneficiary_?number|group_?number|group_?id|plan_?id|plan_?number|coverage_?id|enrollment_?id|certificate_?number|versicherungsnummer|versicherung|krankenversicherung|krankenkasse|police_?nummer|police_?nr|numero_?assurance|numero_?police|polizza|numero_?polizza|numero_?de_?seguro|verzekeringsnummer|polisnummer)$/i,
     label: 'INSURANCE',
     category: 'financial',
   },
-  // Passport
+
+  // ═══════════════════════════════════════════
+  // PASSPORT
+  // ═══════════════════════════════════════════
   {
-    keys: /^(?:passport|passport_?number|passport_?no|reisepass|passnummer)$/i,
+    keys: /^(?:passport|passport_?number|passport_?no|passport_?id|passport_?num|travel_?document|travel_?doc_?number|reisepass|reisepassnummer|passnummer|numero_?passeport|passeport|passaporto|numero_?passaporto|numero_?de_?pasaporte|paspoort|paspoortnummer|passnummer_?2|pass_?nr|pasaporte|pasaporte_?numero)$/i,
     label: 'PASSPORT',
     category: 'identity',
   },
-  // Driver license
+
+  // ═══════════════════════════════════════════
+  // DRIVER LICENSE
+  // ═══════════════════════════════════════════
   {
-    keys: /^(?:driver_?license|drivers_?license|driving_?licence|dl_?number|fuehrerschein|permis_?de_?conduire|license_?number)$/i,
+    keys: /^(?:driver_?license|drivers_?license|driver_?licence|drivers_?licence|driving_?license|driving_?licence|dl|dl_?number|dl_?no|license_?number|licence_?number|license_?no|licence_?no|permit_?number|learner_?permit|fuehrerschein|fuehrerscheinnummer|permis_?de_?conduire|numero_?permis|patente|patente_?di_?guida|permiso_?de_?conducir|carnet_?de_?conducir|rijbewijs|rijbewijsnummer|koerkort|forerkort|prawo_?jazdy|voditelskoe_?udostoverenie|unten_?menkyo|jiashi_?zheng|ehliyet|surucu_?belgesi)$/i,
     label: 'DRIVER_LICENSE',
     category: 'identity',
   },
-  // Medical
+
+  // ═══════════════════════════════════════════
+  // MEDICAL / HEALTH / PATIENT
+  // ═══════════════════════════════════════════
   {
-    keys: /^(?:mrn|medical_?record|patient_?id|health_?id|diagnosis|icd_?code|medication|prescription|blood_?type|allergy|allergies|condition|disability)$/i,
+    keys: /^(?:mrn|medical_?record|medical_?record_?number|patient_?id|patient_?number|patient_?name|health_?id|health_?card|health_?number|hospital_?id|hospital_?number|chart_?number|case_?number|encounter_?id|visit_?id|admission_?id|discharge_?id|diagnosis|diagnosis_?code|icd|icd_?code|icd_?10|procedure_?code|cpt|cpt_?code|ndc|ndc_?code|medication|medications|drug|drug_?name|prescription|prescription_?id|rx|rx_?number|dosage|blood_?type|blood_?group|allergy|allergies|condition|conditions|medical_?condition|disability|disability_?status|disability_?type|disability_?degree|impairment|mental_?health|psychiatric|immunization|vaccination|vaccine|lab_?result|test_?result|vital_?signs|bmi|weight|height|npi|npi_?number|dea|dea_?number|provider_?id|physician_?id|doctor_?name|treating_?physician|primary_?care|attending|referring|insurance_?diagnosis|pre_?existing|chronic|krankenakte|patientennummer|diagnose|medikament|rezept|blutgruppe|behinderung|grad_?der_?behinderung|gdb|schwerbehindertenausweis|dossier_?medical|numero_?patient|groupe_?sanguin|cartella_?clinica|historia_?clinica|prontuario)$/i,
     label: 'MEDICAL',
     category: 'medical',
   },
-  // Company / Organization
+
+  // ═══════════════════════════════════════════
+  // COMPANY / ORGANIZATION / EMPLOYER / BUSINESS
+  // ═══════════════════════════════════════════
   {
-    keys: /^(?:company|company_?name|organization|organisation|employer|firma|unternehmen|arbeitgeber|business_?name|corp|corporation|subsidiary|parent_?company)$/i,
+    keys: /^(?:company|company_?name|organization|organisation|org|org_?name|employer|employer_?name|business|business_?name|corporation|corp|corp_?name|subsidiary|parent_?company|holding|group_?name|entity|entity_?name|legal_?entity|legal_?name|registered_?name|trading_?name|brand|brand_?name|vendor|vendor_?name|supplier|supplier_?name|partner|partner_?name|client|client_?name|agency|agency_?name|institute|institution|school|school_?name|university|university_?name|college|hospital|hospital_?name|practice|practice_?name|firm|firm_?name|llc|gmbh|ag|inc|ltd|plc|sa|srl|bv|nv|firma|unternehmen|unternehmensname|arbeitgeber|betrieb|handelsname|societe|raison_?sociale|denominazione|ragione_?sociale|empresa|nombre_?empresa|bedrijf|bedrijfsnaam|werkgever|foretag|arbetsgivare|virksomhed|arbejdsgiver|firma_?2|spolka|pracodawca|kompaniya|rabotodatel|kaisha|kigyou|gongsi|guyong_?danwei|sirket|isveren)$/i,
     label: 'COMPANY',
     category: 'identity',
   },
-  // Notes / free text (likely contains PII)
+
+  // ═══════════════════════════════════════════
+  // EDUCATION / ACADEMIC
+  // ═══════════════════════════════════════════
   {
-    keys: /^(?:notes|comment|comments|description|message|body|text|content|remarks|internal_?notes|agent_?notes|case_?notes|memo|narrative|summary|details|reason|explanation)$/i,
-    label: '', // empty = run regex patterns, don't redact whole value
+    keys: /^(?:student_?id|student_?number|student_?name|enrollment_?id|enrollment_?number|matriculation|matriculation_?number|matrikel|matrikelnummer|gpa|grade_?point|test_?score|sat_?score|act_?score|gre_?score|gmat_?score|degree|diploma|qualification|major|minor|field_?of_?study|program|faculty|school_?name|university|college|campus|class_?of|graduation|graduation_?date|grad_?year|transcript|academic_?record|education_?level|highest_?education|studiengang|abschluss|zeugnis|schulname|hochschule|diplome|scolarite|titolo_?di_?studio|expediente)$/i,
+    label: 'EDUCATION',
+    category: 'identity',
+  },
+
+  // ═══════════════════════════════════════════
+  // VEHICLE / TRANSPORT
+  // ═══════════════════════════════════════════
+  {
+    keys: /^(?:vin|vehicle_?identification|vehicle_?id|vehicle_?number|chassis_?number|license_?plate|plate_?number|plate_?no|registration|registration_?number|reg_?number|reg_?no|tag_?number|kennzeichen|fahrzeug_?id|fahrgestellnummer|immatriculation|plaque|targa|matricula|kenteken|registreringsnummer|numer_?rejestracyjny)$/i,
+    label: 'VEHICLE',
+    category: 'vehicle',
+  },
+
+  // ═══════════════════════════════════════════
+  // CREDENTIALS / AUTH / SECRETS / TOKENS
+  // ═══════════════════════════════════════════
+  {
+    keys: /^(?:password|passwd|pwd|pass|secret|secret_?key|api_?key|api_?secret|api_?token|access_?token|refresh_?token|auth_?token|bearer_?token|session_?token|session_?id|session_?key|private_?key|public_?key|encryption_?key|signing_?key|master_?key|client_?secret|client_?id|consumer_?key|consumer_?secret|oauth_?token|jwt|token|credentials|auth|authorization|authentication|passwort|kennwort|schluessel|mot_?de_?passe|cle|contrasena|clave|senha|wachtwoord|sleutel|losenord|haslo|parol|kagi|mima|sifre)$/i,
+    label: 'CREDENTIAL',
+    category: 'enterprise',
+  },
+
+  // ═══════════════════════════════════════════
+  // RACE / ETHNICITY / NATIONALITY / CITIZENSHIP
+  // ═══════════════════════════════════════════
+  {
+    keys: /^(?:race|ethnicity|ethnic|ethnic_?origin|ethnic_?group|nationality|citizenship|national_?origin|heritage|ancestry|background|rasse|herkunft|ethnische_?herkunft|nationalitaet|staatsangehoerigkeit|ethnie|origine|nationalite|citoyennete|raza|etnia|nacionalidad|ciudadania|razza|nazionalita|cittadinanza|nationaliteit|etnicitet|medborgarskap|narodowsc|rasa|natsionalnost|grazhdanstvo|kokuseki|minzu|guoji|milliyet|vatandaslik|uyruk)$/i,
+    label: 'ETHNICITY',
+    category: 'identity',
+  },
+
+  // ═══════════════════════════════════════════
+  // RELIGION / BELIEF / POLITICAL
+  // ═══════════════════════════════════════════
+  {
+    keys: /^(?:religion|religious|religious_?affiliation|religious_?belief|faith|creed|denomination|confession|church|mosque|synagogue|temple|spiritual|belief|philosophical_?belief|political_?(?:party|affiliation|opinion|preference|view)|party|party_?membership|union|union_?membership|trade_?union|konfession|religionszugehoerigkeit|glaubensbekenntnis|kirchenzugehoerigkeit|politische_?partei|gewerkschaft|religion_?2|culte|parti_?politique|syndicat|partido_?politico|sindicato|religie|politieke_?partij|vakbond|religion_?3|tro|parti|fagforening|religia|partia|zwiazek_?zawodowy|religiya|partiya|profsoyuz|shukyo|seitou|zongjiao|dangpai|din|mezhep|parti_?2|sendika)$/i,
+    label: 'BELIEF_POLITICAL',
+    category: 'identity',
+  },
+
+  // ═══════════════════════════════════════════
+  // GENDER / SEX / MARITAL STATUS / FAMILY
+  // ═══════════════════════════════════════════
+  {
+    keys: /^(?:gender|sex|gender_?identity|sexual_?orientation|sexuality|preferred_?pronouns|pronouns|marital_?status|civil_?status|relationship_?status|marriage|married|single|divorced|widowed|separated|domestic_?partner|spouse|partner|family_?status|number_?of_?(?:children|kids|dependents)|dependents|geschlecht|familienstand|sexuelle_?orientierung|sexe|etat_?civil|orientation_?sexuelle|genero|estado_?civil|orientacion_?sexual|sesso|stato_?civile|geslacht|burgerlijke_?staat|kon|civilstand|plec|stan_?cywilny|pol|semeynoe_?polozhenie|seibetsu|xingbie|hunyin|cinsiyet|medeni_?hal)$/i,
+    label: 'PERSONAL_STATUS',
+    category: 'identity',
+  },
+
+  // ═══════════════════════════════════════════
+  // LEGAL / JUDICIAL / CRIMINAL
+  // ═══════════════════════════════════════════
+  {
+    keys: /^(?:case_?number|case_?id|case_?ref|docket|docket_?number|court|court_?name|judge|attorney|lawyer|legal_?representative|legal_?counsel|criminal_?record|conviction|offense|offence|charge|charges|sentence|verdict|probation|parole|arrest|arrest_?date|booking|booking_?number|inmate|prisoner|offender|inmate_?(?:id|number)|mugshot|fingerprint|warrant|bail|bond|aktenzeichen|gerichtsaktenzeichen|strafregister|vorstrafe|verurteilung|anwalt|rechtsanwalt|richter|numero_?affaire|casier_?judiciaire|condamnation|avocat|juge|numero_?expediente|antecedentes_?penales|condena|abogado|juez)$/i,
+    label: 'LEGAL',
+    category: 'identity',
+  },
+
+  // ═══════════════════════════════════════════
+  // BIOMETRIC / PHYSICAL CHARACTERISTICS
+  // ═══════════════════════════════════════════
+  {
+    keys: /^(?:biometric|fingerprint|face_?id|facial|facial_?recognition|iris|retina|voiceprint|voice_?id|palm_?print|hand_?geometry|dna|genetic|genome|genotype|karyotype|blood_?type|blood_?group|eye_?color|hair_?color|skin_?color|height|weight|bmi|body_?mass|distinguishing_?marks|tattoo|scar|birthmark|photo|photograph|picture|image|avatar|headshot|portrait|mugshot|selfie|foto|bild|lichtbild|passfoto|passbild)$/i,
+    label: 'BIOMETRIC',
+    category: 'biometric',
+  },
+
+  // ═══════════════════════════════════════════
+  // UTILITY / SUBSCRIPTION / LOYALTY / MEMBERSHIP
+  // ═══════════════════════════════════════════
+  {
+    keys: /^(?:utility_?(?:account|number|id)|electricity_?(?:account|number)|gas_?(?:account|number)|water_?(?:account|number)|meter_?(?:number|id)|customer_?(?:number|id|no)|account_?(?:id|ref)|reference_?(?:number|id|no|code)|subscription_?(?:id|number)|membership_?(?:id|number|no)|member_?(?:number|no)|loyalty_?(?:id|number|card)|rewards?_?(?:id|number|card)|frequent_?flyer|frequent_?flyer_?(?:number|id)|mileage_?(?:number|id)|points_?(?:id|number)|library_?(?:card|id|number)|kundennummer|mitgliedsnummer|abonnement|vertragsnummer)$/i,
+    label: 'ACCOUNT_REF',
+    category: 'financial',
+  },
+
+  // ═══════════════════════════════════════════
+  // IP / HOSTNAME / SERVER / NETWORK
+  // ═══════════════════════════════════════════
+  {
+    keys: /^(?:ip|ip_?address|ipv4|ipv6|server|server_?name|server_?address|hostname|host|host_?name|domain|domain_?name|mac|mac_?address|subnet|gateway|proxy|vpn|dns|url|uri|endpoint|api_?url|webhook_?url|callback_?url|redirect_?url|origin|referrer|referer|user_?agent|device_?id|device_?name|machine_?name|computer_?name|workstation)$/i,
+    label: 'NETWORK',
+    category: 'network',
+  },
+
+  // ═══════════════════════════════════════════
+  // NOTES / FREE TEXT (run regex, don't redact whole value)
+  // ═══════════════════════════════════════════
+  {
+    keys: /^(?:notes|note|comment|comments|description|desc|message|msg|body|text|content|remarks|remark|internal_?notes|agent_?notes|case_?notes|memo|memorandum|narrative|summary|abstract|details|detail|reason|explanation|history|log|changelog|audit|feedback|review|observation|assessment|evaluation|recommendation|instruction|instructions|notizen|bemerkung|kommentar|beschreibung|nachricht|anmerkung|vermerk|remarques|commentaire|observation_?2|nota|commento|descrizione|notas|comentario|descripcion|opmerkingen|beschrijving|anteckningar|kommentar_?2|uwagi|komentarz|opis|zametki|kommentariy|opisanie|bikou|beikou|beizhu|shuoming|not|aciklama|yorum)$/i,
+    label: '',
     category: 'identity',
   },
 ];
