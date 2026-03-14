@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/%F0%9F%9B%A1%EF%B8%8F-PII_Redactor-7B61FF?style=for-the-badge&logoColor=white" alt="PII Redactor" />
+  <img src="https://unpkg.com/n8n-nodes-redactor/dist/nodes/PiiRedactor/redact.png" alt="PII Redactor" width="80" />
 </p>
 
 <h1 align="center">n8n-nodes-redactor</h1>

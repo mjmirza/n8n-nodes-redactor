@@ -22,7 +22,7 @@ export class PiiRedactor implements INodeType {
   description: INodeTypeDescription = {
     displayName: 'PII Redactor',
     name: 'piiRedactor',
-    icon: 'fa:user-shield',
+    icon: 'file:redact.png',
     group: ['transform'],
     version: 1,
     subtitle: '={{$parameter["operation"]}}',
