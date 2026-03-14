@@ -22,9 +22,18 @@ export interface IVault {
 // ═══════════════════════════════════════════════════════════
 
 const memoryStore: Map<string, VaultSession> = new Map();
+const MAX_SESSIONS = 1000; // Prevent unbounded memory growth
 
 export class MemoryVault implements IVault {
   getOrCreateSession(sessionId: string, ttl: number): VaultSession {
+    // Auto-cleanup expired sessions on every create to prevent memory leak
+    this.cleanup();
+    // Enforce max session limit
+    if (memoryStore.size >= MAX_SESSIONS && !memoryStore.has(sessionId)) {
+      // Evict oldest session
+      const oldest = memoryStore.keys().next().value;
+      if (oldest !== undefined) memoryStore.delete(oldest);
+    }
     if (!memoryStore.has(sessionId)) {
       memoryStore.set(sessionId, {
         sessionId,
@@ -112,8 +121,8 @@ export class FileVault implements IVault {
   }
 
   private filePath(sessionId: string): string {
-    // Hash session ID for safe filenames
-    const hash = crypto.createHash('sha256').update(sessionId).digest('hex').slice(0, 16);
+    // Hash session ID for safe filenames — use 32 hex chars (128 bits) to avoid collisions
+    const hash = crypto.createHash('sha256').update(sessionId).digest('hex').slice(0, 32);
     return path.join(this.dir, `vault_${hash}.json`);
   }
 
@@ -203,7 +212,11 @@ export class FileVault implements IVault {
   save(sessionId: string): void {
     const session = this.cache.get(sessionId);
     if (session) {
-      fs.writeFileSync(this.filePath(sessionId), JSON.stringify(session, null, 2), 'utf-8');
+      const fp = this.filePath(sessionId);
+      const tmpFp = fp + '.tmp';
+      // Atomic write: write to temp file first, then rename
+      fs.writeFileSync(tmpFp, JSON.stringify(session, null, 2), 'utf-8');
+      fs.renameSync(tmpFp, fp);
     }
   }
 

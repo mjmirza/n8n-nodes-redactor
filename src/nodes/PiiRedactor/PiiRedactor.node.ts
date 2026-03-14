@@ -33,7 +33,7 @@ export class PiiRedactor implements INodeType {
     },
     inputs: ['main'],
     outputs: ['main'],
-    // @ts-ignore — n8n supports outputNames
+    // @ts-ignore -n8n supports outputNames
     outputNames: ['Data', 'Report'],
 
     properties: [
@@ -124,7 +124,35 @@ export class PiiRedactor implements INodeType {
       },
 
       // ═══════════════════════════════════════
-      // PII TYPE SELECTION
+      // DETECTION SCOPE
+      // ═══════════════════════════════════════
+      {
+        displayName: 'Detection Scope',
+        name: 'detectionScope',
+        type: 'options',
+        displayOptions: {
+          show: {
+            operation: ['redact'],
+          },
+        },
+        options: [
+          {
+            name: 'Detect All (210+ types)',
+            value: 'all',
+            description: 'Detect all 210+ sensitive data types across all categories. Maximum coverage.',
+          },
+          {
+            name: 'Select Specific Types',
+            value: 'select',
+            description: 'Choose which specific data types to detect.',
+          },
+        ],
+        default: 'all',
+        description: 'Detect all sensitive data types automatically, or select specific types to scan for.',
+      },
+
+      // ═══════════════════════════════════════
+      // PII TYPE SELECTION (only shown when scope is 'select')
       // ═══════════════════════════════════════
       {
         displayName: 'PII Types to Detect',
@@ -133,6 +161,7 @@ export class PiiRedactor implements INodeType {
         displayOptions: {
           show: {
             operation: ['redact'],
+            detectionScope: ['select'],
           },
         },
         options: getPatternOptions(),
@@ -198,12 +227,12 @@ export class PiiRedactor implements INodeType {
             description: 'Scan every field in the JSON data',
           },
           {
-            name: 'Allowlist — Only These Fields',
+            name: 'Allowlist -Only These Fields',
             value: 'allowlist',
             description: 'Only scan the fields listed below',
           },
           {
-            name: 'Denylist — Skip These Fields',
+            name: 'Denylist -Skip These Fields',
             value: 'denylist',
             description: 'Scan everything except the fields listed below',
           },
@@ -424,7 +453,10 @@ export class PiiRedactor implements INodeType {
     // ─── REDACT ──────────────────────────────
     if (operation === 'redact') {
       const mode = this.getNodeParameter('redactionMode', 0, 'token') as RedactionMode;
-      const enabledPatterns = this.getNodeParameter('piiTypes', 0) as string[];
+      const detectionScope = this.getNodeParameter('detectionScope', 0, 'all') as string;
+      const enabledPatterns = detectionScope === 'all'
+        ? getPatternOptions().map((p) => p.value)
+        : this.getNodeParameter('piiTypes', 0) as string[];
       const dedup = this.getNodeParameter('dedup', 0, true) as boolean;
       const fieldMode = this.getNodeParameter('fieldMode', 0, 'all') as 'all' | 'allowlist' | 'denylist';
       const sessionTtl = this.getNodeParameter('sessionTtl', 0, 60) as number;
@@ -476,7 +508,7 @@ export class PiiRedactor implements INodeType {
       // Persist vault
       vault.save(sessionId);
 
-      // Build output — always return data on first output
+      // Build output -always return data on first output
       const output: INodeExecutionData[][] = [returnData];
 
       // If audit report requested, add as second output

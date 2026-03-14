@@ -39,7 +39,7 @@ describe('Redaction engine — basic', () => {
     expect(result.message).toBe('Contact me at [EMAIL_0]');
     expect(hits).toHaveLength(1);
     expect(hits[0].patternLabel).toBe('EMAIL');
-    expect(hits[0].original).toBe('john@example.com');
+    expect(hits[0].original).toBe('***'); // SECURITY: originals never exposed in reports
   });
 
   test('redacts multiple PII types in one field', () => {

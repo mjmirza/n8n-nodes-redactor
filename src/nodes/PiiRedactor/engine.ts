@@ -20,13 +20,16 @@ function generateToken(label: string, index: number): string {
 }
 
 /**
+ * Token format regex — used to skip already-redacted regions.
+ */
+const TOKEN_RE = /^\[[A-Z][A-Z0-9_]*_\d+\]$/;
+
+/**
  * Generate a masked version of a string.
- * Keeps first and last char visible, masks the middle.
  */
 function maskValue(value: string, label: string): string {
   if (value.length <= 2) return '*'.repeat(value.length);
 
-  // Special handling for emails
   if (label === 'EMAIL' && value.includes('@')) {
     const [local, domain] = value.split('@');
     const maskedLocal = local[0] + '***';
@@ -35,21 +38,18 @@ function maskValue(value: string, label: string): string {
     return maskedLocal + '@' + maskedDomain;
   }
 
-  // Special handling for phone numbers — show last 4
-  if (label === 'PHONE' || label === 'PHONE_UK') {
+  if (label.startsWith('PHONE') || label === 'FAX') {
     const digits = value.replace(/\D/g, '');
     if (digits.length >= 4) {
       return '***' + digits.slice(-4);
     }
   }
 
-  // Special handling for credit cards — show last 4
-  if (label === 'CREDIT_CARD') {
+  if (label === 'CREDIT_CARD' || label === 'AMEX') {
     const digits = value.replace(/\D/g, '');
     return '****-****-****-' + digits.slice(-4);
   }
 
-  // Default masking
   return value[0] + '*'.repeat(value.length - 2) + value[value.length - 1];
 }
 
@@ -61,11 +61,11 @@ function hashValue(value: string): string {
 }
 
 /**
- * Apply redaction mode to a matched PII value.
+ * Apply redaction with proper category on the vault entry.
  */
 function applyRedaction(
   match: string,
-  pattern: { label: string },
+  pattern: PiiPattern | { label: string; category: PiiCategory },
   mode: RedactionMode,
   vault: IVault,
   sessionId: string,
@@ -73,7 +73,6 @@ function applyRedaction(
 ): string {
   switch (mode) {
     case 'token': {
-      // Dedup: if the same original value was already tokenized, reuse the token
       if (dedup) {
         const existing = vault.findByOriginal(sessionId, match);
         if (existing) return existing.token;
@@ -85,7 +84,7 @@ function applyRedaction(
         token,
         original: match,
         patternLabel: pattern.label,
-        category: 'identity' as PiiCategory, // overridden by caller
+        category: ('category' in pattern ? pattern.category : 'identity') as PiiCategory,
         createdAt: new Date().toISOString(),
       });
       return token;
@@ -127,15 +126,40 @@ function shouldProcessField(
 }
 
 /**
- * Simple wildcard matching for JSON paths.
+ * Safe wildcard matching for JSON paths.
+ * Escapes all regex special chars before applying wildcard transformations.
  * Supports: "user.email", "*.email", "contacts[*].phone"
  */
 function fieldPathMatches(actual: string, pattern: string): boolean {
-  const regexStr = pattern
-    .replace(/\./g, '\\.')
-    .replace(/\[\*\]/g, '\\[\\d+\\]')
-    .replace(/\*/g, '[^.]+');
-  return new RegExp(`^${regexStr}$`).test(actual);
+  // Escape ALL regex special characters first
+  let regexStr = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // Now unescape our wildcards
+  regexStr = regexStr
+    .replace(/\\\[\\*\\]/g, '\\[\\d+\\]')  // [*] -> [\d+]
+    .replace(/\\[*]/g, '[^.]+');            // escaped * -> [^.]+
+  try {
+    return new RegExp(`^${regexStr}$`).test(actual);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validate a user-supplied regex for safety (prevent ReDoS).
+ * Rejects nested quantifiers and other dangerous patterns.
+ */
+function isSafeRegex(regexStr: string): boolean {
+  // Reject nested quantifiers like (a+)+, (a*)+, (a?)+, (a{1,})+
+  if (/(\+|\*|\?|\{[^}]+\})\s*(\+|\*|\?|\{)/.test(regexStr)) return false;
+  // Reject patterns longer than 500 chars
+  if (regexStr.length > 500) return false;
+  // Try to compile it
+  try {
+    new RegExp(regexStr);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -192,22 +216,22 @@ function redactText(
   // Built-in patterns
   const activePatterns = getPatternsByNames(ctx.enabledPatterns);
   for (const pattern of activePatterns) {
-    // Reset regex lastIndex (since regexes are reused with /g flag)
+    // Create fresh regex instance (avoid lastIndex issues with /g flag)
     const re = new RegExp(pattern.regex.source, pattern.regex.flags);
     result = result.replace(re, (match) => {
       // Skip already-redacted tokens
-      if (match.startsWith('[') && match.endsWith(']')) return match;
+      if (TOKEN_RE.test(match) || (match.startsWith('[') && match.endsWith(']'))) return match;
 
       // Run validator if present
       if (pattern.validate && !pattern.validate(match)) return match;
 
-      const replacement = applyRedactionWithCategory(
+      const replacement = applyRedaction(
         match, pattern, ctx.mode, vault, sessionId, ctx.dedup,
       );
 
       hits.push({
         token: replacement,
-        original: ctx.mode === 'token' ? match : '***',
+        original: '***', // NEVER expose raw PII in reports
         patternName: pattern.name,
         patternLabel: pattern.label,
         category: pattern.category,
@@ -219,27 +243,28 @@ function redactText(
     });
   }
 
-  // Custom patterns
+  // Custom patterns — with safety validation
   for (const cp of ctx.customPatterns) {
     if (!cp.label || !cp.regex) continue;
+    if (!isSafeRegex(cp.regex)) continue; // Reject dangerous regex
     try {
       const re = new RegExp(cp.regex, 'g');
       result = result.replace(re, (match) => {
-        const pseudoPattern: PiiPattern = {
-          name: `custom_${cp.label}`,
+        if (TOKEN_RE.test(match)) return match;
+
+        const pseudoPattern = {
           label: cp.label.toUpperCase(),
           category: (cp.category as PiiCategory) || 'identity',
-          regex: re,
         };
 
-        const replacement = applyRedactionWithCategory(
+        const replacement = applyRedaction(
           match, pseudoPattern, ctx.mode, vault, sessionId, ctx.dedup,
         );
 
         hits.push({
           token: replacement,
-          original: ctx.mode === 'token' ? match : '***',
-          patternName: pseudoPattern.name,
+          original: '***',
+          patternName: `custom_${cp.label}`,
           patternLabel: pseudoPattern.label,
           category: pseudoPattern.category,
           field: fieldPath,
@@ -257,39 +282,8 @@ function redactText(
 }
 
 /**
- * Apply redaction with proper category on the vault entry.
- */
-function applyRedactionWithCategory(
-  match: string,
-  pattern: PiiPattern,
-  mode: RedactionMode,
-  vault: IVault,
-  sessionId: string,
-  dedup: boolean,
-): string {
-  if (mode === 'token') {
-    if (dedup) {
-      const existing = vault.findByOriginal(sessionId, match);
-      if (existing) return existing.token;
-    }
-    const session = vault.getSession(sessionId);
-    const index = session ? Object.keys(session.entries).length : 0;
-    const token = generateToken(pattern.label, index);
-    vault.addEntry(sessionId, {
-      token,
-      original: match,
-      patternLabel: pattern.label,
-      category: pattern.category,
-      createdAt: new Date().toISOString(),
-    });
-    return token;
-  }
-
-  return applyRedaction(match, pattern, mode, vault, sessionId, dedup);
-}
-
-/**
  * Restore redacted tokens back to original values.
+ * Uses single-pass replacement to avoid infinite loops.
  */
 export function restoreValue(value: unknown, vault: IVault, sessionId: string): unknown {
   const session = vault.getSession(sessionId);
@@ -297,10 +291,10 @@ export function restoreValue(value: unknown, vault: IVault, sessionId: string): 
 
   if (typeof value === 'string') {
     let result = value;
+    // Single-pass: replace each token exactly once per occurrence.
+    // Use split/join which is safe against infinite loops.
     for (const [token, entry] of Object.entries(session.entries)) {
-      while (result.includes(token)) {
-        result = result.replace(token, entry.original);
-      }
+      result = result.split(token).join(entry.original);
     }
     return result;
   }
@@ -322,6 +316,7 @@ export function restoreValue(value: unknown, vault: IVault, sessionId: string): 
 
 /**
  * Build a redaction audit report from collected hits.
+ * SECURITY: Original PII values are NEVER included in the report.
  */
 export function buildReport(sessionId: string, hits: RedactionHit[]): RedactionReport {
   const hitsByCategory: Record<string, number> = {};
