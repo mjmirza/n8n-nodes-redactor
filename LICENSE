@@ -1,0 +1,42 @@
+Fair Use Code License (FUCL)
+
+Copyright (c) 2026 Mirza Iqbal / next8n (https://next8n.com). All rights reserved.
+
+This software is published as an n8n community node for the benefit of the n8n
+ecosystem and teams building AI workflows that need to handle customer data
+responsibly. However, the intellectual property, source code, and all associated
+rights are owned exclusively by the copyright holder.
+
+PERMITTED:
+
+  - Install and use this software for your own internal workflows and
+    business automation.
+
+PROHIBITED WITHOUT EXPLICIT WRITTEN CONSENT:
+
+  - Copying, forking, or reproducing the source code in any form
+  - Commercial redistribution, resale, sublicensing, or white-labeling
+  - Creating derivative works or competing products based on this code
+  - Public redistribution of modified or unmodified versions
+  - Using the Software as part of a commercial service offering
+  - Removing or altering copyright notices or attribution
+
+ATTRIBUTION:
+
+  This software was developed and is actively maintained by next8n
+  (https://next8n.com). Attribution must be preserved in all copies.
+
+DISCLAIMER:
+
+  THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+We built it. We maintain it. We own the rights to the code.
+
+For commercial licensing, partnership, or custom development:
+https://services.next8n.com
