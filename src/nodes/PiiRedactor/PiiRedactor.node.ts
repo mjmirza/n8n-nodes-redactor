@@ -32,9 +32,7 @@ export class PiiRedactor implements INodeType {
       name: 'Redactor',
     },
     inputs: ['main'],
-    outputs: ['main', 'main'],
-    // @ts-ignore -n8n supports outputNames
-    outputNames: ['Data', 'Report'],
+    outputs: ['main'],
 
     properties: [
       // ═══════════════════════════════════════
@@ -513,7 +511,9 @@ export class PiiRedactor implements INodeType {
       if (operation === 'detect') {
         const returnData = items.map((item) => ({ json: item.json }));
         const report = buildReport(tempSessionId, allHits);
-        return [returnData, [{ json: report as unknown as IDataObject }]];
+        // Append report as last item in single output
+        returnData.push({ json: { _redactorReport: report } as unknown as IDataObject });
+        return [returnData];
       }
 
       // Verify
@@ -533,7 +533,7 @@ export class PiiRedactor implements INodeType {
             itemIndex: h.itemIndex,
           })),
         } as unknown as IDataObject,
-      }], []];
+      }]];
     }
 
     // All other operations (redact, restore, stats, purge) use vault
@@ -552,7 +552,7 @@ export class PiiRedactor implements INodeType {
             sessions,
           } as unknown as IDataObject,
         },
-      ], []];
+      ]];
     }
 
     const sessionId = this.getNodeParameter('sessionId', 0) as string;
@@ -621,9 +621,9 @@ export class PiiRedactor implements INodeType {
       // Always return 2 outputs: data + report (or empty)
       if (includeReport) {
         const report = buildReport(sessionId, allHits);
-        return [returnData, [{ json: report as unknown as IDataObject }]];
+        returnData.push({ json: { _redactorReport: report } as unknown as IDataObject });
       }
-      return [returnData, []];
+      return [returnData];
     }
 
     // ─── RESTORE ─────────────────────────────
@@ -664,7 +664,7 @@ export class PiiRedactor implements INodeType {
         vault.deleteSession(actualSessionId);
       }
 
-      return [returnData, []];
+      return [returnData];
     }
 
     // ─── PURGE (delete vault sessions) ──
@@ -687,7 +687,7 @@ export class PiiRedactor implements INodeType {
               entriesDeleted: entryCount,
               message: `Session purged successfully.`,
             } as unknown as IDataObject,
-          }], []];
+          }]];
         } else {
           return [[{
             json: {
@@ -695,7 +695,7 @@ export class PiiRedactor implements INodeType {
               sessionId: purgeSessionId,
               message: `No session found with this ID.`,
             } as unknown as IDataObject,
-          }], []];
+          }]];
         }
       } else {
         // Purge ALL sessions
@@ -712,10 +712,10 @@ export class PiiRedactor implements INodeType {
             totalEntriesDeleted: totalEntries,
             message: `All ${sessions.length} session(s) purged successfully.`,
           } as unknown as IDataObject,
-        }], []];
+        }]];
       }
     }
 
-    return [[], []];
+    return [[]];
   }
 }
