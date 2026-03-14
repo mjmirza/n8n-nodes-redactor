@@ -301,7 +301,7 @@ export class PiiRedactor implements INodeType {
         },
         displayOptions: {
           show: {
-            operation: ['redact'],
+            operation: ['redact', 'detect', 'verify'],
           },
         },
         default: {},
@@ -362,17 +362,17 @@ export class PiiRedactor implements INodeType {
         },
         options: [
           {
+            name: 'File-Based (Recommended, Persistent)',
+            value: 'file',
+          },
+          {
             name: 'In-Memory (Fast, Lost on Restart)',
             value: 'memory',
           },
-          {
-            name: 'File-Based (Persistent Across Restarts)',
-            value: 'file',
-          },
         ],
-        default: 'memory',
+        default: 'file',
         description:
-          'Where to store the token-to-original mappings. File-based vault persists to ~/.n8n/pii-vault/',
+          'File-based (recommended): Persists to disk, survives restarts, no memory bloat. Stored in ~/.n8n/pii-vault/. In-memory: Faster but lost on restart, capped at 1000 sessions to prevent memory bloat.',
       },
       {
         displayName: 'Vault Directory',
@@ -583,14 +583,18 @@ export class PiiRedactor implements INodeType {
         ? getPatternOptions().map((p) => p.value)
         : this.getNodeParameter('piiTypes', 0) as string[];
 
-      // Create a temporary vault just for detection (discarded after)
+      const customPatternsRaw = this.getNodeParameter('customPatterns', 0, {}) as {
+        patterns?: CustomPattern[];
+      };
+      const customPatterns = customPatternsRaw.patterns ?? [];
+
       const tempVault = createVault('memory');
       const tempSessionId = `detect_${Date.now()}`;
       tempVault.getOrCreateSession(tempSessionId, 60000);
 
       const ctx: RedactionContext = {
         enabledPatterns,
-        customPatterns: [],
+        customPatterns,
         mode: 'token',
         dedup: true,
         fieldRules: [],
@@ -623,13 +627,18 @@ export class PiiRedactor implements INodeType {
         ? getPatternOptions().map((p) => p.value)
         : this.getNodeParameter('piiTypes', 0) as string[];
 
+      const customPatternsRaw = this.getNodeParameter('customPatterns', 0, {}) as {
+        patterns?: CustomPattern[];
+      };
+      const customPatterns = customPatternsRaw.patterns ?? [];
+
       const tempVault = createVault('memory');
       const tempSessionId = `verify_${Date.now()}`;
       tempVault.getOrCreateSession(tempSessionId, 60000);
 
       const ctx: RedactionContext = {
         enabledPatterns,
-        customPatterns: [],
+        customPatterns,
         mode: 'token',
         dedup: true,
         fieldRules: [],
