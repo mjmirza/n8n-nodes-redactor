@@ -68,9 +68,18 @@ Both support: TTL auto-expiry, session CRUD, `findByOriginal()` for deduplicatio
 
 ### `PiiRedactor.node.ts` — n8n Integration
 
-6 operations: **Redact**, **Restore**, **Detect** (scan only), **Verify** (leak check), **Purge** (GDPR erasure), **Stats**
+6 operations, dual output (Data + Report):
 
-Dual output on Redact: processed data (output 1) + audit report (output 2, optional).
+| Operation | Purpose | Output 1 | Output 2 |
+|-----------|---------|----------|----------|
+| Redact | Replace PII with tokens | Redacted data | Audit report (optional) |
+| Restore | Swap tokens back to originals | Restored data | - |
+| Detect | Scan without modifying | Original data | Detection report |
+| Verify | Confirm no PII leaked | PASS/FAIL | - |
+| Purge | Delete vault sessions (GDPR Art.17) | Confirmation | - |
+| Stats | Monitor vault health | Session list | - |
+
+Production flow: `Detect > Redact > [LLM] > Verify > Restore > Purge`
 
 ## Build
 

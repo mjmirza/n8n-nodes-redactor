@@ -199,6 +199,24 @@ Add your own patterns for anything specific to your business:
 
 ---
 
+## 6 Operations: When to use what
+
+| Operation | When to use it | What it does | Example workflow |
+|-----------|---------------|-------------|-----------------|
+| **Redact** | Before sending data to an LLM, API, or third-party service | Detects and replaces all sensitive data with safe tokens. Stores originals in vault for later restoration. | `[Data Source] > Redact > [OpenAI] > Restore > [Output]` |
+| **Restore** | After the LLM or service has processed the tokenized data | Swaps all tokens back to original values using the vault. Your output has real data again. | Place after your LLM node, before the final output. |
+| **Detect** | Compliance audits, data assessment, before deciding to redact | Scans all data for sensitive information and returns a full report. Does NOT modify the data. Use this to understand what PII exists. | `[Data Source] > Detect > [If PII found] > Redact` |
+| **Verify** | After redaction, to confirm nothing leaked through | Re-scans redacted output to check if any PII slipped past. Returns PASS or FAIL with details of any leaks. Defense-in-depth. | `[Data Source] > Redact > [LLM] > Verify > [Alert if FAIL]` |
+| **Purge** | GDPR right to erasure, cleanup, end of workflow | Deletes vault sessions from memory or disk. Ensures no PII mapping data remains after processing. Required for GDPR Article 17 compliance. | `[End of workflow] > Purge` |
+| **Stats** | Debugging, monitoring, admin | Shows all active vault sessions with entry counts and creation times. Use to monitor vault health and check for stale sessions. | Run manually to inspect vault state. |
+
+**Recommended workflow for production:**
+```
+[Data Source] > Detect (assess) > Redact (protect) > [LLM] > Verify (confirm) > Restore (recover) > [Output] > Purge (cleanup)
+```
+
+---
+
 ## 4 ways to redact
 
 Choose the right mode for your use case:
