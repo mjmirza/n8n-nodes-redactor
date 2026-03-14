@@ -163,7 +163,147 @@ function isSafeRegex(regexStr: string): boolean {
 }
 
 /**
- * Main redaction engine — recursively walks JSON and applies redaction.
+ * Semantic field-name mapping: when the JSON key name matches,
+ * redact the ENTIRE value regardless of regex matches.
+ * This catches structured data where the field name IS the context.
+ */
+const SEMANTIC_FIELD_MAP: Array<{
+  keys: RegExp;
+  label: string;
+  category: PiiCategory;
+}> = [
+  // Person names
+  {
+    keys: /^(?:name|first_?name|last_?name|full_?name|given_?name|family_?name|surname|maiden_?name|vorname|nachname|familienname|prenom|nom|nombre|apellido|displayName|display_name|contactName|contact_name|customerName|customer_name|userName|user_name|recipient|sender|author|owner)$/i,
+    label: 'PERSON_NAME',
+    category: 'identity',
+  },
+  // Employee / Staff IDs
+  {
+    keys: /^(?:employee_?id|staff_?id|personnel_?(?:id|number|nr)|personalnummer|mitarbeiter_?(?:id|nummer|nr)|worker_?id|emp_?id|empId|staffNumber|badge_?(?:id|number))$/i,
+    label: 'EMPLOYEE_ID',
+    category: 'identity',
+  },
+  // Department
+  {
+    keys: /^(?:department|dept|abteilung|division|business_?unit|team|group|service|unit)$/i,
+    label: 'DEPARTMENT',
+    category: 'identity',
+  },
+  // Job title / position / role
+  {
+    keys: /^(?:position|job_?title|title|role|designation|occupation|berufsbezeichnung|stelle|poste|titulo|function|jobRole|job_role)$/i,
+    label: 'JOB_TITLE',
+    category: 'identity',
+  },
+  // Salary / compensation
+  {
+    keys: /^(?:salary|compensation|wage|wages|income|pay|pay_?rate|hourly_?rate|annual_?salary|monthly_?salary|gehalt|lohn|remuneration|base_?pay|gross_?pay|net_?pay|bonus|commission)$/i,
+    label: 'SALARY',
+    category: 'financial',
+  },
+  // Hire / start date
+  {
+    keys: /^(?:hire_?date|start_?date|joining_?date|date_?of_?hire|employment_?date|eintrittsdatum|einstellungsdatum|onboarding_?date|termination_?date|end_?date|leaving_?date|resignation_?date)$/i,
+    label: 'HIRE_DATE',
+    category: 'temporal',
+  },
+  // Date of birth
+  {
+    keys: /^(?:dob|date_?of_?birth|birth_?date|birthday|geburtsdatum|born|fecha_?de_?nacimiento|data_?di_?nascita)$/i,
+    label: 'DOB',
+    category: 'temporal',
+  },
+  // Address
+  {
+    keys: /^(?:address|street_?address|home_?address|mailing_?address|shipping_?address|billing_?address|postal_?address|residence|domicile|anschrift|adresse|wohnadresse|wohnort|street|street_?line|address_?line|city|state|province|country|region|zip|zip_?code|postal_?code|plz|postleitzahl)$/i,
+    label: 'ADDRESS',
+    category: 'location',
+  },
+  // Phone
+  {
+    keys: /^(?:phone|phone_?number|mobile|cell|telephone|tel|fax|contact_?number|telefon|telefonnummer|handy|rufnummer|numero_?de_?telephone)$/i,
+    label: 'PHONE',
+    category: 'contact',
+  },
+  // SSN / National ID
+  {
+    keys: /^(?:ssn|social_?security|social_?security_?number|national_?id|national_?id_?number|identity_?number|id_?number|tax_?id|tax_?number|steuer_?id|steuer_?nummer|nif|nie|dni|bsn|nino|pps|pesel|cpf|aadhaar|pan)$/i,
+    label: 'NATIONAL_ID',
+    category: 'identity',
+  },
+  // Account numbers
+  {
+    keys: /^(?:account_?number|account_?no|acct|acct_?number|bank_?account|iban|routing_?number|sort_?code|kontonummer|bankleitzahl)$/i,
+    label: 'ACCOUNT_NUMBER',
+    category: 'financial',
+  },
+  // Credit card
+  {
+    keys: /^(?:card_?number|credit_?card|cc_?number|pan|card_?no|kartennummer)$/i,
+    label: 'CREDIT_CARD',
+    category: 'financial',
+  },
+  // Insurance
+  {
+    keys: /^(?:insurance_?(?:id|number|policy|no)|policy_?(?:number|no|id)|health_?plan|member_?id|subscriber_?id|beneficiary_?id|versicherungsnummer|krankenversicherung)$/i,
+    label: 'INSURANCE',
+    category: 'financial',
+  },
+  // Passport
+  {
+    keys: /^(?:passport|passport_?number|passport_?no|reisepass|passnummer)$/i,
+    label: 'PASSPORT',
+    category: 'identity',
+  },
+  // Driver license
+  {
+    keys: /^(?:driver_?license|drivers_?license|driving_?licence|dl_?number|fuehrerschein|permis_?de_?conduire|license_?number)$/i,
+    label: 'DRIVER_LICENSE',
+    category: 'identity',
+  },
+  // Medical
+  {
+    keys: /^(?:mrn|medical_?record|patient_?id|health_?id|diagnosis|icd_?code|medication|prescription|blood_?type|allergy|allergies|condition|disability)$/i,
+    label: 'MEDICAL',
+    category: 'medical',
+  },
+  // Company / Organization
+  {
+    keys: /^(?:company|company_?name|organization|organisation|employer|firma|unternehmen|arbeitgeber|business_?name|corp|corporation|subsidiary|parent_?company)$/i,
+    label: 'COMPANY',
+    category: 'identity',
+  },
+  // Notes / free text (likely contains PII)
+  {
+    keys: /^(?:notes|comment|comments|description|message|body|text|content|remarks|internal_?notes|agent_?notes|case_?notes|memo|narrative|summary|details|reason|explanation)$/i,
+    label: '', // empty = run regex patterns, don't redact whole value
+    category: 'identity',
+  },
+];
+
+/**
+ * Check if a field key matches a semantic field and should be fully redacted.
+ * Returns the label if the entire value should be redacted, empty string if
+ * regex scanning should be used, or null if no semantic match.
+ */
+function getSemanticLabel(fieldKey: string): { label: string; category: PiiCategory } | null {
+  // Extract the last key segment (e.g., "user.profile.name" -> "name")
+  const lastKey = fieldKey.includes('.') ? fieldKey.split('.').pop()! : fieldKey;
+  // Also try the key without array indices (e.g., "contacts[0].name" -> "name")
+  const cleanKey = lastKey.replace(/\[\d+\]/g, '');
+
+  for (const mapping of SEMANTIC_FIELD_MAP) {
+    if (mapping.keys.test(cleanKey)) {
+      return { label: mapping.label, category: mapping.category };
+    }
+  }
+  return null;
+}
+
+/**
+ * Main redaction engine - recursively walks JSON and applies redaction.
+ * Uses BOTH semantic field-name detection AND regex pattern matching.
  */
 export function redactValue(
   value: unknown,
@@ -178,7 +318,51 @@ export function redactValue(
     if (!shouldProcessField(currentPath, ctx.fieldMode, ctx.fieldRules)) {
       return value;
     }
+
+    // Semantic field-name detection: if the field name tells us what this is,
+    // redact the ENTIRE value without needing regex to match
+    const semantic = getSemanticLabel(currentPath);
+    if (semantic && semantic.label && value.trim().length > 0) {
+      const replacement = applyRedaction(
+        value, { label: semantic.label, category: semantic.category },
+        ctx.mode, vault, sessionId, ctx.dedup,
+      );
+      hits.push({
+        token: replacement,
+        original: '***',
+        patternName: `semantic_${semantic.label}`,
+        patternLabel: semantic.label,
+        category: semantic.category,
+        field: currentPath,
+        itemIndex,
+      });
+      return replacement;
+    }
+
+    // Fall through to regex-based detection
     return redactText(value, ctx, vault, sessionId, hits, itemIndex, currentPath);
+  }
+
+  if (typeof value === 'number') {
+    // Semantic detection for numeric values (salary, age, etc.)
+    const semantic = getSemanticLabel(currentPath);
+    if (semantic && semantic.label && value !== 0) {
+      const strValue = String(value);
+      const replacement = applyRedaction(
+        strValue, { label: semantic.label, category: semantic.category },
+        ctx.mode, vault, sessionId, ctx.dedup,
+      );
+      hits.push({
+        token: replacement,
+        original: '***',
+        patternName: `semantic_${semantic.label}`,
+        patternLabel: semantic.label,
+        category: semantic.category,
+        field: currentPath,
+        itemIndex,
+      });
+      return replacement;
+    }
   }
 
   if (Array.isArray(value)) {
