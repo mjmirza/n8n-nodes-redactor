@@ -484,10 +484,16 @@ export class PiiRedactor implements INodeType {
 
     // ─── DETECT / VERIFY (no vault storage needed) ──
     if (operation === 'detect' || operation === 'verify') {
-      const detectionScope = this.getNodeParameter('detectionScope', 0, 'all') as string;
-      const enabledPatterns = detectionScope === 'all'
-        ? getPatternOptions().map((p) => p.value)
-        : this.getNodeParameter('piiTypes', 0) as string[];
+      let enabledPatterns: string[];
+      try {
+        const detectionScope = this.getNodeParameter('detectionScope', 0, 'all') as string;
+        enabledPatterns = detectionScope === 'all'
+          ? getPatternOptions().map((p) => p.value)
+          : this.getNodeParameter('piiTypes', 0) as string[];
+      } catch {
+        // Fallback: detect all patterns
+        enabledPatterns = getPatternOptions().map((p) => p.value);
+      }
 
       let customPatterns: CustomPattern[] = [];
       try {
