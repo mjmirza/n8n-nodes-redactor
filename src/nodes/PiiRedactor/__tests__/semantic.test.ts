@@ -333,6 +333,137 @@ describe('Semantic detection: Full round-trip with real-world data', () => {
   });
 });
 
+describe('Semantic detection: Language/cultural fields', () => {
+  let vault: MemoryVault;
+  beforeEach(() => { vault = new MemoryVault(); });
+
+  test('redacts "language" field as GDPR Art.9 sensitive', () => {
+    vault.getOrCreateSession('lang1', 0);
+    const hits: RedactionHit[] = [];
+    const result = redactValue(
+      { name: 'Adeel', language: 'Sindhi' },
+      createContext(),
+      vault, 'lang1', hits, 0,
+    ) as any;
+    expect(result.language).toContain('[LANGUAGE_');
+    expect(result.language).not.toBe('Sindhi');
+  });
+
+  test('redacts mother tongue fields', () => {
+    vault.getOrCreateSession('lang2', 0);
+    const hits: RedactionHit[] = [];
+    const result = redactValue(
+      { motherTongue: 'Urdu', Muttersprache: 'Deutsch' },
+      createContext(),
+      vault, 'lang2', hits, 0,
+    ) as any;
+    expect(result.motherTongue).toContain('[LANGUAGE_');
+    expect(result.Muttersprache).toContain('[LANGUAGE_');
+  });
+});
+
+describe('Semantic detection: Context-aware ambiguous fields', () => {
+  let vault: MemoryVault;
+  beforeEach(() => { vault = new MemoryVault(); });
+
+  test('redacts bare "id" when sibling has "name" (PII context)', () => {
+    vault.getOrCreateSession('ctx1', 0);
+    const hits: RedactionHit[] = [];
+    const result = redactValue(
+      { id: 'D41BRX4M', name: 'Amelia Ramirez', department: 'Finance' },
+      createContext(),
+      vault, 'ctx1', hits, 0,
+    ) as any;
+    expect(result.id).toContain('[IDENTIFIER_');
+    expect(result.id).not.toBe('D41BRX4M');
+  });
+
+  test('does NOT redact bare "id" when no PII sibling fields', () => {
+    vault.getOrCreateSession('ctx2', 0);
+    const hits: RedactionHit[] = [];
+    const result = redactValue(
+      { id: '12345', status: 'active', type: 'widget' },
+      createContext(),
+      vault, 'ctx2', hits, 0,
+    ) as any;
+    // No PII indicator siblings, so id should NOT be redacted
+    expect(result.id).toBe('12345');
+  });
+
+  test('redacts "code" and "ref" when email sibling exists', () => {
+    vault.getOrCreateSession('ctx3', 0);
+    const hits: RedactionHit[] = [];
+    const result = redactValue(
+      { code: 'EMP-4821', ref: 'REF-999', email: 'john@test.com' },
+      createContext(),
+      vault, 'ctx3', hits, 0,
+    ) as any;
+    expect(result.code).toContain('[IDENTIFIER_');
+    expect(result.ref).toContain('[IDENTIFIER_');
+  });
+
+  test('redacts "number" when salary sibling exists', () => {
+    vault.getOrCreateSession('ctx4', 0);
+    const hits: RedactionHit[] = [];
+    const result = redactValue(
+      { number: 'ACC-12345', salary: 85000, name: 'Jane Doe' },
+      createContext(),
+      vault, 'ctx4', hits, 0,
+    ) as any;
+    expect(result.number).toContain('[IDENTIFIER_');
+  });
+
+  test('does NOT redact "status" in non-PII record', () => {
+    vault.getOrCreateSession('ctx5', 0);
+    const hits: RedactionHit[] = [];
+    const result = redactValue(
+      { status: 'completed', category: 'urgent', label: 'bug' },
+      createContext(),
+      vault, 'ctx5', hits, 0,
+    ) as any;
+    expect(result.status).toBe('completed');
+    expect(result.category).toBe('urgent');
+    expect(result.label).toBe('bug');
+  });
+
+  test('context-aware detection in nested objects', () => {
+    vault.getOrCreateSession('ctx6', 0);
+    const hits: RedactionHit[] = [];
+    const result = redactValue(
+      { user: { id: 'USR-999', name: 'John Smith', code: 'ABC123' } },
+      createContext(),
+      vault, 'ctx6', hits, 0,
+    ) as any;
+    expect(result.user.id).toContain('[IDENTIFIER_');
+    expect(result.user.code).toContain('[IDENTIFIER_');
+  });
+
+  test('full employee record with ambiguous fields all redacted', () => {
+    vault.getOrCreateSession('ctx7', 0);
+    const hits: RedactionHit[] = [];
+    const result = redactValue(
+      {
+        id: 'V59OF92YF62',
+        name: 'Adeel Solangi',
+        language: 'Sindhi',
+        code: 'EMP001',
+        ref: 'HR-2024-001',
+        email: 'adeel@company.com',
+      },
+      createContext(),
+      vault, 'ctx7', hits, 0,
+    ) as any;
+
+    const json = JSON.stringify(result);
+    expect(json).not.toContain('V59OF92YF62');
+    expect(json).not.toContain('Adeel Solangi');
+    expect(json).not.toContain('Sindhi');
+    expect(json).not.toContain('EMP001');
+    expect(json).not.toContain('HR-2024-001');
+    expect(json).not.toContain('adeel@company.com');
+  });
+});
+
 describe('Semantic detection: Notes/text fields fall through to regex', () => {
   let vault: MemoryVault;
   beforeEach(() => { vault = new MemoryVault(); });

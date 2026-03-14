@@ -432,6 +432,60 @@ const SEMANTIC_FIELD_MAP: Array<{
   },
 
   // ═══════════════════════════════════════════
+  // CONTRACTS / INVOICES / LEGAL DOCUMENTS
+  // ═══════════════════════════════════════════
+  {
+    keys: /^(?:contract_?(?:number|no|id|ref)|invoice_?(?:number|no|id|ref)|order_?(?:number|no|id|ref)|purchase_?order|po_?(?:number|no)|quote_?(?:number|no|id)|proposal_?(?:number|no|id)|agreement_?(?:number|no|id)|reference_?(?:number|no)|receipt_?(?:number|no|id)|transaction_?(?:id|ref|number)|payment_?(?:id|ref|reference)|billing_?(?:id|ref|number)|Rechnungsnummer|Vertragsnummer|Auftragsnummer|Bestellnummer|Angebotsnummer|numero_?(?:facture|contrat|commande)|numero_?(?:fattura|contratto|ordine))$/i,
+    label: 'DOCUMENT_REF',
+    category: 'financial',
+  },
+
+  // ═══════════════════════════════════════════
+  // FINANCIAL AMOUNTS / REVENUE / SENSITIVE NUMBERS
+  // ═══════════════════════════════════════════
+  {
+    keys: /^(?:amount|total|subtotal|grand_?total|tax_?amount|vat_?amount|discount|balance|outstanding|due|paid|refund|credit|debit|revenue|profit|loss|margin|cost|price|unit_?price|net_?amount|gross_?amount|fee|charge|interest|penalty|fine|deposit|withdrawal|transfer_?amount|Betrag|Gesamtbetrag|Steuerbetrag|Rabatt|Saldo|montant|somme|total_?ttc|total_?ht|importe|monto|importo)$/i,
+    label: 'FINANCIAL_AMOUNT',
+    category: 'financial',
+  },
+
+  // ═══════════════════════════════════════════
+  // SIGNATURE / AUTHORIZATION / CONSENT
+  // ═══════════════════════════════════════════
+  {
+    keys: /^(?:signature|signed_?by|authorized_?by|approved_?by|witnessed_?by|notarized_?by|certified_?by|consent|consent_?date|consent_?given|power_?of_?attorney|proxy|delegate|Unterschrift|unterzeichnet_?von|genehmigt_?von|Vollmacht)$/i,
+    label: 'SIGNATURE',
+    category: 'identity',
+  },
+
+  // ═══════════════════════════════════════════
+  // BANK / PAYMENT DETAILS IN DOCUMENTS
+  // ═══════════════════════════════════════════
+  {
+    keys: /^(?:bank_?name|bank|branch|branch_?name|beneficiary|beneficiary_?name|beneficiary_?account|payer|payer_?name|payee|payee_?name|remitter|sender_?(?:name|account|bank)|receiver_?(?:name|account|bank)|correspondent_?bank|intermediary_?bank|Bankname|Begünstigter|Zahlungsempfänger|Auftraggeber)$/i,
+    label: 'BANK_DETAIL',
+    category: 'financial',
+  },
+
+  // ═══════════════════════════════════════════
+  // TAX / FISCAL DETAILS
+  // ═══════════════════════════════════════════
+  {
+    keys: /^(?:tax_?(?:rate|class|bracket|status|year|period|return|filing)|fiscal_?(?:year|period|code)|withholding|exemption|deductible|taxable_?(?:income|amount)|gross_?income|net_?income|adjusted_?gross|agi|Steuerklasse|Steuerjahr|Steuererklärung|Freibetrag)$/i,
+    label: 'TAX_DETAIL',
+    category: 'financial',
+  },
+
+  // ═══════════════════════════════════════════
+  // LANGUAGE / CULTURAL IDENTITY (GDPR Art.9)
+  // ═══════════════════════════════════════════
+  {
+    keys: /^(?:language|mother_?tongue|native_?language|spoken_?language|preferred_?language|first_?language|primary_?language|sprache|muttersprache|langue|langue_?maternelle|idioma|lengua|lingua|taal|moedertaal|sprak|jezyk|yazyk|gengo|yuyan|dil|ana_?dil)$/i,
+    label: 'LANGUAGE',
+    category: 'identity',
+  },
+
+  // ═══════════════════════════════════════════
   // NOTES / FREE TEXT (run regex, don't redact whole value)
   // ═══════════════════════════════════════════
   {
@@ -442,21 +496,44 @@ const SEMANTIC_FIELD_MAP: Array<{
 ];
 
 /**
+ * Ambiguous field names that MIGHT be personal data depending on context.
+ * Only redacted when sibling fields suggest this is a person/PII record.
+ */
+const AMBIGUOUS_FIELDS: RegExp = /^(?:id|code|number|no|num|nr|ref|reference|key|identifier|value|data|info|source|origin|created_?by|updated_?by|modified_?by|assigned_?to|owned_?by|submitted_?by|requested_?by|approved_?by|reviewed_?by|reported_?by|signed_?by|verified_?by|processed_?by|handled_?by|managed_?by|contact|details|record|entry|item|subject|party|counterparty|client_?id|customer_?id|user_?id|member_?id|patient_?id|case_?id|ticket_?id|account_?id|subscriber_?id)$/i;
+
+/**
+ * Fields that CONFIRM the parent object is about a person/entity with PII.
+ * If any sibling field matches this, ambiguous fields get redacted too.
+ */
+const PII_INDICATOR_FIELDS: RegExp = /^(?:name|first_?name|last_?name|full_?name|email|phone|mobile|ssn|iban|address|dob|birth|birthday|passport|salary|compensation|national_?id|tax_?id|nino|bsn|pesel|cpf|aadhaar|vorname|nachname|nom|prenom|nombre|apellido|nome|cognome|social_?security|employee_?id|patient_?name|customer_?name|contact_?name)$/i;
+
+/**
  * Check if a field key matches a semantic field and should be fully redacted.
  * Returns the label if the entire value should be redacted, empty string if
  * regex scanning should be used, or null if no semantic match.
  */
-function getSemanticLabel(fieldKey: string): { label: string; category: PiiCategory } | null {
+function getSemanticLabel(fieldKey: string, siblingKeys?: string[]): { label: string; category: PiiCategory } | null {
   // Extract the last key segment (e.g., "user.profile.name" -> "name")
   const lastKey = fieldKey.includes('.') ? fieldKey.split('.').pop()! : fieldKey;
   // Also try the key without array indices (e.g., "contacts[0].name" -> "name")
   const cleanKey = lastKey.replace(/\[\d+\]/g, '');
 
+  // First check explicit semantic mappings
   for (const mapping of SEMANTIC_FIELD_MAP) {
     if (mapping.keys.test(cleanKey)) {
       return { label: mapping.label, category: mapping.category };
     }
   }
+
+  // Context-aware: if field is ambiguous (like bare "id") AND sibling fields
+  // indicate this is a person/PII record, redact the ambiguous field too.
+  if (siblingKeys && AMBIGUOUS_FIELDS.test(cleanKey)) {
+    const hasPiiSiblings = siblingKeys.some((k) => PII_INDICATOR_FIELDS.test(k));
+    if (hasPiiSiblings) {
+      return { label: 'IDENTIFIER', category: 'identity' };
+    }
+  }
+
   return null;
 }
 
@@ -472,6 +549,7 @@ export function redactValue(
   hits: RedactionHit[],
   itemIndex: number,
   currentPath: string = '',
+  siblingKeys?: string[],
 ): unknown {
   if (typeof value === 'string') {
     if (!shouldProcessField(currentPath, ctx.fieldMode, ctx.fieldRules)) {
@@ -479,8 +557,10 @@ export function redactValue(
     }
 
     // Semantic field-name detection: if the field name tells us what this is,
-    // redact the ENTIRE value without needing regex to match
-    const semantic = getSemanticLabel(currentPath);
+    // redact the ENTIRE value without needing regex to match.
+    // Also uses context: if sibling fields indicate PII record, ambiguous
+    // fields like bare "id" get redacted too.
+    const semantic = getSemanticLabel(currentPath, siblingKeys);
     if (semantic && semantic.label && value.trim().length > 0) {
       const replacement = applyRedaction(
         value, { label: semantic.label, category: semantic.category },
@@ -504,7 +584,7 @@ export function redactValue(
 
   if (typeof value === 'number') {
     // Semantic detection for numeric values (salary, age, etc.)
-    const semantic = getSemanticLabel(currentPath);
+    const semantic = getSemanticLabel(currentPath, siblingKeys);
     if (semantic && semantic.label && value !== 0) {
       const strValue = String(value);
       const replacement = applyRedaction(
@@ -531,10 +611,13 @@ export function redactValue(
   }
 
   if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>);
+    // Collect sibling keys for context-aware detection
+    const siblingKeys = entries.map(([k]) => k);
     const obj: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    for (const [k, v] of entries) {
       const fieldPath = currentPath ? `${currentPath}.${k}` : k;
-      obj[k] = redactValue(v, ctx, vault, sessionId, hits, itemIndex, fieldPath);
+      obj[k] = redactValue(v, ctx, vault, sessionId, hits, itemIndex, fieldPath, siblingKeys);
     }
     return obj;
   }
