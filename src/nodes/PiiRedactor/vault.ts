@@ -185,9 +185,13 @@ export class FileVault implements IVault {
 
   deleteSession(sessionId: string): void {
     this.cache.delete(sessionId);
-    const fp = this.filePath(sessionId);
-    if (fs.existsSync(fp)) {
-      fs.unlinkSync(fp);
+    try {
+      const fp = this.filePath(sessionId);
+      if (fs.existsSync(fp)) {
+        fs.unlinkSync(fp);
+      }
+    } catch {
+      // Ignore file deletion errors (read-only FS, already deleted, etc.)
     }
   }
 
@@ -216,11 +220,17 @@ export class FileVault implements IVault {
   save(sessionId: string): void {
     const session = this.cache.get(sessionId);
     if (session) {
-      const fp = this.filePath(sessionId);
-      const tmpFp = fp + '.tmp';
-      // Atomic write: write to temp file first, then rename
-      fs.writeFileSync(tmpFp, JSON.stringify(session, null, 2), 'utf-8');
-      fs.renameSync(tmpFp, fp);
+      try {
+        const fp = this.filePath(sessionId);
+        const tmpFp = fp + '.tmp';
+        // Atomic write: write to temp file first, then rename
+        fs.writeFileSync(tmpFp, JSON.stringify(session, null, 2), 'utf-8');
+        fs.renameSync(tmpFp, fp);
+      } catch {
+        // Write failed (read-only FS, permissions, disk full).
+        // Session stays in memory cache — restore will still work
+        // for this execution, just won't persist across restarts.
+      }
     }
   }
 
@@ -250,10 +260,17 @@ export class FileVault implements IVault {
 
 /**
  * Factory to get the right vault implementation.
+ * If file vault fails (read-only filesystem, no permissions, Docker, cloud),
+ * automatically falls back to memory vault so the node never crashes.
  */
 export function createVault(storage: string, vaultDir?: string): IVault {
   if (storage === 'file') {
-    return new FileVault(vaultDir);
+    try {
+      return new FileVault(vaultDir);
+    } catch {
+      // Filesystem not writable — fall back to memory vault silently
+      return new MemoryVault();
+    }
   }
   return new MemoryVault();
 }
