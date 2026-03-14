@@ -19,7 +19,10 @@ export type PiiCategory =
   | 'location'
   | 'temporal'
   | 'medical'
-  | 'crypto';
+  | 'crypto'
+  | 'enterprise'
+  | 'vehicle'
+  | 'biometric';
 
 export type RedactionMode =
   | 'token'       // [EMAIL_0] — reversible via vault

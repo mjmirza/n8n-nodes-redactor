@@ -394,6 +394,159 @@ describe('EIN pattern', () => {
 });
 
 // ═══════════════════════════════════════════════════════
+// DACH PHONE NUMBERS
+// ═══════════════════════════════════════════════════════
+describe('German phone pattern', () => {
+  test('matches DE landline', () => {
+    expect(matchAll('phoneDE', '089 1234 5678')).toEqual(['089 1234 5678']);
+  });
+
+  test('matches DE with country code', () => {
+    expect(matchAll('phoneDE', '+49 30 12345678')).toEqual(['+49 30 12345678']);
+  });
+});
+
+describe('Austrian phone pattern', () => {
+  test('matches AT phone', () => {
+    expect(matchAll('phoneAT', '+43 1 1234567')).toEqual(['+43 1 1234567']);
+  });
+});
+
+describe('Swiss phone pattern', () => {
+  test('matches CH mobile', () => {
+    expect(matchAll('phoneCH', '079 123 45 67')).toEqual(['079 123 45 67']);
+  });
+
+  test('matches CH with country code', () => {
+    expect(matchAll('phoneCH', '+41 79 123 45 67')).toEqual(['+41 79 123 45 67']);
+  });
+});
+
+describe('French phone pattern', () => {
+  test('matches FR mobile', () => {
+    expect(matchAll('phoneFR', '06 12 34 56 78')).toEqual(['06 12 34 56 78']);
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+// EU IDENTITY DOCUMENTS
+// ═══════════════════════════════════════════════════════
+describe('German tax ID', () => {
+  test('matches labeled Steuer-ID', () => {
+    expect(matchAll('taxIdDE', 'Steuer-ID: 12345678901')).toEqual(['Steuer-ID: 12345678901']);
+  });
+});
+
+describe('German social insurance number', () => {
+  test('matches Sozialversicherungsnummer format', () => {
+    expect(matchAll('sozialversicherungDE', '12 060482 H 123')).toEqual(['12 060482 H 123']);
+  });
+});
+
+describe('Swiss AHV number', () => {
+  test('matches AHV format', () => {
+    expect(matchAll('ahvCH', 'AHV: 756.1234.5678.97')).toEqual(['756.1234.5678.97']);
+  });
+});
+
+describe('Italian Codice Fiscale', () => {
+  test('matches valid format', () => {
+    expect(matchAll('codiceFiscaleIT', 'CF: RSSMRA85M01H501Z')).toEqual(['RSSMRA85M01H501Z']);
+  });
+});
+
+describe('Spanish DNI', () => {
+  test('matches DNI format', () => {
+    expect(matchAll('dniES', 'DNI: 12345678Z')).toEqual(['12345678Z']);
+  });
+});
+
+describe('Spanish NIE', () => {
+  test('matches NIE format', () => {
+    expect(matchAll('nieES', 'NIE: X1234567L')).toEqual(['X1234567L']);
+  });
+});
+
+describe('German Handelsregister', () => {
+  test('matches HRB number', () => {
+    expect(matchAll('handelsregisterDE', 'HRB 12345')).toEqual(['HRB 12345']);
+  });
+
+  test('matches HRA number', () => {
+    expect(matchAll('handelsregisterDE', 'HRA 67890')).toEqual(['HRA 67890']);
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+// EU POSTAL CODES
+// ═══════════════════════════════════════════════════════
+describe('Dutch postal code', () => {
+  test('matches NL format', () => {
+    expect(matchAll('postalCodeNL', '1234 AB')).toEqual(['1234 AB']);
+  });
+});
+
+describe('Polish postal code', () => {
+  test('matches PL format', () => {
+    expect(matchAll('postalCodePL', '00-950')).toEqual(['00-950']);
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+// STREET ADDRESSES
+// ═══════════════════════════════════════════════════════
+describe('German address pattern', () => {
+  test('matches German street with number', () => {
+    const result = matchAll('addressDE', 'Musterstraße 12, 80331 München');
+    expect(result.length).toBeGreaterThanOrEqual(1);
+    expect(result[0]).toContain('Musterstraße 12');
+  });
+
+  test('matches Straße abbreviation', () => {
+    const result = matchAll('addressDE', 'Berlinerstr. 45');
+    expect(result.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('matches Weg suffix', () => {
+    const result = matchAll('addressDE', 'Feldweg 7');
+    expect(result.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('matches full address with PLZ and city', () => {
+    const result = matchAll('addressDE', 'Hauptstraße 23, 10115 Berlin');
+    expect(result.length).toBeGreaterThanOrEqual(1);
+    expect(result[0]).toContain('Hauptstraße 23');
+    expect(result[0]).toContain('10115 Berlin');
+  });
+});
+
+describe('Labeled address patterns', () => {
+  test('matches German labeled address', () => {
+    const result = matchAll('addressLabeledDE', 'Adresse: Musterstraße 12, 80331 München');
+    expect(result.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('matches English labeled address', () => {
+    const result = matchAll('addressLabeledEN', 'Address: 123 Main Street, Apt 4B, New York');
+    expect(result.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('matches shipping address label', () => {
+    const result = matchAll('addressLabeledEN', 'Shipping Address: 456 Oak Ave, Suite 100');
+    expect(result.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+// IP WITH PORT
+// ═══════════════════════════════════════════════════════
+describe('IPv4 with port', () => {
+  test('matches IP:port', () => {
+    expect(matchAll('ipv4Port', 'Server at 192.168.1.1:8080')).toEqual(['192.168.1.1:8080']);
+  });
+});
+
+// ═══════════════════════════════════════════════════════
 // UTILITY FUNCTIONS
 // ═══════════════════════════════════════════════════════
 describe('getPatternOptions()', () => {
