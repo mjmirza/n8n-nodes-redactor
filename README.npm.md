@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://unpkg.com/n8n-nodes-redactor@1.0.2/dist/nodes/PiiRedactor/redact.png" alt="PII Redactor" width="80" />
+  <img src="https://unpkg.com/n8n-nodes-redactor@1.0.2/dist/nodes/PiiRedactor/redact.png" alt="Redactor" width="80" />
 </p>
 
 <h1 align="center">n8n-nodes-redactor</h1>
@@ -13,8 +13,10 @@
   <a href="https://www.npmjs.com/package/n8n-nodes-redactor"><img src="https://img.shields.io/npm/v/n8n-nodes-redactor?style=for-the-badge&color=CB3837&label=npm" alt="npm version" /></a>
   <a href="https://www.npmjs.com/package/n8n-nodes-redactor"><img src="https://img.shields.io/npm/dt/n8n-nodes-redactor?style=for-the-badge&color=blue&label=downloads" alt="npm downloads" /></a>
   <a href="#license"><img src="https://img.shields.io/badge/license-FUCL-orange?style=for-the-badge" alt="License" /></a>
-  <img src="https://img.shields.io/badge/PII_Types-30+-success?style=for-the-badge" alt="30+ PII Types" />
-  <img src="https://img.shields.io/badge/Tests-127_Passed-brightgreen?style=for-the-badge" alt="127 Tests Passed" />
+  <img src="https://img.shields.io/badge/PII_Types-125+-success?style=for-the-badge" alt="125+ PII Types" />
+  <img src="https://img.shields.io/badge/Tests-229_Passed-brightgreen?style=for-the-badge" alt="229 Tests Passed" />
+  <img src="https://img.shields.io/badge/Categories-11-success?style=for-the-badge" alt="11 Categories" />
+  <img src="https://img.shields.io/badge/Countries-25+-success?style=for-the-badge" alt="25+ Countries" />
   <img src="https://img.shields.io/badge/Vault-Reversible-7B61FF?style=for-the-badge" alt="Reversible Vault" />
   <img src="https://img.shields.io/badge/GDPR-Ready-00C4B4?style=for-the-badge" alt="GDPR Ready" />
   <img src="https://img.shields.io/badge/HIPAA-Ready-00C4B4?style=for-the-badge" alt="HIPAA Ready" />
@@ -35,7 +37,7 @@ You know this is a problem. Your clients know it too. But rebuilding every workf
 
 **This node fixes it in 2 minutes.**
 
-Drop it between your data source and your LLM node. It automatically detects and replaces 30+ types of PII with safe tokens. The LLM processes the clean data. Then the node swaps the original values back in. Your customer data never leaves your server.
+Drop it between your data source and your LLM node. It automatically detects and replaces 125+ types of sensitive data with safe tokens. The LLM processes the clean data. Then the node swaps the original values back in. Your customer data never leaves your server.
 
 No cloud service. No API keys. No third-party dependency. Everything runs locally on your machine.
 
@@ -76,7 +78,7 @@ The LLM never saw the real data. Your customer never knew the difference.
 
 ---
 
-## What it detects (30+ PII types)
+## What it detects (125+ sensitive data types across 11 categories)
 
 ### Contact Information
 | Type | Examples |
@@ -127,6 +129,65 @@ The LLM never saw the real data. Your customer never knew the difference.
 | Type | Examples |
 |------|----------|
 | Medical Record Numbers | `MRN: 12345678`, `MRN#987654` |
+
+### Government IDs (25+ countries)
+| Country | Types |
+|---------|-------|
+| USA | SSN, ITIN, EIN, Driver License (contextual), Passport |
+| Canada | SIN (Luhn validated) |
+| UK | NINO, NHS (mod-11 checksum), Passport |
+| Germany | Personalausweis, Steuer-ID, Sozialversicherungsnummer, Reisepass, Handelsregister (HRB) |
+| Austria | Sozialversicherungsnummer (date validated) |
+| Switzerland | AHV/AVS number |
+| France | NIR (social security) |
+| Italy | Codice Fiscale, Carta d'Identita |
+| Spain | DNI, NIE, NIF |
+| Netherlands | BSN (11-check validated) |
+| Belgium | Rijksregisternummer |
+| Poland | PESEL (checksum validated) |
+| Sweden | Personnummer |
+| Norway | Fodselsnummer |
+| Denmark | CPR-nummer |
+| Finland | Henkilotunnus (HETU) |
+| Portugal | NIF (checksum validated) |
+| Ireland | PPS Number |
+| Australia | TFN (checksum validated), Medicare |
+| New Zealand | IRD Number |
+| Japan | My Number |
+| South Korea | RRN |
+| Singapore | NRIC/FIN |
+| India | Aadhaar, PAN |
+| Brazil | CPF |
+
+### Enterprise and Infrastructure
+| Type | Examples |
+|------|----------|
+| Internal Hostnames | `server-web-01.internal`, `db-prod.corp.local`, `nas.lan` |
+| Windows UNC Paths | `\\fileserver\shared\docs` |
+| LDAP Distinguished Names | `CN=John,OU=Users,DC=corp,DC=local` |
+| Active Directory Users | `CORP\jsmith` |
+| Private IPs (RFC 1918) | `10.0.1.50`, `172.16.0.1`, `192.168.1.1` |
+| Database Connection Strings | JDBC, MongoDB, PostgreSQL, MySQL, Redis, MSSQL |
+| API Keys | AWS (`AKIA...`), GCP (`AIza...`), Stripe, OpenAI, GitHub, Slack |
+| Auth Tokens | Bearer tokens, JWT tokens |
+| Cryptographic Material | PEM private keys, SSH public keys |
+| Secrets in Config | `password=`, `api_key=`, `secret=`, `token=` patterns |
+| Azure Keys | Storage keys, SAS tokens |
+| Slack Webhooks | `hooks.slack.com/services/...` |
+
+### Vehicle
+| Type | Examples |
+|------|----------|
+| VIN | `1HGBH41JXMN109186` (17-character) |
+| License Plates | German (`M AB 1234`), UK (`AB12 CDE`), French (`AB-123-CD`) |
+
+### Biometric and Digital Identity
+| Type | Examples |
+|------|----------|
+| UUID/GUID | `550e8400-e29b-41d4-a716-446655440000` |
+| Social Media Handles | `@username` |
+| IMEI | Device identifiers |
+| ICCID | SIM card numbers |
 
 ### Custom Business Identifiers
 Add your own patterns for anything specific to your business:
@@ -189,7 +250,7 @@ Credit card numbers are **Luhn-checked**. IBANs are **checksum-verified** (ISO 1
 1. Go to **Settings > Community Nodes**
 2. Enter `n8n-nodes-redactor`
 3. Click **Install**
-4. Done. The "PII Redactor" node appears in your node palette.
+4. Done. The "Redactor" node appears in your node palette.
 
 ### Manual
 ```bash
@@ -203,13 +264,109 @@ npm install n8n-nodes-redactor
 ## Quick Start (2 minutes)
 
 1. **Install** the node
-2. **Add "PII Redactor"** to your workflow, set operation to **Redact**
+2. **Add "Redactor"** to your workflow, set operation to **Redact**
 3. **Connect it** before your OpenAI/Claude/Gemini node
-4. **Add another "PII Redactor"** after the LLM node, set operation to **Restore**
+4. **Add another "Redactor"** after the LLM node, set operation to **Restore**
 5. Both nodes share the same Session ID (defaults to execution ID - works automatically)
 6. **Run your workflow.** Customer data stays on your server.
 
 That's it. No configuration needed for the default case.
+
+---
+
+## Example Workflow (Copy and Paste)
+
+Copy the JSON below and **paste it directly into your n8n canvas** (Ctrl+V / Cmd+V) to get a working demo instantly.
+
+This workflow simulates a customer support ticket with real PII flowing through redaction and restoration:
+
+```json
+{
+  "meta": { "instanceId": "redactor-demo" },
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger-1",
+      "name": "Start Here",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "{\n  \"ticket_id\": \"TICKET-4821\",\n  \"customer\": {\n    \"name\": \"Mrs. Sarah Johnson\",\n    \"email\": \"sarah.johnson@bigcorp.com\",\n    \"phone\": \"+49 30 1234-5678\",\n    \"ssn\": \"987-65-4321\",\n    \"iban\": \"DE89370400440532013000\"\n  },\n  \"message\": \"Dear Support, I am Mrs. Sarah Johnson (sarah.johnson@bigcorp.com). My SSN is 987-65-4321 and my IBAN is DE89370400440532013000. I was charged twice for order ORD-992841. Please refund to my account. My address is Musterstraße 12, 80331 München. Best regards, Mrs. Sarah Johnson\",\n  \"internal_notes\": \"Customer called from +49 30 1234-5678. Verified identity via SSN 987-65-4321. Server log: 192.168.1.42:8080\"\n}",
+        "options": {}
+      },
+      "id": "set-1",
+      "name": "Sample Customer Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "operation": "redact",
+        "sessionId": "={{ $execution.id }}",
+        "redactionMode": "token",
+        "piiTypes": [
+          "email", "phone", "phoneDE", "personName", "ssn",
+          "iban", "ipv4", "privateIp", "ipv4Port", "addressDE"
+        ],
+        "dedup": true,
+        "fieldMode": "all",
+        "vaultStorage": "memory",
+        "sessionTtl": 60,
+        "includeReport": false
+      },
+      "id": "redact-1",
+      "name": "Redact PII",
+      "type": "n8n-nodes-redactor.redactor",
+      "typeVersion": 1,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "operation": "restore",
+        "sessionId": "={{ $execution.id }}",
+        "vaultStorage": "memory",
+        "deleteAfterRestore": true
+      },
+      "id": "restore-1",
+      "name": "Restore PII",
+      "type": "n8n-nodes-redactor.redactor",
+      "typeVersion": 1,
+      "position": [860, 300]
+    }
+  ],
+  "connections": {
+    "Start Here": {
+      "main": [[{ "node": "Sample Customer Data", "type": "main", "index": 0 }]]
+    },
+    "Sample Customer Data": {
+      "main": [[{ "node": "Redact PII", "type": "main", "index": 0 }]]
+    },
+    "Redact PII": {
+      "main": [[{ "node": "Restore PII", "type": "main", "index": 0 }]]
+    }
+  }
+}
+```
+
+**What happens when you run it:**
+
+The **Redact PII** node transforms the message into:
+```
+Dear Support, I am [PERSON_0] ([EMAIL_1]). My SSN is [SSN_2] and my IBAN is
+[IBAN_3]. I was charged twice for order ORD-992841. Please refund to my
+account. My address is [ADDRESS_DE_4]. Best regards, [PERSON_0]
+```
+
+Notice how `Mrs. Sarah Johnson` appears twice but gets the **same token** `[PERSON_0]` everywhere thanks to deduplication. The LLM understands it's the same person without ever seeing the real name.
+
+The **Restore PII** node swaps all tokens back to the original values.
+
+**To add an LLM:** Drop your OpenAI / Claude / Gemini node between "Redact PII" and "Restore PII". The LLM only ever sees the tokenized version. Your customer's real data never leaves your server.
 
 ---
 
