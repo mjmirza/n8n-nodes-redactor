@@ -22,7 +22,8 @@ export type PiiCategory =
   | 'crypto'
   | 'enterprise'
   | 'vehicle'
-  | 'biometric';
+  | 'biometric'
+  | 'other';
 
 export type RedactionMode =
   | 'token'       // [EMAIL_0] — reversible via vault

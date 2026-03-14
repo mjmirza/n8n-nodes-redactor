@@ -32,7 +32,7 @@ export class PiiRedactor implements INodeType {
       name: 'Redactor',
     },
     inputs: ['main'],
-    outputs: ['main'],
+    outputs: ['main', 'main'],
     // @ts-ignore -n8n supports outputNames
     outputNames: ['Data', 'Report'],
 
@@ -93,7 +93,20 @@ export class PiiRedactor implements INodeType {
         required: true,
         displayOptions: {
           show: {
-            operation: ['redact', 'restore', 'purge'],
+            operation: ['redact', 'restore'],
+          },
+        },
+      },
+      {
+        displayName: 'Session ID to Purge',
+        name: 'purgeSessionId',
+        type: 'string',
+        default: '',
+        description: 'The session ID to purge. Leave empty is not needed when purging all.',
+        displayOptions: {
+          show: {
+            operation: ['purge'],
+            purgeScope: ['specific'],
           },
         },
       },
@@ -337,7 +350,7 @@ export class PiiRedactor implements INodeType {
                   { name: 'Network', value: 'network' },
                   { name: 'Location', value: 'location' },
                   { name: 'Medical', value: 'medical' },
-                  { name: 'Other', value: 'identity' },
+                  { name: 'Other', value: 'other' },
                 ],
                 default: 'identity',
                 description: 'Category for audit reporting',
@@ -400,6 +413,33 @@ export class PiiRedactor implements INodeType {
         default: 60,
         description:
           'Auto-expire vault sessions after this many minutes. Set to 0 for no expiry. Prevents vault from growing unbounded.',
+      },
+
+      // ═══════════════════════════════════════
+      // PURGE OPTIONS
+      // ═══════════════════════════════════════
+      {
+        displayName: 'Purge Scope',
+        name: 'purgeScope',
+        type: 'options',
+        displayOptions: {
+          show: {
+            operation: ['purge'],
+          },
+        },
+        options: [
+          {
+            name: 'Purge All Sessions',
+            value: 'all',
+            description: 'Delete all vault sessions. GDPR right to erasure.',
+          },
+          {
+            name: 'Purge Specific Session',
+            value: 'specific',
+            description: 'Delete a specific session by ID.',
+          },
+        ],
+        default: 'all',
       },
 
       // ═══════════════════════════════════════
@@ -503,7 +543,7 @@ export class PiiRedactor implements INodeType {
             itemIndex: h.itemIndex,
           })),
         } as unknown as IDataObject,
-      }]];
+      }], []];
     }
 
     // All other operations (redact, restore, stats, purge) use vault
@@ -522,7 +562,7 @@ export class PiiRedactor implements INodeType {
             sessions,
           } as unknown as IDataObject,
         },
-      ]];
+      ], []];
     }
 
     const sessionId = this.getNodeParameter('sessionId', 0) as string;
@@ -588,16 +628,12 @@ export class PiiRedactor implements INodeType {
       // Persist vault
       vault.save(sessionId);
 
-      // Build output -always return data on first output
-      const output: INodeExecutionData[][] = [returnData];
-
-      // If audit report requested, add as second output
+      // Always return 2 outputs: data + report (or empty)
       if (includeReport) {
         const report = buildReport(sessionId, allHits);
-        output.push([{ json: report as unknown as IDataObject }]);
+        return [returnData, [{ json: report as unknown as IDataObject }]];
       }
-
-      return output;
+      return [returnData, []];
     }
 
     // ─── RESTORE ─────────────────────────────
@@ -638,35 +674,38 @@ export class PiiRedactor implements INodeType {
         vault.deleteSession(actualSessionId);
       }
 
-      return [returnData];
+      return [returnData, []];
     }
 
     // ─── PURGE (delete vault sessions) ──
     if (operation === 'purge') {
-      const sessionId = this.getNodeParameter('sessionId', 0, '') as string;
+      const purgeScope = this.getNodeParameter('purgeScope', 0, 'all') as string;
 
-      if (sessionId && sessionId !== '={{$execution.id}}') {
-        // Purge specific session
-        const session = vault.getSession(sessionId);
+      if (purgeScope === 'specific') {
+        const purgeSessionId = this.getNodeParameter('purgeSessionId', 0, '') as string;
+        if (!purgeSessionId) {
+          throw new NodeOperationError(this.getNode(), 'Session ID is required for purging a specific session.');
+        }
+        const session = vault.getSession(purgeSessionId);
         if (session) {
           const entryCount = Object.keys(session.entries).length;
-          vault.deleteSession(sessionId);
+          vault.deleteSession(purgeSessionId);
           return [[{
             json: {
               purged: true,
-              sessionId,
+              sessionId: purgeSessionId,
               entriesDeleted: entryCount,
-              message: `Session "${sessionId}" purged successfully.`,
+              message: `Session purged successfully.`,
             } as unknown as IDataObject,
-          }]];
+          }], []];
         } else {
           return [[{
             json: {
               purged: false,
-              sessionId,
-              message: `No session found with ID "${sessionId}".`,
+              sessionId: purgeSessionId,
+              message: `No session found with this ID.`,
             } as unknown as IDataObject,
-          }]];
+          }], []];
         }
       } else {
         // Purge ALL sessions
@@ -683,10 +722,10 @@ export class PiiRedactor implements INodeType {
             totalEntriesDeleted: totalEntries,
             message: `All ${sessions.length} session(s) purged successfully.`,
           } as unknown as IDataObject,
-        }]];
+        }], []];
       }
     }
 
-    return [[]];
+    return [[], []];
   }
 }
