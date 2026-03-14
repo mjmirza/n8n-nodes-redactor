@@ -68,7 +68,7 @@ Both support: TTL auto-expiry, session CRUD, `findByOriginal()` for deduplicatio
 
 ### `PiiRedactor.node.ts` — n8n Integration
 
-3 operations: **Redact**, **Restore**, **Stats**
+6 operations: **Redact**, **Restore**, **Detect** (scan only), **Verify** (leak check), **Purge** (GDPR erasure), **Stats**
 
 Dual output on Redact: processed data (output 1) + audit report (output 2, optional).
 
@@ -120,4 +120,6 @@ Copyright (c) 2026 Mirza Iqbal / [next8n](https://next8n.com). All rights reserv
 
 This software is provided "as is", without warranty of any kind.
 
-For commercial licensing, partnership, or custom development: [services.next8n.com](https://services.next8n.com)
+**Missing a use case?** If there is a specific scenario not covered by the built-in 210+ patterns, reach out. We will be happy to enhance the node so everyone benefits.
+
+For commercial licensing, partnership, custom patterns, or feature requests: [services.next8n.com](https://services.next8n.com)

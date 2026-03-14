@@ -177,7 +177,7 @@ const SEMANTIC_FIELD_MAP: Array<{
   // Covers: camelCase, snake_case, PascalCase, abbreviations, prefixed, suffixed
   // ═══════════════════════════════════════════
   {
-    keys: /^(?:name|first_?name|last_?name|full_?name|given_?name|family_?name|middle_?name|surname|maiden_?name|nick_?name|alias|prefix|suffix|salutation|display_?name|display|contact_?name|customer_?name|client_?name|patient_?name|user_?name|member_?name|subscriber_?name|account_?name|holder_?name|card_?holder|cardholder_?name|beneficiary_?name|recipient_?name|sender_?name|author_?name|owner_?name|guardian_?name|parent_?name|spouse_?name|partner_?name|emergency_?contact|next_?of_?kin|applicant_?name|candidate_?name|student_?name|teacher_?name|employee_?name|manager_?name|supervisor_?name|assignee|reporter|creator|modifier|approver|reviewer|guarantor|witness|signatory|cosigner|fname|lname|mname|fn|ln|mn|firstname|lastname|middlename|fullname|givenname|familyname|sur_?name|name_?first|name_?last|name_?full|name_?prefix|name_?suffix|legal_?name|birth_?name|married_?name|former_?name|known_?as|aka|vorname|nachname|familienname|geburtsname|anzeige_?name|benutzername|kundenname|prenom|nom|nom_?de_?famille|nom_?complet|nom_?de_?jeune_?fille|nombre|apellido|apellidos|nombre_?completo|nome|cognome|nome_?completo|naam|achternaam|voornaam|volledige_?naam|fornamn|efternamn|fornavn|etternavn|imie|nazwisko|imya|familiya|sei|mei|shimei|seimei|xing|ming|xingming|isim|soyisim|ad|soyad|ism|nasab)$/i,
+    keys: /^(?:name|first_?name|last_?name|full_?name|given_?name|family_?name|middle_?name|surname|maiden_?name|nick_?name|salutation|display_?name|contact_?name|customer_?name|client_?name|patient_?name|user_?name|member_?name|subscriber_?name|account_?name|holder_?name|card_?holder|cardholder_?name|beneficiary_?name|recipient_?name|sender_?name|author_?name|owner_?name|guardian_?name|parent_?name|spouse_?name|partner_?name|emergency_?contact|next_?of_?kin|applicant_?name|candidate_?name|student_?name|teacher_?name|employee_?name|manager_?name|supervisor_?name|guarantor|witness|signatory|cosigner|fname|lname|mname|fn|ln|mn|firstname|lastname|middlename|fullname|givenname|familyname|sur_?name|name_?first|name_?last|name_?full|legal_?name|birth_?name|married_?name|former_?name|known_?as|aka|vorname|nachname|familienname|geburtsname|anzeige_?name|kundenname|prenom|nom|nom_?de_?famille|nom_?complet|nom_?de_?jeune_?fille|nombre|apellido|apellidos|nombre_?completo|nome|cognome|nome_?completo|naam|achternaam|voornaam|volledige_?naam|fornamn|efternamn|fornavn|etternavn|imie|nazwisko|imya|familiya|sei|mei|shimei|seimei|xing|ming|xingming|isim|soyisim|soyad|ism|nasab)$/i,
     label: 'PERSON_NAME',
     category: 'identity',
   },
@@ -204,7 +204,7 @@ const SEMANTIC_FIELD_MAP: Array<{
   // JOB TITLE / POSITION / ROLE / DESIGNATION / OCCUPATION
   // ═══════════════════════════════════════════
   {
-    keys: /^(?:position|job_?title|title|role|designation|occupation|profession|job_?role|job_?function|job_?type|job_?name|job_?description|job_?code|job_?level|job_?grade|job_?band|job_?family|job_?category|grade|level|rank|seniority|career_?level|function|functional_?title|working_?title|official_?title|classification|employment_?type|contract_?type|work_?type|engagement_?type|berufsbezeichnung|stelle|stellenbezeichnung|position_?title|funktion|dienstbezeichnung|rang|beruf|taetigkeit|poste|fonction|intitule_?du_?poste|titulo|cargo|puesto|posizione|ruolo|qualifica|mansione|functie|functietitel|befattning|stilling|stanowisko|zawod|dolzhnost|shokumei|yakushoku|zhiwei|zhicheng|gorev|unvan|pozisyon)$/i,
+    keys: /^(?:position|job_?title|job_?role|job_?function|job_?type|job_?name|job_?description|job_?code|job_?level|job_?grade|job_?band|job_?family|job_?category|designation|occupation|profession|seniority|career_?level|functional_?title|working_?title|official_?title|employment_?type|contract_?type|work_?type|engagement_?type|berufsbezeichnung|stelle|stellenbezeichnung|position_?title|funktion|dienstbezeichnung|beruf|taetigkeit|poste|fonction|intitule_?du_?poste|titulo|cargo|puesto|posizione|ruolo|qualifica|mansione|functie|functietitel|befattning|stilling|stanowisko|zawod|dolzhnost|shokumei|yakushoku|zhiwei|zhicheng|gorev|unvan|pozisyon)$/i,
     label: 'JOB_TITLE',
     category: 'identity',
   },
@@ -237,7 +237,7 @@ const SEMANTIC_FIELD_MAP: Array<{
     category: 'temporal',
   },
   {
-    keys: /^(?:age|alter|edad|eta|age_?years|current_?age|yaş|wiek|vozrast|nenrei|nianling)$/i,
+    keys: /^(?:person_?age|patient_?age|customer_?age|employee_?age|age_?years|current_?age|alter|edad|eta|yaş|wiek|vozrast|nenrei|nianling)$/i,
     label: 'AGE',
     category: 'temporal',
   },
@@ -363,7 +363,7 @@ const SEMANTIC_FIELD_MAP: Array<{
   // CREDENTIALS / AUTH / SECRETS / TOKENS
   // ═══════════════════════════════════════════
   {
-    keys: /^(?:password|passwd|pwd|pass|secret|secret_?key|api_?key|api_?secret|api_?token|access_?token|refresh_?token|auth_?token|bearer_?token|session_?token|session_?id|session_?key|private_?key|public_?key|encryption_?key|signing_?key|master_?key|client_?secret|client_?id|consumer_?key|consumer_?secret|oauth_?token|jwt|token|credentials|auth|authorization|authentication|passwort|kennwort|schluessel|mot_?de_?passe|cle|contrasena|clave|senha|wachtwoord|sleutel|losenord|haslo|parol|kagi|mima|sifre)$/i,
+    keys: /^(?:password|passwd|pwd|pass_?word|secret|secret_?key|api_?key|api_?secret|api_?token|access_?token|refresh_?token|auth_?token|bearer_?token|session_?token|session_?key|private_?key|encryption_?key|signing_?key|master_?key|client_?secret|consumer_?key|consumer_?secret|oauth_?token|credentials|passwort|kennwort|schluessel|mot_?de_?passe|contrasena|clave|senha|wachtwoord|sleutel|losenord|haslo|parol|mima|sifre)$/i,
     label: 'CREDENTIAL',
     category: 'enterprise',
   },
@@ -636,8 +636,8 @@ export function restoreValue(value: unknown, vault: IVault, sessionId: string): 
     let result = value;
     // Single-pass: replace each token exactly once per occurrence.
     // Use split/join which is safe against infinite loops.
-    for (const [token, entry] of Object.entries(session.entries)) {
-      result = result.split(token).join(entry.original);
+    for (const [token, e] of Object.entries(session.entries)) {
+      result = result.split(token).join(e.original);
     }
     return result;
   }

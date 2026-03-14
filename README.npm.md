@@ -398,6 +398,20 @@ If you need help setting up PII-safe AI workflows, custom redaction rules, or en
 
 ---
 
+## Missing a use case? We'll build it for you.
+
+This node covers 210+ data types across 22 privacy regulations. But every business has unique data: internal codes, proprietary identifiers, industry-specific formats.
+
+**You can add your own patterns directly in the node UI** using the Custom Patterns section. Define any regex, give it a label, and the engine will detect and redact it alongside the built-in patterns.
+
+If there is a specific use case that is not covered here and you want us to cover it so that everyone can benefit from it, or if you want a customized implementation built on top of this node, **reach out to us and we will be happy to enhance it accordingly.**
+
+<p align="center">
+  <a href="https://services.next8n.com"><img src="https://img.shields.io/badge/Request_a_Custom_Pattern_or_Feature-services.next8n.com-7B61FF?style=for-the-badge&logoColor=white" alt="Request a feature" /></a>
+</p>
+
+---
+
 ## Also by next8n
 
 <p align="center">

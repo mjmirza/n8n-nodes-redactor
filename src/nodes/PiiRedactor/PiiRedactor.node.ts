@@ -57,6 +57,21 @@ export class PiiRedactor implements INodeType {
             description: 'Replace tokens back with original PII values from vault',
           },
           {
+            name: 'Detect (Scan Only)',
+            value: 'detect',
+            description: 'Scan for PII without modifying the data. Returns a report of what was found.',
+          },
+          {
+            name: 'Verify',
+            value: 'verify',
+            description: 'Re-scan redacted data to confirm no PII leaked through. Returns pass/fail.',
+          },
+          {
+            name: 'Purge',
+            value: 'purge',
+            description: 'Delete vault sessions. Supports GDPR right to erasure.',
+          },
+          {
             name: 'Stats',
             value: 'stats',
             description: 'List active vault sessions and entry counts',
@@ -78,7 +93,7 @@ export class PiiRedactor implements INodeType {
         required: true,
         displayOptions: {
           show: {
-            operation: ['redact', 'restore'],
+            operation: ['redact', 'restore', 'purge'],
           },
         },
       },
@@ -132,7 +147,7 @@ export class PiiRedactor implements INodeType {
         type: 'options',
         displayOptions: {
           show: {
-            operation: ['redact'],
+            operation: ['redact', 'detect', 'verify'],
           },
         },
         options: [
@@ -160,7 +175,7 @@ export class PiiRedactor implements INodeType {
         type: 'multiOptions',
         displayOptions: {
           show: {
-            operation: ['redact'],
+            operation: ['redact', 'detect', 'verify'],
             detectionScope: ['select'],
           },
         },
@@ -342,7 +357,7 @@ export class PiiRedactor implements INodeType {
         type: 'options',
         displayOptions: {
           show: {
-            operation: ['redact', 'restore', 'stats'],
+            operation: ['redact', 'restore', 'stats', 'purge'],
           },
         },
         options: [
@@ -365,7 +380,7 @@ export class PiiRedactor implements INodeType {
         type: 'string',
         displayOptions: {
           show: {
-            operation: ['redact', 'restore', 'stats'],
+            operation: ['redact', 'restore', 'stats', 'purge'],
             vaultStorage: ['file'],
           },
         },
@@ -527,14 +542,14 @@ export class PiiRedactor implements INodeType {
       let session = vault.getSession(sessionId);
       let actualSessionId = sessionId;
 
-      // Fallback: if exact session not found, use the most recent session.
-      // This handles step-by-step execution in n8n where each "Execute step"
-      // creates a new execution ID, so Redact and Restore get different IDs.
+      // Safe fallback: if exact session not found and there is EXACTLY ONE
+      // session in the vault, use it. This handles step-by-step testing in
+      // n8n where each "Execute step" creates a new execution ID.
+      // We ONLY fall back when there is no ambiguity (1 session).
+      // With multiple sessions, we refuse to guess to prevent cross-user leakage.
       if (!session) {
         const allSessions = vault.listSessions();
-        if (allSessions.length > 0) {
-          // Sort by creation time descending, pick the most recent
-          allSessions.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        if (allSessions.length === 1) {
           actualSessionId = allSessions[0].sessionId;
           session = vault.getSession(actualSessionId);
         }
@@ -559,6 +574,142 @@ export class PiiRedactor implements INodeType {
       }
 
       return [returnData];
+    }
+
+    // ─── DETECT (scan only, no modification) ──
+    if (operation === 'detect') {
+      const detectionScope = this.getNodeParameter('detectionScope', 0, 'all') as string;
+      const enabledPatterns = detectionScope === 'all'
+        ? getPatternOptions().map((p) => p.value)
+        : this.getNodeParameter('piiTypes', 0) as string[];
+
+      // Create a temporary vault just for detection (discarded after)
+      const tempVault = createVault('memory');
+      const tempSessionId = `detect_${Date.now()}`;
+      tempVault.getOrCreateSession(tempSessionId, 60000);
+
+      const ctx: RedactionContext = {
+        enabledPatterns,
+        customPatterns: [],
+        mode: 'token',
+        dedup: true,
+        fieldRules: [],
+        fieldMode: 'all',
+      };
+
+      const allHits: RedactionHit[] = [];
+      const returnData: INodeExecutionData[] = [];
+
+      for (let i = 0; i < items.length; i++) {
+        const hits: RedactionHit[] = [];
+        // Run detection but return ORIGINAL data (not modified)
+        redactValue(items[i].json, ctx, tempVault, tempSessionId, hits, i);
+        allHits.push(...hits);
+        // Pass through original data unchanged
+        returnData.push({ json: items[i].json });
+      }
+
+      const report = buildReport(tempSessionId, allHits);
+      tempVault.deleteSession(tempSessionId);
+
+      // Output 1: original data (unchanged), Output 2: detection report
+      return [returnData, [{ json: report as unknown as IDataObject }]];
+    }
+
+    // ─── VERIFY (post-redaction leak check) ──
+    if (operation === 'verify') {
+      const detectionScope = this.getNodeParameter('detectionScope', 0, 'all') as string;
+      const enabledPatterns = detectionScope === 'all'
+        ? getPatternOptions().map((p) => p.value)
+        : this.getNodeParameter('piiTypes', 0) as string[];
+
+      const tempVault = createVault('memory');
+      const tempSessionId = `verify_${Date.now()}`;
+      tempVault.getOrCreateSession(tempSessionId, 60000);
+
+      const ctx: RedactionContext = {
+        enabledPatterns,
+        customPatterns: [],
+        mode: 'token',
+        dedup: true,
+        fieldRules: [],
+        fieldMode: 'all',
+      };
+
+      const allHits: RedactionHit[] = [];
+      for (let i = 0; i < items.length; i++) {
+        const hits: RedactionHit[] = [];
+        redactValue(items[i].json, ctx, tempVault, tempSessionId, hits, i);
+        allHits.push(...hits);
+      }
+
+      tempVault.deleteSession(tempSessionId);
+
+      const passed = allHits.length === 0;
+      const returnData: INodeExecutionData[] = [{
+        json: {
+          verified: passed,
+          status: passed ? 'PASS' : 'FAIL',
+          leaksFound: allHits.length,
+          message: passed
+            ? 'No PII detected. Data appears clean.'
+            : `Found ${allHits.length} potential PII leak(s) in redacted data.`,
+          leaks: allHits.map((h) => ({
+            field: h.field,
+            patternLabel: h.patternLabel,
+            category: h.category,
+            itemIndex: h.itemIndex,
+          })),
+        } as unknown as IDataObject,
+      }];
+
+      return [returnData];
+    }
+
+    // ─── PURGE (delete vault sessions) ──
+    if (operation === 'purge') {
+      const sessionId = this.getNodeParameter('sessionId', 0, '') as string;
+
+      if (sessionId && sessionId !== '={{$execution.id}}') {
+        // Purge specific session
+        const session = vault.getSession(sessionId);
+        if (session) {
+          const entryCount = Object.keys(session.entries).length;
+          vault.deleteSession(sessionId);
+          return [[{
+            json: {
+              purged: true,
+              sessionId,
+              entriesDeleted: entryCount,
+              message: `Session "${sessionId}" purged successfully.`,
+            } as unknown as IDataObject,
+          }]];
+        } else {
+          return [[{
+            json: {
+              purged: false,
+              sessionId,
+              message: `No session found with ID "${sessionId}".`,
+            } as unknown as IDataObject,
+          }]];
+        }
+      } else {
+        // Purge ALL sessions
+        const sessions = vault.listSessions();
+        let totalEntries = 0;
+        for (const s of sessions) {
+          totalEntries += s.entryCount;
+          vault.deleteSession(s.sessionId);
+        }
+        return [[{
+          json: {
+            purged: true,
+            sessionsPurged: sessions.length,
+            totalEntriesDeleted: totalEntries,
+            message: `All ${sessions.length} session(s) purged successfully.`,
+          } as unknown as IDataObject,
+        }]];
+      }
     }
 
     return [[]];
