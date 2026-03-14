@@ -18,6 +18,54 @@ import {
   VaultStorage,
 } from './types';
 
+/**
+ * Curated high-precision pattern set. These patterns have low false-positive
+ * rates and are safe to enable by default. Excludes broad patterns like
+ * bare digit-only matches (postalCodeDE, postalCodeAT, bsnNL, etc.)
+ */
+const RECOMMENDED_PATTERNS = [
+  // Contact
+  'email', 'phone', 'phoneDE', 'phoneUK', 'phoneAT', 'phoneCH', 'phoneFR',
+  'phoneNL', 'phoneES', 'phoneIT', 'phoneAU', 'phoneIN', 'phoneBR',
+  // Identity - high precision
+  'personName', 'ssn', 'itinUS', 'sinCA', 'ninoUK', 'passportUS', 'passportEU',
+  'passportDE', 'nationalIdDE', 'nhsNumber', 'taxIdUS', 'taxIdDE',
+  'sozialversicherungDE', 'ahvCH', 'nationalIdFR', 'codiceFiscaleIT',
+  'dniES', 'nieES', 'nifES', 'peselPL', 'bsnNL', 'hetuFI', 'ppsIE',
+  'nricSG', 'panIN', 'cpfBR', 'driverLicenseCtx', 'employeeIdCtx',
+  'fullNameCtx', 'mothersMaidenName', 'passportCtx',
+  // Financial - validated
+  'creditCard', 'amex', 'iban', 'bic', 'vatEU', 'abaRouting', 'sortCodeUK',
+  'cardExpiry', 'cvvCtx', 'bankAccountCtx', 'insurancePolicyCtx',
+  'salaryCtx', 'loyaltyNumberCtx',
+  // Network
+  'ipv4', 'ipv6', 'macAddress', 'ipv4Port', 'url', 'privateIp',
+  // Location - validated formats
+  'postalCodeUK', 'postalCodeNL', 'postalCodePL', 'postalCodeCA',
+  'postalCodeJP', 'gpsCoordinates',
+  'addressDE', 'addressLabeledDE', 'addressLabeledEN', 'addressLabeledFR',
+  'addressEUStreetNumber',
+  // Dates
+  'dateSlash', 'dateDash', 'dateDot', 'dateOfBirth',
+  // Medical
+  'medicalRecordNumber', 'deaNumber', 'npiNumber', 'rxNumber',
+  'healthPlanCtx', 'bloodTypeCtx',
+  // Enterprise secrets
+  'internalHostname', 'uncPath', 'ldapDN', 'adUsername',
+  'dbConnectionString', 'connStringKV',
+  'awsAccessKey', 'gcpApiKey', 'stripeKey', 'openaiKey', 'githubToken',
+  'slackToken', 'bearerToken', 'jwtToken', 'pemPrivateKey', 'sshPublicKey',
+  'genericSecret', 'azureKey', 'slackWebhook',
+  'sendgridKey', 'twilioKey', 'anthropicKey', 'gitlabToken',
+  'x509Certificate', 'pgpPrivateKey', 'envSecrets',
+  // Crypto
+  'bitcoinAddress', 'ethereumAddress',
+  // Vehicle
+  'vin',
+  // Biometric
+  'uuid', 'imei', 'iccid',
+];
+
 export class PiiRedactor implements INodeType {
   description: INodeTypeDescription = {
     displayName: 'Redactor',
@@ -164,9 +212,14 @@ export class PiiRedactor implements INodeType {
         },
         options: [
           {
-            name: 'Detect All (210+ types)',
+            name: 'Recommended (High Precision)',
+            value: 'recommended',
+            description: 'Curated set of high-precision patterns. Best for most workflows. Minimal false positives.',
+          },
+          {
+            name: 'All Patterns (Maximum Coverage)',
             value: 'all',
-            description: 'Detect all 210+ sensitive data types across all categories. Maximum coverage.',
+            description: 'All 200+ patterns including broad ones. May produce false positives on short numbers.',
           },
           {
             name: 'Select Specific Types',
@@ -174,7 +227,7 @@ export class PiiRedactor implements INodeType {
             description: 'Choose which specific data types to detect.',
           },
         ],
-        default: 'all',
+        default: 'recommended',
         description: 'Detect all sensitive data types automatically, or select specific types to scan for.',
       },
 
@@ -602,10 +655,15 @@ export class PiiRedactor implements INodeType {
     // ─── REDACT ──────────────────────────────
     if (operation === 'redact') {
       const mode = this.getNodeParameter('redactionMode', 0, 'token') as RedactionMode;
-      const detectionScope = this.getNodeParameter('detectionScope', 0, 'all') as string;
-      const enabledPatterns = detectionScope === 'all'
-        ? getPatternOptions().map((p) => p.value)
-        : this.getNodeParameter('piiTypes', 0) as string[];
+      const detectionScope = this.getNodeParameter('detectionScope', 0, 'recommended') as string;
+      let enabledPatterns: string[];
+      if (detectionScope === 'all') {
+        enabledPatterns = getPatternOptions().map((p) => p.value);
+      } else if (detectionScope === 'recommended') {
+        enabledPatterns = RECOMMENDED_PATTERNS;
+      } else {
+        enabledPatterns = this.getNodeParameter('piiTypes', 0) as string[];
+      }
       const dedup = this.getNodeParameter('dedup', 0, true) as boolean;
       const fieldMode = this.getNodeParameter('fieldMode', 0, 'all') as 'all' | 'allowlist' | 'denylist';
       const sessionTtl = this.getNodeParameter('sessionTtl', 0, 60) as number;

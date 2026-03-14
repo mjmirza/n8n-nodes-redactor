@@ -22,6 +22,7 @@ export interface IVault {
 // ═══════════════════════════════════════════════════════════
 
 const memoryStore: Map<string, VaultSession> = new Map();
+const reverseIndex: Map<string, Map<string, VaultEntry>> = new Map();
 const MAX_SESSIONS = 1000; // Prevent unbounded memory growth
 
 export class MemoryVault implements IVault {
@@ -63,10 +64,20 @@ export class MemoryVault implements IVault {
     const session = memoryStore.get(sessionId);
     if (session) {
       session.entries[entry.token] = entry;
+      // Maintain reverse lookup index for O(1) dedup
+      if (!reverseIndex.has(sessionId)) reverseIndex.set(sessionId, new Map());
+      reverseIndex.get(sessionId)!.set(entry.original, entry);
     }
   }
 
   findByOriginal(sessionId: string, original: string): VaultEntry | undefined {
+    // O(1) lookup via reverse index instead of O(n) scan
+    const index = reverseIndex.get(sessionId);
+    if (index) {
+      const entry = index.get(original);
+      if (entry) return entry;
+    }
+    // Fallback to linear scan (for sessions loaded without index)
     const session = memoryStore.get(sessionId);
     if (!session) return undefined;
     return Object.values(session.entries).find((e) => e.original === original);
@@ -74,6 +85,7 @@ export class MemoryVault implements IVault {
 
   deleteSession(sessionId: string): void {
     memoryStore.delete(sessionId);
+    reverseIndex.delete(sessionId);
   }
 
   listSessions(): Array<{ sessionId: string; entryCount: number; createdAt: string; ttl: number }> {

@@ -586,7 +586,7 @@ export function redactValue(
   if (typeof value === 'number' && !ctx.skipSemantic) {
     // Semantic detection for numeric values (salary, age, etc.)
     const semantic = getSemanticLabel(currentPath, siblingKeys);
-    if (semantic && semantic.label && value !== 0) {
+    if (semantic && semantic.label) {
       const strValue = String(value);
       const replacement = applyRedaction(
         strValue, { label: semantic.label, category: semantic.category },

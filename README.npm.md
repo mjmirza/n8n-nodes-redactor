@@ -13,8 +13,8 @@
   <a href="https://www.npmjs.com/package/n8n-nodes-redactor"><img src="https://img.shields.io/npm/v/n8n-nodes-redactor?style=for-the-badge&color=CB3837&label=npm" alt="npm version" /></a>
   <a href="https://www.npmjs.com/package/n8n-nodes-redactor"><img src="https://img.shields.io/npm/dt/n8n-nodes-redactor?style=for-the-badge&color=blue&label=downloads" alt="npm downloads" /></a>
   <a href="#license"><img src="https://img.shields.io/badge/license-FUCL-orange?style=for-the-badge" alt="License" /></a>
-  <img src="https://img.shields.io/badge/PII_Types-125+-success?style=for-the-badge" alt="125+ PII Types" />
-  <img src="https://img.shields.io/badge/Tests-229_Passed-brightgreen?style=for-the-badge" alt="229 Tests Passed" />
+  <img src="https://img.shields.io/badge/PII_Types-200+-success?style=for-the-badge" alt="125+ PII Types" />
+  <img src="https://img.shields.io/badge/Tests-299_Passed-brightgreen?style=for-the-badge" alt="229 Tests Passed" />
   <img src="https://img.shields.io/badge/Categories-11-success?style=for-the-badge" alt="11 Categories" />
   <img src="https://img.shields.io/badge/Countries-25+-success?style=for-the-badge" alt="25+ Countries" />
   <img src="https://img.shields.io/badge/Vault-Reversible-7B61FF?style=for-the-badge" alt="Reversible Vault" />
@@ -37,7 +37,7 @@ You know this is a problem. Your clients know it too. But rebuilding every workf
 
 **This node fixes it in 2 minutes.**
 
-Drop it between your data source and your LLM node. It automatically detects and replaces 125+ types of sensitive data with safe tokens. The LLM processes the clean data. Then the node swaps the original values back in. Your customer data never leaves your server.
+Drop it between your data source and your LLM node. It automatically detects and replaces 200+ types of sensitive data with safe tokens. The LLM processes the clean data. Then the node swaps the original values back in. Your customer data never leaves your server.
 
 No cloud service. No API keys. No third-party dependency. Everything runs locally on your machine.
 
@@ -241,7 +241,7 @@ Don't want to scan internal IDs or metadata? Use allowlist or denylist mode:
 - **Denylist:** Skip `internalId`, `metadata.*`, `debug`
 
 ### Persistent Vault
-Choose between in-memory (fast, lost on restart) or file-based vault (survives n8n restarts). File vault stores encrypted mappings in `~/.n8n/pii-vault/`.
+Choose between in-memory (fast, lost on restart) or file-based vault (survives n8n restarts). File vault stores mappings in `~/.n8n/pii-vault/`. Sessions auto-expire based on TTL.
 
 ### Session TTL
 Vault sessions auto-expire after 60 minutes by default. No unbounded memory growth. Configurable per workflow.
