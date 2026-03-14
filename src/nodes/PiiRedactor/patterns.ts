@@ -1062,6 +1062,649 @@ export const PII_PATTERNS: PiiPattern[] = [
     regex: /(?:fax|facsimile|telefax)[:\s#]*(?:\+?\d[\d\s\-().]{7,20})/gi,
     description: 'Fax numbers (contextual, with label prefix)',
   },
+  {
+    name: 'phoneCN',
+    label: 'PHONE_CN',
+    category: 'contact',
+    regex: /\b(?:\+?86[\s\-.]?)?1[3-9]\d{9}\b/g,
+    description: 'Chinese mobile phone numbers',
+  },
+  {
+    name: 'phoneKR',
+    label: 'PHONE_KR',
+    category: 'contact',
+    regex: /\b(?:\+?82[\s\-.]?)?0?\d{1,2}[\s\-.]\d{3,4}[\s\-.]\d{4}\b/g,
+    description: 'South Korean phone numbers',
+  },
+  {
+    name: 'phoneRU',
+    label: 'PHONE_RU',
+    category: 'contact',
+    regex: /\b(?:\+?7[\s\-.]?)?\d{3}[\s\-.]\d{3}[\s\-.]\d{2}[\s\-.]\d{2}\b/g,
+    description: 'Russian phone numbers',
+  },
+  {
+    name: 'phoneMX',
+    label: 'PHONE_MX',
+    category: 'contact',
+    regex: /\b(?:\+?52[\s\-.]?)?\d{2,3}[\s\-.]\d{3,4}[\s\-.]\d{4}\b/g,
+    description: 'Mexican phone numbers',
+  },
+  {
+    name: 'phoneZA',
+    label: 'PHONE_ZA',
+    category: 'contact',
+    regex: /\b(?:\+?27[\s\-.]?)?0?\d{2}[\s\-.]\d{3}[\s\-.]\d{4}\b/g,
+    description: 'South African phone numbers',
+  },
+
+  // ═══════════════════════════════════════════
+  // IDENTITY — Extended global (Asia, LATAM, MENA, Africa)
+  // ═══════════════════════════════════════════
+  {
+    name: 'nationalIdCN',
+    label: 'NATIONAL_ID_CN',
+    category: 'identity',
+    regex: /\b\d{6}(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx]\b/g,
+    description: 'Chinese Resident Identity Card number (18 digits)',
+  },
+  {
+    name: 'nationalIdZA',
+    label: 'NATIONAL_ID_ZA',
+    category: 'identity',
+    regex: /\b\d{6}\s?\d{4}\s?\d{3}\b/g,
+    description: 'South African ID number (13 digits)',
+  },
+  {
+    name: 'nationalIdTH',
+    label: 'NATIONAL_ID_TH',
+    category: 'identity',
+    regex: /\b\d-\d{4}-\d{5}-\d{2}-\d\b/g,
+    description: 'Thai National ID (13 digits with dashes)',
+  },
+  {
+    name: 'nationalIdMY',
+    label: 'NRIC_MY',
+    category: 'identity',
+    regex: /\b\d{6}-?\d{2}-?\d{4}\b/g,
+    description: 'Malaysian NRIC (12 digits)',
+  },
+  {
+    name: 'nationalIdTR',
+    label: 'TC_KIMLIK_TR',
+    category: 'identity',
+    regex: /\b[1-9]\d{10}\b/g,
+    description: 'Turkish national ID (TC Kimlik No, 11 digits)',
+  },
+  {
+    name: 'curpMX',
+    label: 'CURP_MX',
+    category: 'identity',
+    regex: /\b[A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d\b/g,
+    description: 'Mexican CURP (population registry code)',
+  },
+  {
+    name: 'rfcMX',
+    label: 'RFC_MX',
+    category: 'identity',
+    regex: /\b[A-Z&]{3,4}\d{6}[A-Z0-9]{3}\b/g,
+    description: 'Mexican RFC (tax ID)',
+  },
+  {
+    name: 'nationalIdHK',
+    label: 'HKID',
+    category: 'identity',
+    regex: /\b[A-Z]{1,2}\d{6}\(?\d\)?\b/g,
+    description: 'Hong Kong ID card number',
+  },
+  {
+    name: 'nationalIdTW',
+    label: 'NATIONAL_ID_TW',
+    category: 'identity',
+    regex: /\b[A-Z][12]\d{8}\b/g,
+    description: 'Taiwan National ID number',
+  },
+  {
+    name: 'emiratesIdUAE',
+    label: 'EMIRATES_ID',
+    category: 'identity',
+    regex: /\b784-\d{4}-\d{7}-\d\b/g,
+    description: 'UAE Emirates ID number',
+  },
+  {
+    name: 'rgBR',
+    label: 'RG_BR',
+    category: 'identity',
+    regex: /\b\d{2}\.?\d{3}\.?\d{3}-?\d\b/g,
+    description: 'Brazilian RG (Registro Geral)',
+  },
+  {
+    name: 'cnpjBR',
+    label: 'CNPJ_BR',
+    category: 'identity',
+    regex: /\b\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}\b/g,
+    description: 'Brazilian CNPJ (company registration)',
+  },
+  {
+    name: 'driverLicenseUK',
+    label: 'DRIVER_LICENSE_UK',
+    category: 'identity',
+    regex: /\b[A-Z]{5}\d{6}[A-Z]{2}\d[A-Z]{2}\b/g,
+    description: 'UK driving licence number (16 characters)',
+  },
+  {
+    name: 'krankenversichertDE',
+    label: 'HEALTH_INS_DE',
+    category: 'identity',
+    regex: /\b[A-Z]\d{9}\b/g,
+    description: 'German health insurance number (Krankenversichertennummer)',
+  },
+  {
+    name: 'romanianCNP',
+    label: 'CNP_RO',
+    category: 'identity',
+    regex: /\b[1-9]\d{12}\b/g,
+    description: 'Romanian personal numeric code (CNP, 13 digits)',
+  },
+  {
+    name: 'croatianOIB',
+    label: 'OIB_HR',
+    category: 'identity',
+    regex: /\b\d{11}\b/g,
+    description: 'Croatian personal identification number (OIB, 11 digits)',
+  },
+  {
+    name: 'mothersMaidenName',
+    label: 'MAIDEN_NAME',
+    category: 'identity',
+    regex: /(?:mother'?s?\s*maiden\s*name|Geburtsname|nom\s+de\s+jeune\s+fille)[:\s]+[A-ZÀ-ÿ][a-zà-ÿ]+/gi,
+    description: 'Mother\'s maiden name (security question, labeled)',
+  },
+  {
+    name: 'passportCtx',
+    label: 'PASSPORT',
+    category: 'identity',
+    regex: /(?:passport\s*(?:no|number|#|num))[:\s]*[A-Z0-9]{6,12}/gi,
+    description: 'Passport numbers (generic contextual with label)',
+  },
+  {
+    name: 'voterRegCtx',
+    label: 'VOTER_REG',
+    category: 'identity',
+    regex: /(?:voter\s*(?:reg(?:istration)?|ID)\s*#?)[:\s]*[A-Z0-9]{5,15}/gi,
+    description: 'Voter registration numbers (contextual)',
+  },
+  {
+    name: 'militaryIdCtx',
+    label: 'MILITARY_ID',
+    category: 'identity',
+    regex: /(?:military\s*ID|DOD\s*ID|CAC)[:\s#]*\d{10}/gi,
+    description: 'Military / DOD ID numbers (contextual)',
+  },
+  {
+    name: 'immigrationCtx',
+    label: 'IMMIGRATION_ID',
+    category: 'identity',
+    regex: /(?:visa|immigration|I-94|A-number|alien\s*(?:reg(?:istration)?)?\s*#?)[:\s#]*[A-Z]?\d{7,13}/gi,
+    description: 'Immigration / visa / alien registration numbers (contextual)',
+  },
+  {
+    name: 'professionalLicenseCtx',
+    label: 'PROF_LICENSE',
+    category: 'identity',
+    regex: /(?:bar\s*(?:number|#)|CPA\s*(?:license|#)|medical\s*license|nursing\s*license|license\s*#)[:\s]*[A-Z0-9\-]{4,15}/gi,
+    description: 'Professional license numbers (bar, CPA, medical, nursing)',
+  },
+  {
+    name: 'employeeIdCtx',
+    label: 'EMPLOYEE_ID',
+    category: 'identity',
+    regex: /(?:employee\s*(?:ID|number|#|no)|Personalnummer|Mitarbeiternummer)[:\s]*[A-Z0-9\-]{3,15}/gi,
+    description: 'Employee ID numbers (contextual, EN/DE)',
+  },
+
+  // ═══════════════════════════════════════════
+  // FINANCIAL — Extended (PCI-DSS, GLBA, SOX)
+  // ═══════════════════════════════════════════
+  {
+    name: 'cardExpiry',
+    label: 'CARD_EXPIRY',
+    category: 'financial',
+    regex: /\b(?:0[1-9]|1[0-2])\s*[\/\-]\s*(?:\d{2}|\d{4})\b/g,
+    description: 'Credit/debit card expiry dates (MM/YY or MM/YYYY)',
+  },
+  {
+    name: 'cvvCtx',
+    label: 'CVV',
+    category: 'financial',
+    regex: /(?:CVV|CVC|CVV2|CVC2|CID|security\s*code)[:\s#]*\d{3,4}/gi,
+    description: 'Card verification codes (CVV/CVC, contextual)',
+  },
+  {
+    name: 'bankAccountCtx',
+    label: 'BANK_ACCOUNT',
+    category: 'financial',
+    regex: /(?:account\s*(?:no|number|#|num)|acct)[:\s#]*\d{8,17}/gi,
+    description: 'Bank account numbers (contextual with label)',
+  },
+  {
+    name: 'insurancePolicyCtx',
+    label: 'INSURANCE_POLICY',
+    category: 'financial',
+    regex: /(?:policy|insurance)\s*(?:#|number|no)[:\s]*[A-Z0-9\-]{5,20}/gi,
+    description: 'Insurance policy numbers (contextual)',
+  },
+  {
+    name: 'insuranceClaimCtx',
+    label: 'INSURANCE_CLAIM',
+    category: 'financial',
+    regex: /(?:claim)\s*(?:#|number|no|ref)[:\s]*[A-Z0-9\-]{5,20}/gi,
+    description: 'Insurance claim reference numbers (contextual)',
+  },
+  {
+    name: 'wireTransferCtx',
+    label: 'WIRE_TRANSFER',
+    category: 'financial',
+    regex: /(?:wire|transfer|remittance)\s*(?:#|ref|reference)[:\s]*[A-Z0-9]{6,20}/gi,
+    description: 'Wire transfer reference numbers (contextual)',
+  },
+  {
+    name: 'loanNumberCtx',
+    label: 'LOAN_NUMBER',
+    category: 'financial',
+    regex: /(?:mortgage|loan)\s*(?:#|number|no|acct)[:\s]*[A-Z0-9\-]{6,20}/gi,
+    description: 'Mortgage / loan account numbers (contextual)',
+  },
+  {
+    name: 'salaryCtx',
+    label: 'SALARY',
+    category: 'financial',
+    regex: /(?:salary|compensation|Gehalt|salaire|annual\s*pay|hourly\s*rate|income)[:\s]*[$€£¥]?\s?[\d,]+(?:\.\d{2})?/gi,
+    description: 'Salary / compensation amounts (contextual, multi-currency)',
+  },
+  {
+    name: 'taxReturnCtx',
+    label: 'TAX_RETURN',
+    category: 'financial',
+    regex: /(?:W-?2|1099|W-?4|1040|AGI|adjusted\s*gross\s*income)[:\s]*[$]?[\d,.]+/gi,
+    description: 'US tax form references and amounts (W-2, 1099, AGI)',
+  },
+
+  // ═══════════════════════════════════════════
+  // MEDICAL — Extended (HIPAA 18 identifiers + codes)
+  // ═══════════════════════════════════════════
+  {
+    name: 'ndcDrugCode',
+    label: 'NDC_CODE',
+    category: 'medical',
+    regex: /\b\d{4,5}-\d{3,4}-\d{1,2}\b/g,
+    description: 'National Drug Code (NDC)',
+  },
+  {
+    name: 'healthPlanCtx',
+    label: 'HEALTH_PLAN_ID',
+    category: 'medical',
+    regex: /(?:member\s*ID|beneficiary|subscriber|health\s*plan)[:\s#]*[A-Z0-9]{6,20}/gi,
+    description: 'Health plan beneficiary / member ID (contextual)',
+  },
+  {
+    name: 'bloodTypeCtx',
+    label: 'BLOOD_TYPE',
+    category: 'medical',
+    regex: /(?:blood\s*type|blood\s*group)[:\s]*(?:A|B|AB|O)[+-]?/gi,
+    description: 'Blood type (contextual)',
+  },
+  {
+    name: 'deviceSerialCtx',
+    label: 'DEVICE_SERIAL',
+    category: 'medical',
+    regex: /(?:serial\s*(?:#|number|no)|S\/N|UDI)[:\s]*[A-Z0-9\-]{6,20}/gi,
+    description: 'Medical device serial numbers / UDI (contextual)',
+  },
+
+  // ═══════════════════════════════════════════
+  // LOCATION — Extended postal codes (global)
+  // ═══════════════════════════════════════════
+  {
+    name: 'postalCodeCA',
+    label: 'POSTCODE_CA',
+    category: 'location',
+    regex: /\b[A-Z]\d[A-Z]\s?\d[A-Z]\d\b/g,
+    description: 'Canadian postal codes (A1A 1A1)',
+  },
+  {
+    name: 'postalCodeJP',
+    label: 'POSTCODE_JP',
+    category: 'location',
+    regex: /\b\d{3}-\d{4}\b/g,
+    description: 'Japanese postal codes (XXX-XXXX)',
+  },
+  {
+    name: 'postalCodeBR',
+    label: 'CEP_BR',
+    category: 'location',
+    regex: /\b\d{5}-?\d{3}\b/g,
+    description: 'Brazilian postal codes / CEP',
+  },
+  {
+    name: 'postalCodeIN',
+    label: 'PIN_IN',
+    category: 'location',
+    regex: /\b[1-9]\d{5}\b/g,
+    description: 'Indian PIN codes (6 digits)',
+  },
+
+  // ═══════════════════════════════════════════
+  // ENTERPRISE — Extended API keys & secrets
+  // ═══════════════════════════════════════════
+  {
+    name: 'sendgridKey',
+    label: 'SENDGRID_KEY',
+    category: 'enterprise',
+    regex: /\bSG\.[A-Za-z0-9\-_]{22}\.[A-Za-z0-9\-_]{43}\b/g,
+    description: 'SendGrid API keys',
+  },
+  {
+    name: 'twilioKey',
+    label: 'TWILIO_KEY',
+    category: 'enterprise',
+    regex: /\bSK[a-f0-9]{32}\b/g,
+    description: 'Twilio API keys',
+  },
+  {
+    name: 'mailgunKey',
+    label: 'MAILGUN_KEY',
+    category: 'enterprise',
+    regex: /\bkey-[A-Za-z0-9]{32}\b/g,
+    description: 'Mailgun API keys',
+  },
+  {
+    name: 'gitlabToken',
+    label: 'GITLAB_TOKEN',
+    category: 'enterprise',
+    regex: /\bglpat-[A-Za-z0-9\-]{20}\b/g,
+    description: 'GitLab personal access tokens',
+  },
+  {
+    name: 'anthropicKey',
+    label: 'ANTHROPIC_KEY',
+    category: 'enterprise',
+    regex: /\bsk-ant-[A-Za-z0-9\-]{90,}\b/g,
+    description: 'Anthropic / Claude API keys',
+  },
+  {
+    name: 'npmToken',
+    label: 'NPM_TOKEN',
+    category: 'enterprise',
+    regex: /\bnpm_[A-Za-z0-9]{36}\b/g,
+    description: 'npm authentication tokens',
+  },
+  {
+    name: 'shopifyKey',
+    label: 'SHOPIFY_KEY',
+    category: 'enterprise',
+    regex: /\bshp(?:at|ss|pa)_[a-fA-F0-9]{32}\b/g,
+    description: 'Shopify API keys',
+  },
+  {
+    name: 'telegramBotToken',
+    label: 'TELEGRAM_TOKEN',
+    category: 'enterprise',
+    regex: /\b\d{8,10}:[A-Za-z0-9_-]{35}\b/g,
+    description: 'Telegram bot tokens',
+  },
+  {
+    name: 'discordBotToken',
+    label: 'DISCORD_TOKEN',
+    category: 'enterprise',
+    regex: /\b[A-Za-z0-9]{24}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27}\b/g,
+    description: 'Discord bot tokens',
+  },
+  {
+    name: 'huggingfaceToken',
+    label: 'HF_TOKEN',
+    category: 'enterprise',
+    regex: /\bhf_[A-Za-z0-9]{34,}\b/g,
+    description: 'Hugging Face API tokens',
+  },
+  {
+    name: 'digitaloceanToken',
+    label: 'DO_TOKEN',
+    category: 'enterprise',
+    regex: /\bdop_v1_[a-f0-9]{64}\b/g,
+    description: 'DigitalOcean personal access tokens',
+  },
+  {
+    name: 'hashicorpVaultToken',
+    label: 'VAULT_TOKEN',
+    category: 'enterprise',
+    regex: /\bhvs\.[A-Za-z0-9]{24,}\b/g,
+    description: 'HashiCorp Vault tokens',
+  },
+  {
+    name: 'httpBasicAuth',
+    label: 'HTTP_BASIC_AUTH',
+    category: 'enterprise',
+    regex: /Authorization:\s*Basic\s+[A-Za-z0-9+\/=]+/g,
+    description: 'HTTP Basic Authentication headers',
+  },
+  {
+    name: 'apiKeyInUrl',
+    label: 'API_KEY_URL',
+    category: 'enterprise',
+    regex: /[?&](?:api_?key|token|access_token|auth)=[A-Za-z0-9\-._~+\/]{8,}/gi,
+    description: 'API keys exposed in URLs',
+  },
+  {
+    name: 'x509Certificate',
+    label: 'X509_CERT',
+    category: 'enterprise',
+    regex: /-----BEGIN CERTIFICATE-----/g,
+    description: 'X.509 certificate headers',
+  },
+  {
+    name: 'pgpPrivateKey',
+    label: 'PGP_KEY',
+    category: 'enterprise',
+    regex: /-----BEGIN PGP PRIVATE KEY BLOCK-----/g,
+    description: 'PGP private key block headers',
+  },
+  {
+    name: 'envSecrets',
+    label: 'ENV_SECRET',
+    category: 'enterprise',
+    regex: /\b(?:DATABASE_URL|DB_PASSWORD|DB_PASS|REDIS_URL|MONGO_URI|SECRET_KEY|ENCRYPTION_KEY|MASTER_KEY|SMTP_PASSWORD|MAIL_PASSWORD)=[^\s]+/g,
+    description: 'Environment variable secrets (DATABASE_URL, DB_PASSWORD, etc.)',
+  },
+  {
+    name: 'googleAnalyticsId',
+    label: 'GA_ID',
+    category: 'enterprise',
+    regex: /\bUA-\d{4,10}-\d{1,4}\b|\bG-[A-Z0-9]{10}\b/g,
+    description: 'Google Analytics tracking IDs',
+  },
+
+  // ═══════════════════════════════════════════
+  // GDPR ARTICLE 9 — Sensitive keyword detection
+  // ═══════════════════════════════════════════
+  {
+    name: 'racialOriginCtx',
+    label: 'RACIAL_ORIGIN',
+    category: 'identity',
+    regex: /(?:race|ethnicity|ethnic\s*origin|Rasse|Herkunft|racial\s*background)[:\s]+[a-zA-ZÀ-ÿ\s]{2,30}/gi,
+    description: 'Racial/ethnic origin (GDPR Art.9, contextual)',
+  },
+  {
+    name: 'politicalOpinionCtx',
+    label: 'POLITICAL_OPINION',
+    category: 'identity',
+    regex: /(?:political\s*(?:party|affiliation|opinion)|Partei(?:zugehörigkeit)?|parti\s*politique)[:\s]+[a-zA-ZÀ-ÿ\s]{2,40}/gi,
+    description: 'Political opinions/affiliations (GDPR Art.9, contextual)',
+  },
+  {
+    name: 'religiousBeliefCtx',
+    label: 'RELIGIOUS_BELIEF',
+    category: 'identity',
+    regex: /(?:religion|religious\s*(?:belief|affiliation)|faith|Konfession|Religionszugehörigkeit|confession)[:\s]+[a-zA-ZÀ-ÿ\s]{2,30}/gi,
+    description: 'Religious beliefs/affiliations (GDPR Art.9, contextual)',
+  },
+  {
+    name: 'tradeUnionCtx',
+    label: 'TRADE_UNION',
+    category: 'identity',
+    regex: /(?:trade\s*union|union\s*member(?:ship)?|Gewerkschaft(?:smitgliedschaft)?|syndicat)[:\s]+[a-zA-ZÀ-ÿ\s]{2,40}/gi,
+    description: 'Trade union membership (GDPR Art.9, contextual)',
+  },
+  {
+    name: 'sexualOrientationCtx',
+    label: 'SEXUAL_ORIENTATION',
+    category: 'identity',
+    regex: /(?:sexual\s*orientation|sexuelle\s*Orientierung|orientation\s*sexuelle)[:\s]+[a-zA-ZÀ-ÿ\s]{2,20}/gi,
+    description: 'Sexual orientation (GDPR Art.9, contextual)',
+  },
+  {
+    name: 'disabilityCtx',
+    label: 'DISABILITY',
+    category: 'medical',
+    regex: /(?:disability|disabled|Behinderung|Schwerbehindertenausweis|GdB)\s*(?:status|degree|grad)?[:\s]*(?:\d{1,3}%?|[a-zA-ZÀ-ÿ\s]{2,30})/gi,
+    description: 'Disability status/degree (GDPR Art.9, BDSG, contextual)',
+  },
+  {
+    name: 'criminalRecordCtx',
+    label: 'CRIMINAL_RECORD',
+    category: 'identity',
+    regex: /(?:criminal\s*record|conviction|felony|misdemeanor|Vorstrafe|casier\s*judiciaire|arrest\s*record)[:\s]+[a-zA-ZÀ-ÿ\s]{2,40}/gi,
+    description: 'Criminal record references (GDPR Art.10, contextual)',
+  },
+
+  // ═══════════════════════════════════════════
+  // EDUCATION — FERPA
+  // ═══════════════════════════════════════════
+  {
+    name: 'studentIdCtx',
+    label: 'STUDENT_ID',
+    category: 'identity',
+    regex: /(?:student\s*(?:ID|number|#|no))[:\s]*[A-Z0-9]{4,15}/gi,
+    description: 'Student ID numbers (FERPA, contextual)',
+  },
+  {
+    name: 'gpaCtx',
+    label: 'GPA',
+    category: 'identity',
+    regex: /(?:GPA|grade\s*point)[:\s]*[0-4]\.\d{1,2}/gi,
+    description: 'Grade point average (FERPA, contextual)',
+  },
+  {
+    name: 'testScoreCtx',
+    label: 'TEST_SCORE',
+    category: 'identity',
+    regex: /(?:SAT|ACT|GRE|GMAT|LSAT|MCAT)\s*(?:score)?[:\s]*\d{2,4}/gi,
+    description: 'Standardized test scores (SAT, ACT, GRE, etc.)',
+  },
+  {
+    name: 'eduEmail',
+    label: 'EDU_EMAIL',
+    category: 'contact',
+    regex: /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.edu/g,
+    description: 'Educational email addresses (.edu)',
+  },
+
+  // ═══════════════════════════════════════════
+  // UTILITY / SERVICE ACCOUNTS
+  // ═══════════════════════════════════════════
+  {
+    name: 'loyaltyNumberCtx',
+    label: 'LOYALTY_NUMBER',
+    category: 'financial',
+    regex: /(?:loyalty|rewards?|frequent\s*flyer|mileage|membership|FF)\s*(?:#|number|card|ID)[:\s]*[A-Z0-9\-]{6,20}/gi,
+    description: 'Loyalty / rewards / frequent flyer numbers (contextual)',
+  },
+  {
+    name: 'utilityAccountCtx',
+    label: 'UTILITY_ACCOUNT',
+    category: 'financial',
+    regex: /(?:electricity|gas|water|utility)\s*(?:account|acct|#)[:\s]*[A-Z0-9\-]{6,20}/gi,
+    description: 'Utility account numbers (electricity, gas, water)',
+  },
+
+  // ═══════════════════════════════════════════
+  // LEGAL / JUDICIAL
+  // ═══════════════════════════════════════════
+  {
+    name: 'caseNumberCtx',
+    label: 'CASE_NUMBER',
+    category: 'identity',
+    regex: /(?:case|docket)\s*(?:#|number|no)[:\s]*\d{1,2}[\-:]\w{2,4}[\-:]\d{3,8}/gi,
+    description: 'Court case / docket numbers (contextual)',
+  },
+  {
+    name: 'inmateNumberCtx',
+    label: 'INMATE_NUMBER',
+    category: 'identity',
+    regex: /(?:inmate|prisoner|offender|booking)\s*(?:#|number|ID)[:\s]*[A-Z0-9\-]{4,15}/gi,
+    description: 'Inmate / prisoner / booking numbers (contextual)',
+  },
+
+  // ═══════════════════════════════════════════
+  // VEHICLE — Extended license plates
+  // ═══════════════════════════════════════════
+  {
+    name: 'licensePlateNL',
+    label: 'LICENSE_PLATE_NL',
+    category: 'vehicle',
+    regex: /\b\d{1,2}-[A-Z]{2,3}-\d{1,2}\b|\b[A-Z]{2}-\d{2,3}-[A-Z]{1,2}\b/g,
+    description: 'Dutch license plates',
+  },
+  {
+    name: 'licensePlateIT',
+    label: 'LICENSE_PLATE_IT',
+    category: 'vehicle',
+    regex: /\b[A-Z]{2}\s?\d{3}\s?[A-Z]{2}\b/g,
+    description: 'Italian license plates (AB 123 CD)',
+  },
+  {
+    name: 'licensePlateES',
+    label: 'LICENSE_PLATE_ES',
+    category: 'vehicle',
+    regex: /\b\d{4}\s?[BCDFGHJKLMNPRSTVWXYZ]{3}\b/g,
+    description: 'Spanish license plates (1234 BCD)',
+  },
+
+  // ═══════════════════════════════════════════
+  // BIOMETRIC — Genetic / DNA
+  // ═══════════════════════════════════════════
+  {
+    name: 'dnaSequence',
+    label: 'DNA_SEQUENCE',
+    category: 'biometric',
+    regex: /\b[ACGT]{20,}\b/g,
+    description: 'DNA nucleotide sequences (20+ bases)',
+  },
+  {
+    name: 'geneticTestCtx',
+    label: 'GENETIC_TEST',
+    category: 'biometric',
+    regex: /(?:BRCA[12]|genetic\s*test|genome|genotype|SNP|allele|karyotype)[:\s]+[^\n]{3,40}/gi,
+    description: 'Genetic test results and markers (BRCA1/2, SNP, contextual)',
+  },
+
+  // ═══════════════════════════════════════════
+  // TEMPORAL — Extended
+  // ═══════════════════════════════════════════
+  {
+    name: 'ageCtx',
+    label: 'AGE',
+    category: 'temporal',
+    regex: /(?:age|Alter|edad|eta|âge)[:\s]+\d{1,3}\s*(?:years?|yr|ans?|Jahre?|años?|anni)?/gi,
+    description: 'Age with label (contextual, multi-language)',
+  },
+  {
+    name: 'dateOfDeathCtx',
+    label: 'DATE_OF_DEATH',
+    category: 'temporal',
+    regex: /(?:date\s*of\s*death|deceased|Sterbedatum|died\s*on)[:\s]*\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4}/gi,
+    description: 'Date of death (HIPAA, contextual)',
+  },
 ];
 
 /**
