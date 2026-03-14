@@ -524,7 +524,22 @@ export class PiiRedactor implements INodeType {
     if (operation === 'restore') {
       const deleteAfterRestore = this.getNodeParameter('deleteAfterRestore', 0, true) as boolean;
 
-      const session = vault.getSession(sessionId);
+      let session = vault.getSession(sessionId);
+      let actualSessionId = sessionId;
+
+      // Fallback: if exact session not found, use the most recent session.
+      // This handles step-by-step execution in n8n where each "Execute step"
+      // creates a new execution ID, so Redact and Restore get different IDs.
+      if (!session) {
+        const allSessions = vault.listSessions();
+        if (allSessions.length > 0) {
+          // Sort by creation time descending, pick the most recent
+          allSessions.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          actualSessionId = allSessions[0].sessionId;
+          session = vault.getSession(actualSessionId);
+        }
+      }
+
       if (!session) {
         throw new NodeOperationError(
           this.getNode(),
@@ -535,12 +550,12 @@ export class PiiRedactor implements INodeType {
       const returnData: INodeExecutionData[] = [];
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
-        const restored = restoreValue(item.json, vault, sessionId) as IDataObject;
+        const restored = restoreValue(item.json, vault, actualSessionId) as IDataObject;
         returnData.push({ json: restored });
       }
 
       if (deleteAfterRestore) {
-        vault.deleteSession(sessionId);
+        vault.deleteSession(actualSessionId);
       }
 
       return [returnData];
