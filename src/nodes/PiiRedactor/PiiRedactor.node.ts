@@ -32,7 +32,10 @@ export class PiiRedactor implements INodeType {
       name: 'Redactor',
     },
     inputs: ['main'],
-    outputs: ['main'],
+    // @ts-ignore n8n supports dynamic outputs via expressions
+    outputs: '={{ $parameter["includeReport"] ? ["main", "main"] : ["main"] }}',
+    // @ts-ignore n8n supports dynamic output names via expressions
+    outputNames: '={{ $parameter["includeReport"] ? ["Data", "Report"] : ["Data"] }}',
 
     properties: [
       // ═══════════════════════════════════════
@@ -466,12 +469,12 @@ export class PiiRedactor implements INodeType {
         type: 'boolean',
         displayOptions: {
           show: {
-            operation: ['redact'],
+            operation: ['redact', 'detect'],
           },
         },
         default: false,
         description:
-          'Output a second item with an audit report listing all PII detected, categories, and counts. Useful for compliance logging.',
+          'When enabled, adds a second output with an audit report listing all PII detected, categories, and counts. Useful for compliance logging.',
       },
     ],
   };
@@ -511,8 +514,11 @@ export class PiiRedactor implements INodeType {
       if (operation === 'detect') {
         const returnData = items.map((item) => ({ json: item.json }));
         const report = buildReport(tempSessionId, allHits);
-        // Append report as last item in single output
-        returnData.push({ json: { _redactorReport: report } as unknown as IDataObject });
+        let includeReport = false;
+        try { includeReport = this.getNodeParameter('includeReport', 0, false) as boolean; } catch {}
+        if (includeReport) {
+          return [returnData, [{ json: report as unknown as IDataObject }]];
+        }
         return [returnData];
       }
 
@@ -618,10 +624,9 @@ export class PiiRedactor implements INodeType {
       // Persist vault
       vault.save(sessionId);
 
-      // Always return 2 outputs: data + report (or empty)
       if (includeReport) {
         const report = buildReport(sessionId, allHits);
-        returnData.push({ json: { _redactorReport: report } as unknown as IDataObject });
+        return [returnData, [{ json: report as unknown as IDataObject }]];
       }
       return [returnData];
     }
