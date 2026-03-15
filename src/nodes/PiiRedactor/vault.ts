@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { VaultEntry, VaultSession, PiiCategory } from './types';
+import { encryptVaultData, decryptVaultData, isEncryptedVault, isPlaintextVault } from './encryption';
 
 /**
  * Abstract vault interface — storage backend for token ↔ original mappings.
@@ -128,8 +129,10 @@ export class MemoryVault implements IVault {
 export class FileVault implements IVault {
   private dir: string;
   private cache: Map<string, VaultSession> = new Map();
+  private passphrase: string;
 
-  constructor(dir?: string) {
+  constructor(dir?: string, passphrase?: string) {
+    this.passphrase = passphrase || '';
     this.dir = dir || path.join(process.env.HOME || '/tmp', '.n8n', 'pii-vault');
     if (!fs.existsSync(this.dir)) {
       fs.mkdirSync(this.dir, { recursive: true });
@@ -151,12 +154,30 @@ export class FileVault implements IVault {
     const fp = this.filePath(sessionId);
     if (!fs.existsSync(fp)) return null;
     try {
-      const data = JSON.parse(fs.readFileSync(fp, 'utf-8')) as VaultSession;
+      const raw = fs.readFileSync(fp);
+      let jsonStr: string;
+
+      if (isEncryptedVault(raw)) {
+        // Encrypted file — decrypt with passphrase
+        if (!this.passphrase) {
+          // Encrypted but no passphrase — cannot read
+          return null;
+        }
+        jsonStr = decryptVaultData(raw, this.passphrase);
+      } else if (isPlaintextVault(raw)) {
+        // Plaintext JSON — read directly
+        jsonStr = raw.toString('utf-8');
+      } else {
+        // Unknown format
+        return null;
+      }
+
+      const data = JSON.parse(jsonStr) as VaultSession;
       // Check expiry
       if (data.ttl > 0) {
         const created = new Date(data.createdAt).getTime();
         if (Date.now() - created > data.ttl) {
-          fs.unlinkSync(fp);
+          try { fs.unlinkSync(fp); } catch { /* ignore */ }
           return null;
         }
       }
@@ -239,8 +260,16 @@ export class FileVault implements IVault {
       try {
         const fp = this.filePath(sessionId);
         const tmpFp = fp + '.tmp';
-        // Atomic write: write to temp file first, then rename
-        fs.writeFileSync(tmpFp, JSON.stringify(session, null, 2), 'utf-8');
+        const jsonData = JSON.stringify(session, null, 2);
+
+        if (this.passphrase) {
+          // Encrypt vault data before writing
+          const encrypted = encryptVaultData(jsonData, this.passphrase);
+          fs.writeFileSync(tmpFp, encrypted);
+        } else {
+          // Write plaintext JSON
+          fs.writeFileSync(tmpFp, jsonData, 'utf-8');
+        }
         fs.renameSync(tmpFp, fp);
       } catch {
         // Write failed (read-only FS, permissions, disk full).
@@ -279,10 +308,10 @@ export class FileVault implements IVault {
  * If file vault fails (read-only filesystem, no permissions, Docker, cloud),
  * automatically falls back to memory vault so the node never crashes.
  */
-export function createVault(storage: string, vaultDir?: string): IVault {
+export function createVault(storage: string, vaultDir?: string, passphrase?: string): IVault {
   if (storage === 'file') {
     try {
-      return new FileVault(vaultDir);
+      return new FileVault(vaultDir, passphrase);
     } catch {
       // Filesystem not writable — fall back to memory vault silently
       return new MemoryVault();

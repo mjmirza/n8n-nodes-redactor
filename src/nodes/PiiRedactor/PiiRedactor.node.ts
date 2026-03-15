@@ -669,6 +669,22 @@ export class PiiRedactor implements INodeType {
         description: 'Custom directory for file-based vault storage',
       },
       {
+        displayName: 'Vault Encryption Passphrase',
+        name: 'vaultPassphrase',
+        type: 'string',
+        typeOptions: {
+          password: true,
+        },
+        displayOptions: {
+          show: {
+            operation: ['redact', 'restore', 'stats', 'purge'],
+            vaultStorage: ['file'],
+          },
+        },
+        default: '',
+        description: 'Encrypt vault files at rest with AES-256-GCM. Leave empty for no encryption. When set, vault files cannot be read without this passphrase. Each tenant should use a different passphrase for complete isolation.',
+      },
+      {
         displayName: 'Session TTL (minutes)',
         name: 'sessionTtl',
         type: 'number',
@@ -873,7 +889,9 @@ export class PiiRedactor implements INodeType {
     // All other operations (redact, restore, stats, purge, classify) use vault
     const vaultStorage = this.getNodeParameter('vaultStorage', 0, 'file') as VaultStorage;
     const vaultDir = this.getNodeParameter('vaultDir', 0, '') as string;
-    const vault = createVault(vaultStorage, vaultDir || undefined);
+    let vaultPassphrase = '';
+    try { vaultPassphrase = this.getNodeParameter('vaultPassphrase', 0, '') as string; } catch { /* not available */ }
+    const vault = createVault(vaultStorage, vaultDir || undefined, vaultPassphrase || undefined);
 
     // ─── STATS ───────────────────────────────
     if (operation === 'stats') {
