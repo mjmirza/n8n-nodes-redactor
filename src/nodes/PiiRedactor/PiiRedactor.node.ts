@@ -9,7 +9,7 @@ import {
 
 import { getPatternOptions } from './patterns';
 import { createVault } from './vault';
-import { redactValue, restoreValue, buildReport } from './engine';
+import { redactValue, restoreValue, buildReport, enhanceWithPresidio } from './engine';
 import {
   CustomPattern,
   RedactionContext,
@@ -530,6 +530,59 @@ export class PiiRedactor implements INodeType {
       },
 
       // ═══════════════════════════════════════
+      // ENHANCED NLP DETECTION (Optional Presidio)
+      // ═══════════════════════════════════════
+      {
+        displayName: 'Enhanced NLP Detection (Optional)',
+        name: 'enablePresidio',
+        type: 'boolean',
+        displayOptions: {
+          show: {
+            operation: ['redact'],
+          },
+        },
+        default: false,
+        description: 'Enable NLP-based detection using Microsoft Presidio. Catches person names, locations, and organizations in free text that regex cannot detect. Requires a Presidio Docker container running locally. Setup: docker run -d -p 5002:3000 mcr.microsoft.com/presidio-analyzer',
+      },
+      {
+        displayName: 'Presidio URL',
+        name: 'presidioUrl',
+        type: 'string',
+        displayOptions: {
+          show: {
+            operation: ['redact'],
+            enablePresidio: [true],
+          },
+        },
+        default: 'http://localhost:5002',
+        placeholder: 'http://localhost:5002',
+        description: 'URL of the Presidio Analyzer service. Default: http://localhost:5002. If using docker-compose, use the service name: http://presidio:3000',
+      },
+      {
+        displayName: 'Presidio Language',
+        name: 'presidioLanguage',
+        type: 'options',
+        displayOptions: {
+          show: {
+            operation: ['redact'],
+            enablePresidio: [true],
+          },
+        },
+        options: [
+          { name: 'English', value: 'en' },
+          { name: 'German (Deutsch)', value: 'de' },
+          { name: 'French (Francais)', value: 'fr' },
+          { name: 'Spanish (Espanol)', value: 'es' },
+          { name: 'Italian (Italiano)', value: 'it' },
+          { name: 'Portuguese (Portugues)', value: 'pt' },
+          { name: 'Dutch (Nederlands)', value: 'nl' },
+          { name: 'Polish (Polski)', value: 'pl' },
+        ],
+        default: 'en',
+        description: 'Language of the text being analyzed. Presidio uses language-specific NLP models for entity detection.',
+      },
+
+      // ═══════════════════════════════════════
       // VAULT SETTINGS
       // ═══════════════════════════════════════
       {
@@ -798,6 +851,20 @@ export class PiiRedactor implements INodeType {
         mode: fieldMode === 'allowlist' ? ('include' as const) : ('exclude' as const),
       }));
 
+      // Presidio NLP integration (optional)
+      let enablePresidio = false;
+      let presidioUrl = '';
+      let presidioLanguage = 'en';
+      try {
+        enablePresidio = this.getNodeParameter('enablePresidio', 0, false) as boolean;
+        if (enablePresidio) {
+          presidioUrl = this.getNodeParameter('presidioUrl', 0, 'http://localhost:5002') as string;
+          presidioLanguage = this.getNodeParameter('presidioLanguage', 0, 'en') as string;
+        }
+      } catch {
+        // Presidio parameters not available
+      }
+
       // Parse allow list
       const allowListRaw = this.getNodeParameter('allowList', 0, {}) as {
         entries?: Array<{ value: string; type: string }>;
@@ -832,6 +899,8 @@ export class PiiRedactor implements INodeType {
         allowList,
         denyList,
         confidenceThreshold,
+        presidioUrl: enablePresidio ? presidioUrl : undefined,
+        presidioLanguage: enablePresidio ? presidioLanguage : undefined,
       };
 
       const allHits: RedactionHit[] = [];
@@ -840,7 +909,7 @@ export class PiiRedactor implements INodeType {
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
         const hits: RedactionHit[] = [];
-        const redacted = redactValue(
+        let redacted = redactValue(
           item.json,
           ctx,
           vault,
@@ -848,6 +917,23 @@ export class PiiRedactor implements INodeType {
           hits,
           i,
         ) as IDataObject;
+
+        // Enhanced NLP detection via Presidio (if enabled)
+        if (ctx.presidioUrl) {
+          try {
+            redacted = await enhanceWithPresidio(
+              redacted as Record<string, unknown>,
+              ctx,
+              vault,
+              sessionId,
+              hits,
+              i,
+            ) as IDataObject;
+          } catch {
+            // Presidio unavailable — continue with regex-only results
+          }
+        }
+
         returnData.push({ json: redacted });
         allHits.push(...hits);
       }

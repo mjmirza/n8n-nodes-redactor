@@ -103,4 +103,8 @@ export interface RedactionContext {
   denyList?: AllowDenyEntry[];
   /** Minimum confidence score to trigger redaction (0.0 to 1.0) */
   confidenceThreshold?: number;
+  /** Presidio Analyzer base URL (e.g., http://localhost:5002) */
+  presidioUrl?: string;
+  /** Language for Presidio analysis (default: en) */
+  presidioLanguage?: string;
 }

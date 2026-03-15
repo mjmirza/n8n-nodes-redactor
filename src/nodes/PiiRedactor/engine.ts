@@ -21,6 +21,12 @@ import {
 } from './context';
 import { detectNamesInText, NAME_CONTEXT_WORDS } from './names';
 import { hasContextWords } from './context';
+import {
+  analyzeWithPresidio,
+  getRedactorLabel,
+  getRedactorCategory,
+  PresidioEntity,
+} from './presidio';
 
 /**
  * Check if a value matches any entry in the allow list (should be SKIPPED).
@@ -890,6 +896,93 @@ export function restoreValue(value: unknown, vault: IVault, sessionId: string): 
   }
 
   return value;
+}
+
+/**
+ * Run Presidio NLP analysis on all string values in an item,
+ * then redact the detected entities. Called AFTER regex-based redaction.
+ * This catches entities that regex missed (especially PERSON names in free text).
+ */
+export async function enhanceWithPresidio(
+  data: Record<string, unknown>,
+  ctx: RedactionContext,
+  vault: IVault,
+  sessionId: string,
+  hits: RedactionHit[],
+  itemIndex: number,
+): Promise<Record<string, unknown>> {
+  if (!ctx.presidioUrl) return data;
+
+  const result: Record<string, unknown> = { ...data };
+
+  for (const [key, value] of Object.entries(result)) {
+    if (typeof value !== 'string') continue;
+    if (value.trim().length === 0) continue;
+    // Skip values that are already fully redacted (single token)
+    if (TOKEN_RE.test(value)) continue;
+
+    try {
+      const entities = await analyzeWithPresidio(
+        ctx.presidioUrl,
+        value,
+        ctx.presidioLanguage || 'en',
+        0.4,
+        10000,
+      );
+
+      if (entities.length === 0) continue;
+
+      // Sort entities by start position descending (replace from end to preserve positions)
+      const sorted = entities.sort((a, b) => b.start - a.start);
+      let text = value;
+
+      for (const entity of sorted) {
+        const matchedText = text.slice(entity.start, entity.end);
+
+        // Skip if already redacted by regex
+        if (TOKEN_RE.test(matchedText) || (matchedText.startsWith('[') && matchedText.endsWith(']'))) continue;
+
+        // Skip if allow-listed
+        if (isAllowListed(matchedText, ctx.allowList)) continue;
+
+        // Skip if below confidence threshold
+        if (entity.score < (ctx.confidenceThreshold ?? 0)) continue;
+
+        const label = getRedactorLabel(entity.entity_type);
+        const category = getRedactorCategory(entity.entity_type) as PiiCategory;
+
+        const replacement = applyRedaction(
+          matchedText,
+          { label, category },
+          ctx.mode,
+          vault,
+          sessionId,
+          ctx.dedup,
+        );
+
+        // Replace in text
+        text = text.slice(0, entity.start) + replacement + text.slice(entity.end);
+
+        hits.push({
+          token: replacement,
+          original: '***',
+          patternName: `presidio_${entity.entity_type}`,
+          patternLabel: label,
+          category,
+          field: key,
+          itemIndex,
+          confidence: entity.score,
+        });
+      }
+
+      result[key] = text;
+    } catch {
+      // Presidio call failed for this field — skip silently
+      continue;
+    }
+  }
+
+  return result;
 }
 
 /**
