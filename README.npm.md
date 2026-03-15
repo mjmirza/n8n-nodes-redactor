@@ -13,10 +13,13 @@
   <a href="https://www.npmjs.com/package/n8n-nodes-redactor"><img src="https://img.shields.io/npm/v/n8n-nodes-redactor?style=for-the-badge&color=CB3837&label=npm" alt="npm version" /></a>
   <a href="https://www.npmjs.com/package/n8n-nodes-redactor"><img src="https://img.shields.io/npm/dt/n8n-nodes-redactor?style=for-the-badge&color=blue&label=downloads" alt="npm downloads" /></a>
   <a href="#license"><img src="https://img.shields.io/badge/license-FUCL-orange?style=for-the-badge" alt="License" /></a>
-  <img src="https://img.shields.io/badge/PII_Types-200+-success?style=for-the-badge" alt="125+ PII Types" />
-  <img src="https://img.shields.io/badge/Tests-299_Passed-brightgreen?style=for-the-badge" alt="229 Tests Passed" />
-  <img src="https://img.shields.io/badge/Categories-11-success?style=for-the-badge" alt="11 Categories" />
-  <img src="https://img.shields.io/badge/Countries-25+-success?style=for-the-badge" alt="25+ Countries" />
+  <img src="https://img.shields.io/badge/PII_Types-216+-success?style=for-the-badge" alt="216+ PII Types" />
+  <img src="https://img.shields.io/badge/Tests-426_Passed-brightgreen?style=for-the-badge" alt="426 Tests Passed" />
+  <img src="https://img.shields.io/badge/Categories-12-success?style=for-the-badge" alt="12 Categories" />
+  <img src="https://img.shields.io/badge/Countries-35+-success?style=for-the-badge" alt="35+ Countries" />
+  <img src="https://img.shields.io/badge/Operations-8-success?style=for-the-badge" alt="8 Operations" />
+  <img src="https://img.shields.io/badge/Vault-AES--256--GCM_Encrypted-7B61FF?style=for-the-badge" alt="AES-256-GCM Vault" />
+  <img src="https://img.shields.io/badge/Presidio-NLP_Optional-7B61FF?style=for-the-badge" alt="Presidio NLP" />
   <img src="https://img.shields.io/badge/Vault-Reversible-7B61FF?style=for-the-badge" alt="Reversible Vault" />
   <img src="https://img.shields.io/badge/GDPR-Ready-00C4B4?style=for-the-badge" alt="GDPR Ready" />
   <img src="https://img.shields.io/badge/HIPAA-Ready-00C4B4?style=for-the-badge" alt="HIPAA Ready" />
@@ -317,6 +320,63 @@ If you need help setting up PII-safe AI workflows, custom redaction rules, or en
 <p align="center">
   <a href="https://next8n.com"><strong>next8n.com</strong></a> &nbsp;|&nbsp; <a href="https://services.next8n.com"><strong>Schedule a call</strong></a>
 </p>
+
+---
+
+## Enterprise Features
+
+### 5 Redaction Modes
+| Mode | Output | Reversible | Best for |
+|------|--------|------------|----------|
+| **Token** | `[EMAIL_0]` | Yes | LLM workflows |
+| **Mask** | `j***@e***.com` | No | Logs, dashboards |
+| **Hash** | `[EMAIL:a3f2b8c91d4e]` | No | Analytics |
+| **Redact** | `[REDACTED]` | No | Maximum privacy |
+| **Pseudonymize** | `sarah.miller@example.com` | Yes | GDPR pseudonymization, demo data, QA |
+
+### Confidence Scoring and Threshold
+Every detection gets a confidence score (0.0 to 1.0). Set a threshold to only redact high-confidence matches. Checksum-validated patterns (credit cards, IBANs) score 0.95. Broad patterns score lower. Reduces false positives by up to 50%.
+
+### Allow and Deny Lists
+- **Allow List**: Values to NEVER redact (company email domains, public phone numbers)
+- **Deny List**: Values to ALWAYS redact (project codenames, internal secrets)
+
+### Prompt Injection Detection
+Scans input data for 25+ prompt injection patterns before it reaches an LLM. Detects instruction overrides, jailbreaks, delimiter escapes, encoded payloads, and zero-width character injection. Returns BLOCK/FLAG/CLEAN with a composite threat score.
+
+### Data Classification
+Assigns sensitivity labels (PUBLIC / INTERNAL / CONFIDENTIAL / RESTRICTED) based on what PII categories are found. Escalation rules: 10+ CONFIDENTIAL hits escalate to RESTRICTED. Maps directly to enterprise data governance policies.
+
+### Vault Encryption (AES-256-GCM)
+Encrypt vault files at rest with a passphrase. Each tenant uses a different passphrase for complete isolation. Even with filesystem access, encrypted files are unreadable without the key. scrypt key derivation resists brute-force attacks.
+
+### Persistent Audit Log
+JSONL audit log of all redaction activity. Compatible with Splunk, ELK, Datadog. Daily rotation + 100MB size limit. Compliant with GDPR Art.30, HIPAA (6-year), SOX (7-year), PCI DSS (1-year) retention requirements.
+
+### GDPR Art.30 ROPA Report
+Generates structured compliance reports covering all 8 fields required by GDPR Article 30(1): controller, purposes, data subjects, personal data categories, recipients, third-country transfers, retention, and security measures. Auto-populated from redaction results.
+
+### Per-Tenant Profiles
+Save and load redaction configurations per client/tenant. Each profile defines: enabled patterns, allow/deny lists, confidence threshold, redaction mode, and compliance settings. Agencies managing multiple clients can switch profiles per workflow.
+
+---
+
+## Enhanced NLP Detection (Optional Presidio Integration)
+
+For users who need NLP-level accuracy in detecting person names, locations, and organizations in free text, the node optionally integrates with Microsoft Presidio (open source, MIT license).
+
+**What it adds:** Catches "Sarah Johnson" and "Goldman Sachs" in free text paragraphs that regex alone cannot detect.
+
+**Setup (one command):**
+```bash
+docker run -d -p 5002:3000 mcr.microsoft.com/presidio-analyzer
+```
+
+**In the node:** Toggle "Enhanced NLP Detection" to ON, enter `http://localhost:5002`. Done.
+
+**No Presidio? No problem.** The node works perfectly without it. Presidio is an optional upgrade for maximum accuracy. If the container is unreachable, the node falls back silently to regex-only detection.
+
+For docker-compose setup and language configuration, see [docs/PRESIDIO_SETUP.md](https://github.com/mjmirza/n8n-nodes-redactor/blob/master/docs/PRESIDIO_SETUP.md).
 
 ---
 
