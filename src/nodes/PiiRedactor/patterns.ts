@@ -1768,5 +1768,6 @@ export function getPatternOptions(): Array<{
  * Get patterns by name.
  */
 export function getPatternsByNames(names: string[]): PiiPattern[] {
-  return PII_PATTERNS.filter((p) => names.includes(p.name));
+  const nameSet = new Set(names);
+  return PII_PATTERNS.filter((p) => nameSet.has(p.name));
 }

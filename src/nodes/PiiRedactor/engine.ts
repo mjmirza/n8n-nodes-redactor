@@ -53,36 +53,6 @@ function isAllowListed(value: string, allowList?: AllowDenyEntry[]): boolean {
 }
 
 /**
- * Check if a value matches any entry in the deny list (should be ALWAYS redacted).
- * Returns the matching entry's value as label, or null.
- */
-function getDenyListMatch(value: string, denyList?: AllowDenyEntry[]): string | null {
-  if (!denyList || denyList.length === 0) return null;
-  for (const entry of denyList) {
-    try {
-      let matched = false;
-      switch (entry.type) {
-        case 'exact':
-          matched = value === entry.value;
-          break;
-        case 'contains':
-          matched = value.includes(entry.value);
-          break;
-        case 'regex':
-          matched = new RegExp(entry.value, 'i').test(value);
-          break;
-        default:
-          matched = value === entry.value;
-      }
-      if (matched) return entry.value;
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-
-/**
  * Generate a deterministic token for a given label + index.
  */
 function generateToken(label: string, index: number): string {
@@ -916,6 +886,28 @@ export async function enhanceWithPresidio(
   const result: Record<string, unknown> = { ...data };
 
   for (const [key, value] of Object.entries(result)) {
+    // Recurse into nested objects
+    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+      result[key] = await enhanceWithPresidio(
+        value as Record<string, unknown>, ctx, vault, sessionId, hits, itemIndex,
+      );
+      continue;
+    }
+    // Recurse into arrays
+    if (Array.isArray(value)) {
+      const arr = [];
+      for (const item of value) {
+        if (item !== null && typeof item === 'object') {
+          arr.push(await enhanceWithPresidio(
+            item as Record<string, unknown>, ctx, vault, sessionId, hits, itemIndex,
+          ));
+        } else {
+          arr.push(item);
+        }
+      }
+      result[key] = arr;
+      continue;
+    }
     if (typeof value !== 'string') continue;
     if (value.trim().length === 0) continue;
     // Skip values that are already fully redacted (single token)

@@ -33,7 +33,10 @@ export class MemoryVault implements IVault {
     if (memoryStore.size >= MAX_SESSIONS && !memoryStore.has(sessionId)) {
       // Evict oldest session
       const oldest = memoryStore.keys().next().value;
-      if (oldest !== undefined) memoryStore.delete(oldest);
+      if (oldest !== undefined) {
+        memoryStore.delete(oldest);
+        reverseIndex.delete(oldest);
+      }
     }
     if (!memoryStore.has(sessionId)) {
       memoryStore.set(sessionId, {

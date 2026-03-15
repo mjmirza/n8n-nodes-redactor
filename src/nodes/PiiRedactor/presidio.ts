@@ -119,6 +119,30 @@ const PRESIDIO_TO_CATEGORY: Record<string, string> = {
 };
 
 /**
+ * Circuit breaker: after 3 consecutive failures, stop calling Presidio
+ * for the rest of this execution. Resets on success.
+ */
+let consecutiveFailures = 0;
+const MAX_FAILURES = 3;
+
+function circuitOpen(): boolean {
+  return consecutiveFailures >= MAX_FAILURES;
+}
+
+function recordSuccess(): void {
+  consecutiveFailures = 0;
+}
+
+function recordFailure(): void {
+  consecutiveFailures++;
+}
+
+/** Reset circuit breaker (call at start of each n8n execution) */
+export function resetCircuitBreaker(): void {
+  consecutiveFailures = 0;
+}
+
+/**
  * Check if Presidio is reachable at the given URL.
  */
 export async function checkPresidioHealth(baseUrl: string): Promise<boolean> {
@@ -143,6 +167,9 @@ export async function analyzeWithPresidio(
 ): Promise<PresidioEntity[]> {
   if (!text || text.trim().length === 0) return [];
 
+  // Circuit breaker: skip if too many consecutive failures
+  if (circuitOpen()) return [];
+
   const requestBody: PresidioAnalyzeRequest = {
     text,
     language,
@@ -157,12 +184,21 @@ export async function analyzeWithPresidio(
       timeoutMs,
     );
 
-    if (result.statusCode !== 200) return [];
+    if (result.statusCode !== 200) {
+      recordFailure();
+      return [];
+    }
 
     const entities: PresidioEntity[] = JSON.parse(result.body);
-    return Array.isArray(entities) ? entities : [];
+    if (!Array.isArray(entities)) {
+      recordFailure();
+      return [];
+    }
+
+    recordSuccess();
+    return entities;
   } catch {
-    // Presidio unreachable or error — graceful fallback
+    recordFailure();
     return [];
   }
 }
