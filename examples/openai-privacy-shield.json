@@ -1,0 +1,15 @@
+{
+  "meta": { "templateId": "pii-redactor-llm-shield", "categories": ["AI", "Security", "Data Privacy"] },
+  "name": "LLM Privacy Shield (Redact before AI, Restore after)",
+  "nodes": [
+    { "parameters": {}, "id": "t1", "name": "Start", "type": "n8n-nodes-base.manualTrigger", "typeVersion": 1, "position": [200, 300] },
+    { "parameters": { "mode": "raw", "jsonOutput": "{\"customer\": {\"name\": \"Mrs. Sarah Johnson\", \"email\": \"sarah@bigcorp.com\", \"ssn\": \"987-65-4321\"}, \"message\": \"Dear Support, I need help with my account. My SSN is 987-65-4321.\"}" }, "id": "s1", "name": "Customer Data", "type": "n8n-nodes-base.set", "typeVersion": 3.4, "position": [420, 300] },
+    { "parameters": { "operation": "redact", "redactionMode": "token", "detectionScope": "recommended" }, "id": "r1", "name": "Redact PII", "type": "n8n-nodes-redactor.redactor", "typeVersion": 1, "position": [640, 300] },
+    { "parameters": { "operation": "restore" }, "id": "r2", "name": "Restore PII", "type": "n8n-nodes-redactor.redactor", "typeVersion": 1, "position": [1080, 300] }
+  ],
+  "connections": {
+    "Start": { "main": [[{ "node": "Customer Data", "type": "main", "index": 0 }]] },
+    "Customer Data": { "main": [[{ "node": "Redact PII", "type": "main", "index": 0 }]] },
+    "Redact PII": { "main": [[{ "node": "Restore PII", "type": "main", "index": 0 }]] }
+  }
+}

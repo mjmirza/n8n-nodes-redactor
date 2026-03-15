@@ -17,6 +17,9 @@ import {
   RedactionMode,
   VaultStorage,
 } from './types';
+import { classifyData } from './classification';
+import { scanForInjection } from './injection';
+import { writeAuditLog } from './audit';
 
 /**
  * Curated high-precision pattern set. These patterns have low false-positive
@@ -115,6 +118,11 @@ export class PiiRedactor implements INodeType {
             description: 'Re-scan redacted data to confirm no PII leaked through. Returns pass/fail.',
           },
           {
+            name: 'Classify',
+            value: 'classify',
+            description: 'Assign sensitivity labels (PUBLIC/INTERNAL/CONFIDENTIAL/RESTRICTED) based on PII found.',
+          },
+          {
             name: 'Purge',
             value: 'purge',
             description: 'Delete vault sessions. Supports GDPR right to erasure.',
@@ -194,6 +202,11 @@ export class PiiRedactor implements INodeType {
             name: 'Redact (Full Removal)',
             value: 'redact',
             description: 'Replace with [REDACTED]. NOT reversible.',
+          },
+          {
+            name: 'Pseudonymize (Fake Realistic Data)',
+            value: 'pseudonymize',
+            description: 'Replace with realistic fake data (names, emails, phones). Preserves format. Reversible via vault. GDPR-compliant pseudonymization.',
           },
         ],
         default: 'token',
@@ -530,6 +543,38 @@ export class PiiRedactor implements INodeType {
       },
 
       // ═══════════════════════════════════════
+      // PROMPT INJECTION DETECTION
+      // ═══════════════════════════════════════
+      {
+        displayName: 'Prompt Injection Detection',
+        name: 'promptInjection',
+        type: 'boolean',
+        displayOptions: {
+          show: {
+            operation: ['redact'],
+          },
+        },
+        default: false,
+        description: 'Scan input data for prompt injection attempts (jailbreaks, instruction overrides, delimiter escapes, encoded payloads) before sending to an LLM. Detected injections are flagged in the output.',
+      },
+
+      // ═══════════════════════════════════════
+      // AUDIT LOG
+      // ═══════════════════════════════════════
+      {
+        displayName: 'Audit Log',
+        name: 'auditLog',
+        type: 'boolean',
+        displayOptions: {
+          show: {
+            operation: ['redact', 'detect'],
+          },
+        },
+        default: false,
+        description: 'Write a persistent JSONL audit log of all redaction activity. Stored in ~/.n8n/pii-audit/. Compliant with GDPR Art.30, HIPAA, SOX, PCI DSS retention requirements.',
+      },
+
+      // ═══════════════════════════════════════
       // ENHANCED NLP DETECTION (Optional Presidio)
       // ═══════════════════════════════════════
       {
@@ -787,7 +832,41 @@ export class PiiRedactor implements INodeType {
       }]];
     }
 
-    // All other operations (redact, restore, stats, purge) use vault
+    // ─── CLASSIFY (sensitivity labeling) ──
+    if (operation === 'classify') {
+      const enabledPatterns = getPatternOptions().map((p) => p.value);
+      const tempVault = createVault('memory');
+      const tempSessionId = `classify_${Date.now()}`;
+      tempVault.getOrCreateSession(tempSessionId, 60000);
+
+      const ctx: RedactionContext = {
+        enabledPatterns,
+        customPatterns: [],
+        mode: 'token',
+        dedup: true,
+        fieldRules: [],
+        fieldMode: 'all',
+      };
+
+      const allHits: RedactionHit[] = [];
+      for (let i = 0; i < items.length; i++) {
+        const hits: RedactionHit[] = [];
+        redactValue(items[i].json, ctx, tempVault, tempSessionId, hits, i);
+        allHits.push(...hits);
+      }
+      tempVault.deleteSession(tempSessionId);
+
+      const classification = classifyData(allHits);
+      return [[{
+        json: {
+          ...classification,
+          itemsScanned: items.length,
+          timestamp: new Date().toISOString(),
+        } as unknown as IDataObject,
+      }]];
+    }
+
+    // All other operations (redact, restore, stats, purge, classify) use vault
     const vaultStorage = this.getNodeParameter('vaultStorage', 0, 'file') as VaultStorage;
     const vaultDir = this.getNodeParameter('vaultDir', 0, '') as string;
     const vault = createVault(vaultStorage, vaultDir || undefined);
@@ -940,6 +1019,48 @@ export class PiiRedactor implements INodeType {
 
       // Persist vault
       vault.save(sessionId);
+
+      // Prompt injection detection (if enabled)
+      let injectionResult = null;
+      try {
+        const promptInjection = this.getNodeParameter('promptInjection', 0, false) as boolean;
+        if (promptInjection) {
+          for (let i = 0; i < items.length; i++) {
+            const result = scanForInjection(items[i].json as Record<string, unknown>);
+            if (result.detected && (!injectionResult || result.score > injectionResult.score)) {
+              injectionResult = result;
+            }
+          }
+        }
+      } catch {
+        // Prompt injection parameter not available
+      }
+
+      // Audit log (if enabled)
+      try {
+        const auditLog = this.getNodeParameter('auditLog', 0, false) as boolean;
+        if (auditLog) {
+          const startTime = Date.now();
+          const classification = classifyData(allHits);
+          writeAuditLog(
+            'REDACT', mode, allHits, items.length,
+            Date.now() - startTime, enabledPatterns.length,
+            !!ctx.presidioUrl, classification, sessionId,
+          );
+        }
+      } catch {
+        // Audit log parameter not available or write failed
+      }
+
+      // Build output
+      if (injectionResult && injectionResult.detected) {
+        // Append injection result to output
+        returnData.push({
+          json: {
+            _promptInjection: injectionResult,
+          } as unknown as IDataObject,
+        });
+      }
 
       if (includeReport) {
         const report = buildReport(sessionId, allHits);

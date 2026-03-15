@@ -135,6 +135,26 @@ function applyRedaction(
       return `[${pattern.label}:${hashValue(match)}]`;
     case 'redact':
       return `[REDACTED]`;
+    case 'pseudonymize': {
+      // Generate format-preserving fake data, store mapping in vault for reversal
+      const { generatePseudonym } = require('./pseudonymize');
+      if (dedup) {
+        const existing = vault.findByOriginal(sessionId, match);
+        if (existing) return existing.token;
+      }
+      const pseudonym = generatePseudonym(sessionId, match, pattern.label);
+      const session = vault.getSession(sessionId);
+      const index = session ? Object.keys(session.entries).length : 0;
+      // Store pseudonym as 'token' in vault for restoration
+      vault.addEntry(sessionId, {
+        token: pseudonym,
+        original: match,
+        patternLabel: pattern.label,
+        category: ('category' in pattern ? pattern.category : 'identity') as PiiCategory,
+        createdAt: new Date().toISOString(),
+      });
+      return pseudonym;
+    }
     default:
       return match;
   }

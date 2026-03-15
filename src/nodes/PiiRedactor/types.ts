@@ -30,10 +30,11 @@ export type PiiCategory =
   | 'other';
 
 export type RedactionMode =
-  | 'token'       // [EMAIL_0] — reversible via vault
-  | 'mask'        // j***@e*****.com — partial visibility, NOT reversible
-  | 'hash'        // sha256 truncated — deterministic, NOT reversible
-  | 'redact';     // [REDACTED] — full removal, NOT reversible
+  | 'token'           // [EMAIL_0] — reversible via vault
+  | 'mask'            // j***@e*****.com — partial visibility, NOT reversible
+  | 'hash'            // sha256 truncated — deterministic, NOT reversible
+  | 'redact'          // [REDACTED] — full removal, NOT reversible
+  | 'pseudonymize';   // sarah.miller@example.com — fake but realistic, reversible via vault
 
 export type VaultStorage = 'memory' | 'file';
 
