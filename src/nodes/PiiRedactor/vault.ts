@@ -238,9 +238,24 @@ export class FileVault implements IVault {
     const sessions: Array<{ sessionId: string; entryCount: number; createdAt: string; ttl: number }> = [];
     for (const file of files) {
       try {
-        const data = JSON.parse(
-          fs.readFileSync(path.join(this.dir, file), 'utf-8'),
-        ) as VaultSession;
+        const fp = path.join(this.dir, file);
+        const raw = fs.readFileSync(fp);
+        let jsonStr: string;
+
+        if (isEncryptedVault(raw)) {
+          if (!this.passphrase) continue; // Can't read without passphrase
+          try {
+            jsonStr = decryptVaultData(raw, this.passphrase);
+          } catch {
+            continue; // Wrong passphrase or corrupted
+          }
+        } else if (isPlaintextVault(raw)) {
+          jsonStr = raw.toString('utf-8');
+        } else {
+          continue;
+        }
+
+        const data = JSON.parse(jsonStr) as VaultSession;
         sessions.push({
           sessionId: data.sessionId,
           entryCount: Object.keys(data.entries).length,

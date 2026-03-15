@@ -120,26 +120,28 @@ const PRESIDIO_TO_CATEGORY: Record<string, string> = {
 
 /**
  * Circuit breaker: after 3 consecutive failures, stop calling Presidio
- * for the rest of this execution. Resets on success.
+ * for the rest of this execution. Per-URL to prevent cross-workflow bleed.
+ * Resets on success or at start of each n8n execution.
  */
-let consecutiveFailures = 0;
+const failureCountByUrl: Map<string, number> = new Map();
 const MAX_FAILURES = 3;
 
-function circuitOpen(): boolean {
-  return consecutiveFailures >= MAX_FAILURES;
+function circuitOpen(url?: string): boolean {
+  if (!url) return false;
+  return (failureCountByUrl.get(url) || 0) >= MAX_FAILURES;
 }
 
-function recordSuccess(): void {
-  consecutiveFailures = 0;
+function recordSuccess(url?: string): void {
+  if (url) failureCountByUrl.set(url, 0);
 }
 
-function recordFailure(): void {
-  consecutiveFailures++;
+function recordFailure(url?: string): void {
+  if (url) failureCountByUrl.set(url, (failureCountByUrl.get(url) || 0) + 1);
 }
 
 /** Reset circuit breaker (call at start of each n8n execution) */
 export function resetCircuitBreaker(): void {
-  consecutiveFailures = 0;
+  failureCountByUrl.clear();
 }
 
 /**
@@ -167,8 +169,8 @@ export async function analyzeWithPresidio(
 ): Promise<PresidioEntity[]> {
   if (!text || text.trim().length === 0) return [];
 
-  // Circuit breaker: skip if too many consecutive failures
-  if (circuitOpen()) return [];
+  // Circuit breaker: skip if too many consecutive failures for this URL
+  if (circuitOpen(baseUrl)) return [];
 
   const requestBody: PresidioAnalyzeRequest = {
     text,
@@ -185,17 +187,17 @@ export async function analyzeWithPresidio(
     );
 
     if (result.statusCode !== 200) {
-      recordFailure();
+      recordFailure(baseUrl);
       return [];
     }
 
     const entities: PresidioEntity[] = JSON.parse(result.body);
     if (!Array.isArray(entities)) {
-      recordFailure();
+      recordFailure(baseUrl);
       return [];
     }
 
-    recordSuccess();
+    recordSuccess(baseUrl);
     return entities;
   } catch {
     recordFailure();

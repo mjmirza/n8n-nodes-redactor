@@ -21,6 +21,8 @@ import { classifyData } from './classification';
 import { scanForInjection } from './injection';
 import { writeAuditLog } from './audit';
 import { resetCircuitBreaker } from './presidio';
+import { loadProfile } from './profiles';
+import { generateRopaRecord } from './ropa';
 
 /**
  * Curated high-precision pattern set. These patterns have low false-positive

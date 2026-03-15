@@ -120,9 +120,7 @@ export function generateRopaRecord(
   }));
 
   // Generate record ID
-  const crypto = require('crypto');
-  const recordId = crypto.randomUUID ? crypto.randomUUID() :
-    `ropa-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const recordId = `ropa-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
   return {
     recordId,
