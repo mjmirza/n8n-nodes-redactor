@@ -565,10 +565,10 @@ describe('Restore engine', () => {
 describe('Audit report', () => {
   test('buildReport creates accurate summary', () => {
     const hits: RedactionHit[] = [
-      { token: '[EMAIL_0]', original: 'a@b.com', patternName: 'email', patternLabel: 'EMAIL', category: 'contact', field: 'email', itemIndex: 0 },
-      { token: '[PHONE_1]', original: '555-1234', patternName: 'phone', patternLabel: 'PHONE', category: 'contact', field: 'phone', itemIndex: 0 },
-      { token: '[SSN_2]', original: '123-45-6789', patternName: 'ssn', patternLabel: 'SSN', category: 'identity', field: 'ssn', itemIndex: 0 },
-      { token: '[EMAIL_3]', original: 'c@d.com', patternName: 'email', patternLabel: 'EMAIL', category: 'contact', field: 'email2', itemIndex: 1 },
+      { token: '[EMAIL_0]', original: 'a@b.com', patternName: 'email', patternLabel: 'EMAIL', category: 'contact', field: 'email', itemIndex: 0, confidence: 0.90 },
+      { token: '[PHONE_1]', original: '555-1234', patternName: 'phone', patternLabel: 'PHONE', category: 'contact', field: 'phone', itemIndex: 0, confidence: 0.70 },
+      { token: '[SSN_2]', original: '123-45-6789', patternName: 'ssn', patternLabel: 'SSN', category: 'identity', field: 'ssn', itemIndex: 0, confidence: 0.85 },
+      { token: '[EMAIL_3]', original: 'c@d.com', patternName: 'email', patternLabel: 'EMAIL', category: 'contact', field: 'email2', itemIndex: 1, confidence: 0.90 },
     ];
 
     const report = buildReport('test-session', hits);

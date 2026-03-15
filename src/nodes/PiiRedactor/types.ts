@@ -9,6 +9,10 @@ export interface PiiPattern {
   validate?: (match: string) => boolean;
   /** Description shown in the UI */
   description?: string;
+  /** Context words that boost confidence when found near a match */
+  contextWords?: string[];
+  /** Base confidence score (0.0 to 1.0) before context boosting */
+  baseConfidence?: number;
 }
 
 export type PiiCategory =
@@ -41,6 +45,8 @@ export interface RedactionHit {
   category: PiiCategory;
   field: string;
   itemIndex: number;
+  /** Confidence score 0.0 to 1.0 */
+  confidence: number;
 }
 
 export interface RedactionReport {
@@ -78,6 +84,11 @@ export interface FieldRule {
   mode: 'include' | 'exclude';
 }
 
+export interface AllowDenyEntry {
+  value: string;
+  type: 'exact' | 'contains' | 'regex';
+}
+
 export interface RedactionContext {
   enabledPatterns: string[];
   customPatterns: CustomPattern[];
@@ -86,4 +97,10 @@ export interface RedactionContext {
   fieldRules: FieldRule[];
   fieldMode: 'all' | 'allowlist' | 'denylist';
   skipSemantic?: boolean;
+  /** Values to NEVER redact (bypass) */
+  allowList?: AllowDenyEntry[];
+  /** Values to ALWAYS redact even if no pattern matches */
+  denyList?: AllowDenyEntry[];
+  /** Minimum confidence score to trigger redaction (0.0 to 1.0) */
+  confidenceThreshold?: number;
 }

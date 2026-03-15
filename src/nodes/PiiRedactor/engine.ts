@@ -2,6 +2,7 @@ import * as crypto from 'crypto';
 import { PII_PATTERNS, getPatternsByNames } from './patterns';
 import { IVault } from './vault';
 import {
+  AllowDenyEntry,
   CustomPattern,
   PiiCategory,
   PiiPattern,
@@ -11,6 +12,68 @@ import {
   RedactionReport,
   VaultEntry,
 } from './types';
+import {
+  calculateConfidence,
+  SEMANTIC_CONFIDENCE,
+  AMBIGUOUS_FIELD_CONFIDENCE,
+  CUSTOM_PATTERN_CONFIDENCE,
+  DENY_LIST_CONFIDENCE,
+} from './context';
+import { detectNamesInText, NAME_CONTEXT_WORDS } from './names';
+import { hasContextWords } from './context';
+
+/**
+ * Check if a value matches any entry in the allow list (should be SKIPPED).
+ */
+function isAllowListed(value: string, allowList?: AllowDenyEntry[]): boolean {
+  if (!allowList || allowList.length === 0) return false;
+  return allowList.some((entry) => {
+    try {
+      switch (entry.type) {
+        case 'exact':
+          return value === entry.value;
+        case 'contains':
+          return value.includes(entry.value);
+        case 'regex':
+          return new RegExp(entry.value, 'i').test(value);
+        default:
+          return value === entry.value;
+      }
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
+ * Check if a value matches any entry in the deny list (should be ALWAYS redacted).
+ * Returns the matching entry's value as label, or null.
+ */
+function getDenyListMatch(value: string, denyList?: AllowDenyEntry[]): string | null {
+  if (!denyList || denyList.length === 0) return null;
+  for (const entry of denyList) {
+    try {
+      let matched = false;
+      switch (entry.type) {
+        case 'exact':
+          matched = value === entry.value;
+          break;
+        case 'contains':
+          matched = value.includes(entry.value);
+          break;
+        case 'regex':
+          matched = new RegExp(entry.value, 'i').test(value);
+          break;
+        default:
+          matched = value === entry.value;
+      }
+      if (matched) return entry.value;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
 
 /**
  * Generate a deterministic token for a given label + index.
@@ -562,20 +625,27 @@ export function redactValue(
     if (!ctx.skipSemantic) {
     const semantic = getSemanticLabel(currentPath, siblingKeys);
     if (semantic && semantic.label && value.trim().length > 0) {
-      const replacement = applyRedaction(
-        value, { label: semantic.label, category: semantic.category },
-        ctx.mode, vault, sessionId, ctx.dedup,
-      );
-      hits.push({
-        token: replacement,
-        original: '***',
-        patternName: `semantic_${semantic.label}`,
-        patternLabel: semantic.label,
-        category: semantic.category,
-        field: currentPath,
-        itemIndex,
-      });
-      return replacement;
+      // Allow list check
+      if (isAllowListed(value, ctx.allowList)) {
+        // Skip to regex detection
+      } else {
+        const semConf = semantic.label === 'IDENTIFIER' ? AMBIGUOUS_FIELD_CONFIDENCE : SEMANTIC_CONFIDENCE;
+        if (semConf >= (ctx.confidenceThreshold ?? 0)) {
+          const replacement = applyRedaction(
+            value, { label: semantic.label, category: semantic.category },
+            ctx.mode, vault, sessionId, ctx.dedup,
+          );
+          hits.push({
+            token: replacement, original: '***',
+            patternName: `semantic_${semantic.label}`,
+            patternLabel: semantic.label,
+            category: semantic.category,
+            field: currentPath, itemIndex,
+            confidence: semConf,
+          });
+          return replacement;
+        }
+      }
     }
     } // end skipSemantic check
 
@@ -584,24 +654,25 @@ export function redactValue(
   }
 
   if (typeof value === 'number' && !ctx.skipSemantic) {
-    // Semantic detection for numeric values (salary, age, etc.)
     const semantic = getSemanticLabel(currentPath, siblingKeys);
     if (semantic && semantic.label) {
-      const strValue = String(value);
-      const replacement = applyRedaction(
-        strValue, { label: semantic.label, category: semantic.category },
-        ctx.mode, vault, sessionId, ctx.dedup,
-      );
-      hits.push({
-        token: replacement,
-        original: '***',
-        patternName: `semantic_${semantic.label}`,
-        patternLabel: semantic.label,
-        category: semantic.category,
-        field: currentPath,
-        itemIndex,
-      });
-      return replacement;
+      const semConf = semantic.label === 'IDENTIFIER' ? AMBIGUOUS_FIELD_CONFIDENCE : SEMANTIC_CONFIDENCE;
+      if (semConf >= (ctx.confidenceThreshold ?? 0)) {
+        const strValue = String(value);
+        const replacement = applyRedaction(
+          strValue, { label: semantic.label, category: semantic.category },
+          ctx.mode, vault, sessionId, ctx.dedup,
+        );
+        hits.push({
+          token: replacement, original: '***',
+          patternName: `semantic_${semantic.label}`,
+          patternLabel: semantic.label,
+          category: semantic.category,
+          field: currentPath, itemIndex,
+          confidence: semConf,
+        });
+        return replacement;
+      }
     }
   }
 
@@ -639,45 +710,127 @@ function redactText(
   fieldPath: string,
 ): string {
   let result = text;
+  const threshold = ctx.confidenceThreshold ?? 0;
 
-  // Built-in patterns
+  // ─── DENY LIST: always redact these values first ───
+  if (ctx.denyList && ctx.denyList.length > 0) {
+    for (const entry of ctx.denyList) {
+      try {
+        let re: RegExp;
+        switch (entry.type) {
+          case 'regex':
+            if (!isSafeRegex(entry.value)) continue;
+            re = new RegExp(entry.value, 'gi');
+            break;
+          case 'contains':
+            re = new RegExp(entry.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+            break;
+          default: // exact
+            re = new RegExp(`\\b${entry.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi');
+        }
+        result = result.replace(re, (match) => {
+          if (TOKEN_RE.test(match)) return match;
+          const replacement = applyRedaction(
+            match, { label: 'DENY_LIST', category: 'other' as PiiCategory }, ctx.mode, vault, sessionId, ctx.dedup,
+          );
+          hits.push({
+            token: replacement, original: '***',
+            patternName: 'denyList', patternLabel: 'DENY_LIST',
+            category: 'other', field: fieldPath, itemIndex,
+            confidence: DENY_LIST_CONFIDENCE,
+          });
+          return replacement;
+        });
+      } catch { /* skip invalid */ }
+    }
+  }
+
+  // ─── BUILT-IN PATTERNS with confidence scoring ───
   const activePatterns = getPatternsByNames(ctx.enabledPatterns);
   for (const pattern of activePatterns) {
-    // Create fresh regex instance (avoid lastIndex issues with /g flag)
     const re = new RegExp(pattern.regex.source, pattern.regex.flags);
-    result = result.replace(re, (match) => {
+    result = result.replace(re, (match, ...args) => {
       // Skip already-redacted tokens
       if (TOKEN_RE.test(match) || (match.startsWith('[') && match.endsWith(']'))) return match;
 
       // Run validator if present
-      if (pattern.validate && !pattern.validate(match)) return match;
+      const validatorPassed = pattern.validate ? pattern.validate(match) : true;
+      if (pattern.validate && !validatorPassed) return match;
+
+      // Allow list check: skip if value is allow-listed
+      if (isAllowListed(match, ctx.allowList)) return match;
+
+      // Calculate confidence score
+      const matchOffset = typeof args[args.length - 2] === 'number' ? args[args.length - 2] : 0;
+      const confidence = calculateConfidence(
+        pattern.name, !!pattern.validate, validatorPassed,
+        text, matchOffset, matchOffset + match.length,
+      );
+
+      // Skip if below confidence threshold
+      if (confidence < threshold) return match;
 
       const replacement = applyRedaction(
         match, pattern, ctx.mode, vault, sessionId, ctx.dedup,
       );
 
       hits.push({
-        token: replacement,
-        original: '***', // NEVER expose raw PII in reports
-        patternName: pattern.name,
-        patternLabel: pattern.label,
-        category: pattern.category,
-        field: fieldPath,
-        itemIndex,
+        token: replacement, original: '***',
+        patternName: pattern.name, patternLabel: pattern.label,
+        category: pattern.category, field: fieldPath, itemIndex,
+        confidence,
       });
 
       return replacement;
     });
   }
 
-  // Custom patterns — with safety validation
+  // ─── NAME DICTIONARY detection (free-text names) ───
+  if (!ctx.skipSemantic) {
+    const nameMatches = detectNamesInText(result);
+    for (const nm of nameMatches) {
+      // Skip if already redacted (contains token brackets)
+      if (nm.name.includes('[') && nm.name.includes(']')) continue;
+
+      // Allow list check
+      if (isAllowListed(nm.name, ctx.allowList)) continue;
+
+      // Calculate confidence with context words
+      let nameConfidence = 0.65;
+      if (hasContextWords(text, nm.start, nm.end, NAME_CONTEXT_WORDS)) {
+        nameConfidence = 0.80;
+      }
+
+      if (nameConfidence < threshold) continue;
+
+      const replacement = applyRedaction(
+        nm.name, { label: 'PERSON_NAME', category: 'identity' as PiiCategory },
+        ctx.mode, vault, sessionId, ctx.dedup,
+      );
+
+      // Replace in result
+      result = result.split(nm.name).join(replacement);
+
+      hits.push({
+        token: replacement, original: '***',
+        patternName: 'personNameDict', patternLabel: 'PERSON_NAME',
+        category: 'identity', field: fieldPath, itemIndex,
+        confidence: nameConfidence,
+      });
+    }
+  }
+
+  // ─── CUSTOM PATTERNS with safety validation ───
   for (const cp of ctx.customPatterns) {
     if (!cp.label || !cp.regex) continue;
-    if (!isSafeRegex(cp.regex)) continue; // Reject dangerous regex
+    if (!isSafeRegex(cp.regex)) continue;
     try {
       const re = new RegExp(cp.regex, 'g');
       result = result.replace(re, (match) => {
         if (TOKEN_RE.test(match)) return match;
+        if (isAllowListed(match, ctx.allowList)) return match;
+
+        if (CUSTOM_PATTERN_CONFIDENCE < threshold) return match;
 
         const pseudoPattern = {
           label: cp.label.toUpperCase(),
@@ -689,13 +842,10 @@ function redactText(
         );
 
         hits.push({
-          token: replacement,
-          original: '***',
-          patternName: `custom_${cp.label}`,
-          patternLabel: pseudoPattern.label,
-          category: pseudoPattern.category,
-          field: fieldPath,
-          itemIndex,
+          token: replacement, original: '***',
+          patternName: `custom_${cp.label}`, patternLabel: pseudoPattern.label,
+          category: pseudoPattern.category, field: fieldPath, itemIndex,
+          confidence: CUSTOM_PATTERN_CONFIDENCE,
         });
 
         return replacement;

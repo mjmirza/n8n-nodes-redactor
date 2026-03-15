@@ -74,6 +74,7 @@ export class PiiRedactor implements INodeType {
     group: ['transform'],
     version: 1,
     subtitle: '={{$parameter["operation"]}}',
+    usableAsTool: true,
     description:
       'Redact and remove sensitive data, PII, personal information, emails, phone numbers, addresses, IBAN, credit cards, names before sending to LLM. Anonymize, mask, sanitize, scrub customer data. Restore original values after. GDPR HIPAA CCPA compliant. Data privacy, data protection, data masking, data anonymization.',
     defaults: {
@@ -352,6 +353,121 @@ export class PiiRedactor implements INodeType {
             ],
           },
         ],
+      },
+
+      // ═══════════════════════════════════════
+      // CONFIDENCE THRESHOLD
+      // ═══════════════════════════════════════
+      {
+        displayName: 'Confidence Threshold',
+        name: 'confidenceThreshold',
+        type: 'number',
+        displayOptions: {
+          show: {
+            operation: ['redact'],
+          },
+        },
+        typeOptions: {
+          minValue: 0,
+          maxValue: 1,
+          numberPrecision: 2,
+        },
+        default: 0,
+        description: 'Only redact detections with confidence score above this threshold (0.0 to 1.0). Set to 0 to redact everything. Set to 0.7 to only redact high-confidence matches. Checksum-validated patterns score 0.95, regex-only patterns score 0.60-0.85.',
+      },
+
+      // ═══════════════════════════════════════
+      // ALLOW LIST (bypass specific values)
+      // ═══════════════════════════════════════
+      {
+        displayName: 'Allow List (Never Redact)',
+        name: 'allowList',
+        type: 'fixedCollection',
+        typeOptions: {
+          multipleValues: true,
+        },
+        displayOptions: {
+          show: {
+            operation: ['redact'],
+          },
+        },
+        default: {},
+        options: [
+          {
+            name: 'entries',
+            displayName: 'Entry',
+            values: [
+              {
+                displayName: 'Value',
+                name: 'value',
+                type: 'string',
+                default: '',
+                placeholder: 'e.g. @mycompany.com, +1-800-555-0100, support@acme.com',
+                description: 'Value to never redact, even if a pattern matches it',
+              },
+              {
+                displayName: 'Match Type',
+                name: 'type',
+                type: 'options',
+                options: [
+                  { name: 'Exact Match', value: 'exact' },
+                  { name: 'Contains', value: 'contains' },
+                  { name: 'Regex', value: 'regex' },
+                ],
+                default: 'contains',
+                description: 'How to match the value',
+              },
+            ],
+          },
+        ],
+        description: 'Values that should NEVER be redacted. Use this for company email domains, public phone numbers, or known-safe identifiers.',
+      },
+
+      // ═══════════════════════════════════════
+      // DENY LIST (always redact specific values)
+      // ═══════════════════════════════════════
+      {
+        displayName: 'Deny List (Always Redact)',
+        name: 'denyList',
+        type: 'fixedCollection',
+        typeOptions: {
+          multipleValues: true,
+        },
+        displayOptions: {
+          show: {
+            operation: ['redact'],
+          },
+        },
+        default: {},
+        options: [
+          {
+            name: 'entries',
+            displayName: 'Entry',
+            values: [
+              {
+                displayName: 'Value',
+                name: 'value',
+                type: 'string',
+                default: '',
+                placeholder: 'e.g. Project Falcon, INTERNAL-2024-SECRET',
+                description: 'Value to ALWAYS redact, even if no pattern matches it',
+              },
+              {
+                displayName: 'Match Type',
+                name: 'type',
+                type: 'options',
+                options: [
+                  { name: 'Exact Match', value: 'exact' },
+                  { name: 'Contains', value: 'contains' },
+                  { name: 'Regex', value: 'regex' },
+                ],
+                default: 'exact',
+                description: 'How to match the value',
+              },
+            ],
+          },
+        ],
+        description: 'Values that should ALWAYS be redacted, regardless of whether any pattern matches. Use for project codenames, internal secrets, or business-specific sensitive terms.',
       },
 
       // ═══════════════════════════════════════
@@ -682,6 +798,27 @@ export class PiiRedactor implements INodeType {
         mode: fieldMode === 'allowlist' ? ('include' as const) : ('exclude' as const),
       }));
 
+      // Parse allow list
+      const allowListRaw = this.getNodeParameter('allowList', 0, {}) as {
+        entries?: Array<{ value: string; type: string }>;
+      };
+      const allowList = (allowListRaw.entries ?? []).map((e) => ({
+        value: e.value,
+        type: (e.type || 'contains') as 'exact' | 'contains' | 'regex',
+      }));
+
+      // Parse deny list
+      const denyListRaw = this.getNodeParameter('denyList', 0, {}) as {
+        entries?: Array<{ value: string; type: string }>;
+      };
+      const denyList = (denyListRaw.entries ?? []).map((e) => ({
+        value: e.value,
+        type: (e.type || 'exact') as 'exact' | 'contains' | 'regex',
+      }));
+
+      // Confidence threshold
+      const confidenceThreshold = this.getNodeParameter('confidenceThreshold', 0, 0) as number;
+
       // Initialize vault session
       vault.getOrCreateSession(sessionId, sessionTtl * 60 * 1000);
 
@@ -692,6 +829,9 @@ export class PiiRedactor implements INodeType {
         dedup,
         fieldRules,
         fieldMode,
+        allowList,
+        denyList,
+        confidenceThreshold,
       };
 
       const allHits: RedactionHit[] = [];
