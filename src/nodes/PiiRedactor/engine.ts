@@ -35,6 +35,7 @@ function isAllowListed(value: string, allowList?: AllowDenyEntry[]): boolean {
         case 'contains':
           return value.includes(entry.value);
         case 'regex':
+          if (!isSafeRegex(entry.value)) return false;
           return new RegExp(entry.value, 'i').test(value);
         default:
           return value === entry.value;
@@ -725,8 +726,8 @@ function redactText(
           case 'contains':
             re = new RegExp(entry.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
             break;
-          default: // exact
-            re = new RegExp(`\\b${entry.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi');
+          default: // exact — use escaped string without \b to match #SECRET, @values etc.
+            re = new RegExp(entry.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
         }
         result = result.replace(re, (match) => {
           if (TOKEN_RE.test(match)) return match;
