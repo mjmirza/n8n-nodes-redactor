@@ -8,200 +8,196 @@ The answer with most tools is either "no" or "it's complicated." With Redactor, 
 
 ---
 
-## Head-to-Head Comparison
+## Complete Feature Matrix (All Competitors Side-by-Side)
 
-### vs. n8n Guardrails Node (Built-in, Free)
-
-| Feature | Guardrails | Redactor |
-|---------|-----------|----------|
-| PII types detected | ~4 (email, phone, CC, SSN) | **216+ across 12 categories** |
-| Person name detection | No | **Yes (semantic + dictionary + NLP)** |
-| Reversible tokenization | **No** (data is gone forever) | **Yes (vault restores originals)** |
-| Redaction modes | 1 (replace) | **7 (token, mask, hash, redact, pseudonymize, blackout, remove)** |
-| Custom patterns | No | **Yes (regex via UI)** |
-| Confidence scoring | No | **Yes (0.0-1.0 with threshold)** |
-| Allow/Deny lists | No | **Yes** |
-| Prompt injection detection | Yes | **Yes (25+ patterns, 6 attack categories)** |
-| Data classification | No | **Yes (PUBLIC/INTERNAL/CONFIDENTIAL/RESTRICTED)** |
-| Audit log | No | **Yes (JSONL, GDPR/HIPAA/SOX compliant)** |
-| Vault encryption | No | **Yes (AES-256-GCM)** |
-| Per-tenant profiles | No | **Yes** |
-| GDPR Art.30 ROPA reports | No | **Yes** |
-| Processing speed | 8-25 minutes reported | **Milliseconds (regex-based)** |
-| Requires LLM API call | **Yes** (adds cost and latency) | **No (100% local)** |
-| AI Agent compatible | Yes | **Yes (usableAsTool)** |
-| Price | Free | Free |
-
-**Bottom line:** Guardrails is a basic filter. Redactor is an enterprise data protection platform.
-
----
-
-### vs. SecureNode ($149 Pro)
-
-| Feature | SecureNode | Redactor |
-|---------|-----------|----------|
-| Detection engine | Presidio (Python/Docker) | **216 regex patterns + semantic + NLP optional** |
-| Requires Docker sidecar | **Yes (mandatory)** | **No (optional for NLP mode)** |
-| Installation | HTTP Request node + Docker | **One-click n8n community install** |
-| Languages | 4 (EN, DE, FR, ES) | **15+ languages** |
-| Reversible tokenization | Yes | **Yes** |
-| Custom patterns | Yes (regex) | **Yes (regex via UI)** |
-| Semantic field detection | No | **Yes (30+ categories, 1000+ field names)** |
-| Context-aware detection | No | **Yes (sibling field analysis)** |
-| Confidence scoring | Presidio scores | **Yes (with context word boosting)** |
-| Allow/Deny lists | No | **Yes** |
-| Prompt injection | No | **Yes** |
-| Data classification | No | **Yes** |
-| Vault encryption | No | **Yes (AES-256-GCM)** |
-| Audit log | No | **Yes** |
-| Per-tenant profiles | No | **Yes** |
-| GDPR Art.30 reports | No | **Yes** |
-| Pseudonymization | No | **Yes (format-preserving)** |
-| Blackout mode | No | **Yes (████████)** |
-| Operations | 2 (redact, restore) | **8 (redact, restore, detect, verify, classify, purge, stats, ROPA)** |
-| Price | **$149 lifetime** | **Free** |
-
-**Bottom line:** SecureNode needs Docker, costs $149, and has fewer features. Redactor is free, zero-dependency, and more comprehensive.
-
----
-
-### vs. Aparavi PII Censor (Community Node, Free)
-
-| Feature | Aparavi | Redactor |
-|---------|---------|----------|
-| Detection | External API (Aparavi cloud) | **100% local (no external calls)** |
-| Languages | 60 | **15+ (regex) + unlimited (Presidio NLP optional)** |
-| Requires API key | **Yes (Aparavi account)** | **No** |
-| Data leaves your server | **Yes (sent to Aparavi API)** | **No** |
-| GDPR data residency | **Violated (cloud processing)** | **Compliant (local processing)** |
-| Reversible tokenization | No | **Yes** |
-| Custom patterns | No | **Yes** |
-| Vault encryption | No | **Yes** |
-| Operations | 1 (censor) | **8** |
-| Maturity | v1, low downloads | **Enterprise-grade, 426 tests** |
-| Price | Free (API key required) | Free |
-
-**Bottom line:** Aparavi sends your data to a third-party cloud API. That defeats the entire purpose of PII protection for GDPR-conscious clients.
-
----
-
-### vs. PromptLock Guard (Community Node)
-
-| Feature | PromptLock Guard | Redactor |
-|---------|-----------------|----------|
-| Focus | Prompt injection + PII | **Full PII lifecycle + injection** |
-| Detection | External API (PromptShield) | **100% local** |
-| Requires API key | **Yes** | **No** |
-| PII types | Limited | **216+** |
-| Reversible tokenization | No | **Yes** |
-| Redaction modes | 1 | **7** |
-| Data classification | No | **Yes** |
-| Audit log | No | **Yes** |
-| Price | Free (API key required) | Free |
-
-**Bottom line:** PromptLock is an external API wrapper. Redactor is a complete local solution.
-
----
-
-### vs. Microsoft Presidio (Open Source, Free)
-
-| Feature | Presidio | Redactor |
-|---------|---------|----------|
-| Platform | Python library | **n8n node (TypeScript)** |
-| Installation | Docker container + code | **One-click n8n install** |
-| NLP name detection | **Yes (spaCy)** | Yes (dictionary + optional Presidio) |
-| Regex patterns | ~40 | **216+** |
-| Semantic field detection | No | **Yes** |
-| Context-aware detection | Basic (context words) | **Advanced (sibling field analysis + context words)** |
-| Reversible tokenization | **No (separate anonymizer needed)** | **Yes (built-in vault)** |
-| Vault encryption | No | **Yes (AES-256-GCM)** |
-| Prompt injection | No | **Yes** |
-| Data classification | No | **Yes** |
-| Audit log | No | **Yes** |
-| GDPR Art.30 reports | No | **Yes** |
-| n8n integration | HTTP Request node (manual) | **Native n8n node** |
-| Price | Free | Free |
-
-**Bottom line:** Presidio is a powerful Python library, but it requires Docker, custom code, and has no built-in vault or compliance features. Redactor integrates Presidio optionally while adding everything Presidio lacks.
+| Feature | **Redactor** | n8n Guardrails | SecureNode | Aparavi | PromptLock Guard | Presidio | Google DLP | Private AI | Nightfall AI |
+|---------|-------------|----------------|------------|---------|-----------------|----------|------------|-----------|-------------|
+| **Price** | **Free** | Free | $149 | Free (API key) | Free (API key) | Free | $1-3/GB | ~$46K/yr | $4-25/user/mo |
+| **Platform** | **n8n node** | n8n built-in | Docker + HTTP | n8n node | n8n node | Python lib | Cloud API | Container | Cloud SaaS |
+| **Installation** | **One-click** | Built-in | Docker + config | One-click | One-click | Docker + code | Cloud setup | Container deploy | SaaS signup |
+| | | | | | | | | | |
+| **DETECTION** | | | | | | | | | |
+| PII types | **216+** | ~4 | ~40 (Presidio) | Unknown | Limited | ~40 | 150+ | 50+ | 100+ |
+| Categories | **12** | 1 | 4 | Unknown | 2 | 4 | 10+ | 10+ | 10+ |
+| Countries covered | **35+** | US only | 4 | 60 langs | US only | 10+ | 40+ | 50+ | 30+ |
+| Person name detection | **Semantic + Dictionary + NLP** | No | Presidio NER | Unknown | No | spaCy NER | ML-based | ML-based | ML-based |
+| Name dictionary size | **15,875 names** | 0 | 0 | Unknown | 0 | 0 | N/A | N/A | N/A |
+| Semantic field detection | **30+ categories, 15 languages** | No | No | No | No | No | No | No | No |
+| Context-aware (sibling analysis) | **Yes** | No | No | No | No | No | No | No | No |
+| Confidence scoring | **0.0-1.0 with threshold** | No | Presidio scores | No | No | Yes | Yes (likelihood) | Yes | Yes |
+| Context word boosting | **120+ patterns** | No | Presidio basic | No | No | Basic | N/A | N/A | N/A |
+| Custom patterns (UI) | **Yes (regex)** | No | Yes (regex) | No | No | Code required | Cloud console | Config | Yes |
+| Allow list (bypass) | **Yes (exact/contains/regex)** | No | No | No | No | Yes (code) | Yes | Yes | Yes |
+| Deny list (always flag) | **Yes (exact/contains/regex)** | No | No | No | No | No | Yes | No | Yes |
+| Checksum validators | **10 (Luhn, IBAN, PESEL, etc.)** | No | Presidio | Unknown | No | Some | Yes | Yes | Some |
+| | | | | | | | | | |
+| **REDACTION** | | | | | | | | | |
+| Redaction modes | **7** | 1 | 2 | 1 | 1 | 5 | 8 | 4 | 3 |
+| Token (reversible) | **Yes** | No | Yes | No | No | No | Complex | No | No |
+| Mask (partial) | **Yes** | No | No | No | No | Yes | Yes | Yes | Yes |
+| Hash (deterministic) | **Yes** | No | No | No | No | Yes | Yes | No | No |
+| Redact (placeholder) | **Yes** | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Pseudonymize (fake data) | **Yes (format-preserving)** | No | No | No | No | No | Yes (FPE) | Yes | No |
+| Blackout (visual bars) | **Yes (████████)** | No | No | No | No | No | No | No | No |
+| Remove (complete deletion) | **Yes (empty string)** | No | No | No | No | No | Yes | No | No |
+| | | | | | | | | | |
+| **VAULT & STORAGE** | | | | | | | | | |
+| Reversible vault | **Yes (memory + file)** | No | Yes | No | No | No | No | No | No |
+| Vault encryption (AES-256-GCM) | **Yes** | No | No | No | No | N/A | N/A | N/A | N/A |
+| Cross-tenant isolation | **Yes (per-passphrase)** | No | No | No | No | N/A | IAM-based | Container | Account |
+| Auto-expiry (TTL) | **Yes (configurable)** | No | Unknown | No | No | N/A | N/A | N/A | N/A |
+| Deduplication | **Yes (same PII = same token)** | No | Unknown | No | No | No | No | No | No |
+| Graceful filesystem fallback | **Yes (file fails -> memory)** | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
+| Max session cap | **1000 (prevents memory bloat)** | N/A | Unknown | N/A | N/A | N/A | N/A | N/A | N/A |
+| | | | | | | | | | |
+| **OPERATIONS** | | | | | | | | | |
+| Total operations | **8** | 1 | 2 | 1 | 1 | 2 | 3 | 2 | 2 |
+| Redact | **Yes** | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Restore | **Yes** | No | Yes | No | No | Separate tool | Complex | No | No |
+| Detect (scan only) | **Yes** | No | No | No | No | Yes | Yes | Yes | Yes |
+| Verify (leak check) | **Yes** | No | No | No | No | No | No | No | No |
+| Classify (sensitivity labels) | **Yes (4 levels + escalation)** | No | No | No | No | No | Yes | No | No |
+| Purge (GDPR Art.17) | **Yes** | No | No | No | No | No | No | No | No |
+| Stats (vault monitoring) | **Yes** | No | No | No | No | No | N/A | No | No |
+| ROPA Report (GDPR Art.30) | **Yes** | No | No | No | No | No | No | No | No |
+| | | | | | | | | | |
+| **SECURITY** | | | | | | | | | |
+| Prompt injection detection | **Yes (25+ patterns, 6 categories)** | Yes | No | No | Yes (API) | No | No | No | No |
+| Injection scoring (BLOCK/FLAG) | **Yes (composite threat score)** | Basic | No | No | Yes | No | No | No | No |
+| Base64 payload detection | **Yes** | No | No | No | Unknown | No | No | No | No |
+| Zero-width char detection | **Yes** | No | No | No | No | No | No | No | No |
+| ReDoS protection | **Yes (isSafeRegex validator)** | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
+| Circuit breaker (Presidio) | **Yes (per-URL, auto-reset)** | N/A | No | N/A | N/A | N/A | N/A | N/A | N/A |
+| Atomic file writes | **Yes (write-then-rename)** | N/A | Unknown | N/A | N/A | N/A | N/A | N/A | N/A |
+| PII never in audit reports | **Yes (always ***) ** | N/A | Unknown | N/A | N/A | N/A | Configurable | Configurable | Configurable |
+| | | | | | | | | | |
+| **COMPLIANCE** | | | | | | | | | |
+| GDPR ready | **Yes** | Partial | Yes | Partial | Partial | Yes | Yes | Yes | Yes |
+| HIPAA ready | **Yes** | No | No | Yes | No | Partial | Yes | Yes | Yes |
+| CCPA/CPRA | **Yes** | No | No | Unknown | No | Yes | Yes | Yes | Yes |
+| PCI-DSS | **Yes (Luhn validated)** | Partial | Presidio | Unknown | No | Partial | Yes | Yes | Partial |
+| SOX audit retention | **Yes (7-year JSONL logs)** | No | No | No | No | No | Yes | Unknown | Partial |
+| GDPR Art.9 special categories | **Yes (race, religion, political, health, sexual orientation)** | No | No | Unknown | No | Partial | Yes | Yes | Partial |
+| GDPR Art.17 right to erasure | **Yes (Purge operation)** | No | No | No | No | No | Yes | Unknown | Partial |
+| GDPR Art.30 ROPA | **Yes (auto-generated reports)** | No | No | No | No | No | No | No | No |
+| Persistent audit log | **Yes (JSONL, daily rotation)** | No | No | No | No | No | Yes | Yes | Yes |
+| Data classification labels | **Yes (4 levels with escalation)** | No | No | No | No | No | Yes | No | Yes |
+| | | | | | | | | | |
+| **ENTERPRISE** | | | | | | | | | |
+| Per-tenant profiles | **Yes** | No | No | No | No | No | Yes | Yes | Yes |
+| Enterprise secrets detection | **38 patterns (AWS, GCP, Stripe, JWT, SSH, etc.)** | API keys only | No | No | No | No | Partial | No | Yes |
+| Internal hostname detection | **Yes (.internal, .local, .corp, .lan)** | No | No | No | No | No | No | No | No |
+| LDAP/AD detection | **Yes (DN + DOMAIN\user)** | No | No | No | No | No | No | No | No |
+| Database conn string detection | **Yes (JDBC, MongoDB, PostgreSQL, etc.)** | No | No | No | No | No | No | No | No |
+| Env variable secrets | **Yes (DATABASE_URL, DB_PASSWORD, etc.)** | No | No | No | No | No | No | No | No |
+| AI Agent compatible | **Yes (usableAsTool)** | Yes | No | No | No | No | N/A | N/A | N/A |
+| Optional NLP upgrade | **Yes (Presidio Docker)** | N/A | Mandatory | N/A | N/A | Native | Native | Native | Native |
+| | | | | | | | | | |
+| **DATA PROCESSING** | | | | | | | | | |
+| Processing location | **100% local** | LLM API call | Docker local | **Cloud API** | **Cloud API** | Local (Docker) | **Google Cloud** | Local | **Cloud** |
+| Data leaves server | **Never** | Yes (to LLM) | No | **Yes** | **Yes** | No | **Yes** | No | **Yes** |
+| External dependency | **None (Presidio optional)** | LLM provider | Docker (mandatory) | Aparavi API | PromptShield API | Docker + Python | Google Cloud | Docker | Nightfall Cloud |
+| Processing speed | **Milliseconds** | 8-25 minutes | Seconds | API latency | API latency | Seconds | API latency | Seconds | API latency |
+| Handles structured JSON | **Yes (recursive)** | Basic | Basic | Unknown | Basic | Text only | Yes | Yes | Yes |
+| Semantic field names (15 langs) | **Yes** | No | No | No | No | No | No | No | No |
+| Context-aware ambiguous fields | **Yes** | No | No | No | No | No | No | No | No |
+| | | | | | | | | | |
+| **TESTING & QUALITY** | | | | | | | | | |
+| Test suites | **12** | Unknown | Unknown | Unknown | Unknown | Yes | N/A | Unknown | N/A |
+| Total tests | **426** | Unknown | Unknown | Unknown | Unknown | Yes | N/A | Unknown | N/A |
+| Security audit (multi-persona) | **Yes (10 personas)** | Unknown | Unknown | No | No | Community | Internal | Internal | SOC 2 |
+| Open source | **FUCL (free to use)** | n8n license | Proprietary | Proprietary | Proprietary | MIT | Proprietary | Proprietary | Proprietary |
+| TypeScript strict mode | **Yes** | Yes | Unknown | Unknown | Unknown | Python | N/A | N/A | N/A |
 
 ---
 
-### vs. Google Cloud DLP (Pay-per-use)
+## The Numbers That Matter
 
-| Feature | Google DLP | Redactor |
-|---------|-----------|----------|
-| Data residency | **Data sent to Google Cloud** | **100% local** |
-| Pricing | **$1-3 per GB scanned** | **Free** |
-| Setup | Cloud project + API key + billing | **One-click install** |
-| PII types | 150+ | **216+ regex + semantic + dictionary** |
-| Reversible tokenization | CryptoReplaceFfxFpe (complex) | **Simple vault-based token/restore** |
-| Confidence scoring | Yes | **Yes** |
-| Custom patterns | Yes (cloud console) | **Yes (n8n UI)** |
-| Data classification | Yes | **Yes** |
-| Prompt injection | No | **Yes** |
-| GDPR compliance | **Questionable (US cloud)** | **Compliant (local processing)** |
-| Vendor lock-in | **Yes (Google Cloud)** | **No** |
-| Price | **$1-3/GB** | **Free** |
-
-**Bottom line:** Google DLP is powerful but expensive, cloud-dependent, and a GDPR liability for EU clients.
+| Metric | Redactor | Best Alternative |
+|--------|----------|-----------------|
+| PII pattern count | **216** | Google DLP: 150 |
+| Redaction modes | **7** | Google DLP: 8 |
+| Operations | **8** | Google DLP: 3 |
+| Countries | **35+** | Private AI: 50+ |
+| Languages (semantic) | **15** | None: 0 |
+| Name dictionary | **15,875** | None: 0 |
+| Tests | **426** | Presidio: unknown |
+| Price | **$0** | SecureNode: $149 |
+| Data leaves server | **Never** | Aparavi/Nightfall: Always |
+| Setup time | **30 seconds** | Google DLP: hours |
+| Docker required | **No** | SecureNode: Yes |
+| API key required | **No** | Aparavi/PromptLock: Yes |
 
 ---
 
-### vs. Private AI (~$46,000/year)
+## What Only Redactor Can Do (No Competitor Matches)
 
-| Feature | Private AI | Redactor |
-|---------|-----------|----------|
-| Accuracy | 99.5%+ | **High (regex + semantic + NLP optional)** |
-| Languages | 52 | **15+ (expandable)** |
-| Deployment | On-premise container | **n8n node (zero dependency)** |
-| Synthetic data | Yes | **Yes (pseudonymize mode)** |
-| Format support | Text, PDF, images, audio | Text, JSON (n8n native) |
-| Price | **~$46,000/year** | **Free** |
+### 1. Semantic Field-Name Detection
+When the field is called `Gehalt`, `salaire`, `stipendio`, or `salary` in any of 15 languages, Redactor knows it's compensation data and redacts the value. **No other tool does this.**
 
-**Bottom line:** Private AI is the Rolls-Royce of PII detection, but at $46K/year. Redactor covers 95% of the same use cases for free.
+### 2. Context-Aware Ambiguous Field Detection
+When `{ id: "D41BRX4M", name: "Amelia", email: "a@b.com" }` is processed, Redactor sees that `name` and `email` confirm this is a person record, so the ambiguous `id` field gets redacted too. **No other tool does this.**
 
----
+### 3. Reversible Vault with AES-256-GCM Encryption
+Strip PII before the LLM, restore it after, with the mapping encrypted at rest so even filesystem access can't leak the data. **No other n8n tool combines all three.**
 
-### vs. Nightfall AI (From $4/month)
+### 4. 7 Redaction Modes Including Blackout and Pseudonymization
+Token, Mask, Hash, Redact, Pseudonymize (fake realistic data), Blackout (████████ visual bars), Remove (complete deletion). **No other n8n tool offers all 7.**
 
-| Feature | Nightfall AI | Redactor |
-|---------|-------------|----------|
-| Platform | SaaS DLP | **n8n node** |
-| Integrations | Slack, GitHub, Jira, etc. | **Any n8n workflow** |
-| Data processing | **Cloud (Nightfall servers)** | **100% local** |
-| Custom detectors | Yes | **Yes** |
-| Pricing | **$4-25/user/month** | **Free** |
-| GDPR data residency | **Cloud-dependent** | **Local** |
+### 5. Prompt Injection + PII Protection in One Node
+Detect jailbreaks, instruction overrides, delimiter escapes, encoded payloads, AND 216+ PII types in a single node. **Guardrails does injection but not PII restoration. PromptLock does injection but needs an external API.**
 
-**Bottom line:** Nightfall is a cloud SaaS. Your data goes to their servers. Redactor keeps everything local.
+### 6. GDPR Art.30 ROPA Report Generation
+Auto-generates Records of Processing Activities covering all 8 fields required by Article 30(1). **No other n8n tool or even most enterprise tools do this.**
+
+### 7. 15,875-Name Dictionary Across 20 Countries
+Detects person names in free text without NLP models. Covers US, UK, Germany, France, Spain, Italy, Netherlands, Poland, Turkey, Arabic, India, China, Japan, Korea, Brazil, Russia, Sweden, Norway, Denmark, Finland. **No regex-based tool has this.**
 
 ---
 
-## Why Redactor Wins
+## Cost Comparison (Annual for a 10-person team)
 
-### 1. The Reversible Vault
-No other n8n node can strip PII before an LLM AND put it back after. The Guardrails node strips PII permanently. SecureNode can do it but requires Docker. Redactor does it natively with zero dependencies.
-
-### 2. Zero Dependencies
-No Docker. No API keys. No cloud accounts. No billing. Install from n8n community nodes and it works in 30 seconds.
-
-### 3. 100% Local Processing
-Your data never leaves your server. This is the entire point for GDPR/HIPAA compliance. Any tool that sends data to a cloud API defeats the purpose.
-
-### 4. Enterprise Features at Zero Cost
-Vault encryption, audit logs, data classification, prompt injection detection, per-tenant profiles, GDPR Art.30 reports, pseudonymization, 7 redaction modes, 8 operations, 216 patterns, 15,875 name dictionary, confidence scoring, allow/deny lists, context-aware detection. All free.
-
-### 5. Semantic Intelligence
-No other tool detects PII by understanding the JSON field name. When the field is called "salary" or "department" or "Gehalt", Redactor knows what it is even if the value looks like a plain number or word. This catches what regex alone misses.
-
-### 6. 426 Battle-Tested Tests
-Every feature is tested. Security audited from 10 different personas. ReDoS protected. Memory-leak prevented. Cross-tenant isolation verified.
+| Tool | Annual Cost | What you get |
+|------|-----------|-------------|
+| **Redactor** | **$0** | Everything listed above |
+| SecureNode | $149 (one-time) | Presidio wrapper, 2 operations, no encryption |
+| Nightfall AI | $480 - $3,000 | Cloud SaaS DLP, data leaves server |
+| Google Cloud DLP | $1,000 - $10,000+ | Pay-per-GB, data goes to Google |
+| Private AI | $46,000 | Maximum accuracy, on-premise, 52 languages |
+| OneTrust | $24,000+ | GDPR compliance platform (not PII redaction) |
 
 ---
 
-## The Pitch (for consultants and agencies)
+## Compliance Coverage Matrix
 
-> "Your LLM workflow is broken without this. The Guardrails node strips PII but then your output says '[PHONE_NUMBER]' instead of the customer's actual phone number. This node strips PII before the LLM AND puts it back after. The customer never notices. The LLM never sees the data. GDPR compliant. Zero cost. 30-second setup."
+| Regulation | Article/Section | Redactor | Guardrails | SecureNode | Google DLP |
+|-----------|----------------|----------|-----------|-----------|-----------|
+| GDPR Art.4(5) Pseudonymization | Data processing | **Yes (pseudonymize mode)** | No | No | Yes (FPE) |
+| GDPR Art.9 Special categories | Race, religion, health, etc. | **Yes (explicit patterns)** | No | Partial | Yes |
+| GDPR Art.17 Right to erasure | Data deletion | **Yes (Purge operation)** | No | No | Yes |
+| GDPR Art.25 Data protection by design | Technical measures | **Yes (vault, encryption, audit)** | Partial | Partial | Yes |
+| GDPR Art.30 Records of processing | ROPA documentation | **Yes (auto-generated)** | No | No | No |
+| GDPR Art.33 Breach notification | 72-hour reporting | **Audit log provides evidence** | No | No | Yes |
+| HIPAA Safe Harbor | 18 PHI identifiers | **All 18 covered** | 4 covered | Partial | Yes |
+| HIPAA Audit Trail | 6-year retention | **Yes (JSONL logs)** | No | No | Yes |
+| PCI-DSS | Cardholder data | **Yes (Luhn, expiry, CVV)** | CC only | Partial | Yes |
+| SOX | 7-year audit retention | **Yes (configurable)** | No | No | Yes |
+| CCPA/CPRA | Consumer data rights | **Yes** | No | No | Yes |
+
+---
+
+## Why Consultants Choose Redactor
+
+### The Problem
+Your client asks: "We want to use AI for customer support, but GDPR says we can't send customer data to OpenAI."
+
+### With Guardrails
+You tell the client: "We can strip the PII, but the AI response will say '[PHONE_NUMBER]' instead of the actual number. The customer experience is broken."
+
+### With Redactor
+You tell the client: "We strip the PII, the AI processes it, and we put the real data back. The customer gets a perfect response. The AI never saw the real data. Here's the audit log proving it. Here's the GDPR Art.30 compliance report. The vault is encrypted with AES-256. Total cost: zero."
+
+**That's why Redactor wins.**
 
 ---
 
