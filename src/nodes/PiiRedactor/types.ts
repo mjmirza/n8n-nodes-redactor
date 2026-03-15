@@ -34,7 +34,9 @@ export type RedactionMode =
   | 'mask'            // j***@e*****.com — partial visibility, NOT reversible
   | 'hash'            // sha256 truncated — deterministic, NOT reversible
   | 'redact'          // [REDACTED] — full removal, NOT reversible
-  | 'pseudonymize';   // sarah.miller@example.com — fake but realistic, reversible via vault
+  | 'pseudonymize'    // sarah.miller@example.com — fake but realistic, reversible via vault
+  | 'blackout'        // ████████ — visual black bars, NOT reversible
+  | 'remove';         // (empty string) — complete removal, no trace, NOT reversible
 
 export type VaultStorage = 'memory' | 'file';
 

@@ -211,6 +211,16 @@ export class PiiRedactor implements INodeType {
             value: 'pseudonymize',
             description: 'Replace with realistic fake data (names, emails, phones). Preserves format. Reversible via vault. GDPR-compliant pseudonymization.',
           },
+          {
+            name: 'Blackout (Visual Black Bars)',
+            value: 'blackout',
+            description: 'Replace with black bars (████████). Same length as original. NOT reversible. Like physical document redaction.',
+          },
+          {
+            name: 'Remove (Complete Deletion)',
+            value: 'remove',
+            description: 'Completely remove PII, leaving no trace. NOT reversible. The value is replaced with an empty string.',
+          },
         ],
         default: 'token',
       },

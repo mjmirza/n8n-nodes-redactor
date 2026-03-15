@@ -136,6 +136,10 @@ function applyRedaction(
       return `[${pattern.label}:${hashValue(match)}]`;
     case 'redact':
       return `[REDACTED]`;
+    case 'blackout':
+      return '\u2588'.repeat(match.length); // █████ visual black bars
+    case 'remove':
+      return ''; // Complete removal, no trace left
     case 'pseudonymize': {
       if (dedup) {
         const existing = vault.findByOriginal(sessionId, match);
