@@ -20,6 +20,7 @@ import {
 import { classifyData } from './classification';
 import { scanForInjection } from './injection';
 import { writeAuditLog } from './audit';
+import { resetCircuitBreaker } from './presidio';
 
 /**
  * Curated high-precision pattern set. These patterns have low false-positive
@@ -747,6 +748,9 @@ export class PiiRedactor implements INodeType {
   async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
     const items = this.getInputData();
     const operation = this.getNodeParameter('operation', 0) as string;
+
+    // Reset Presidio circuit breaker at start of each execution
+    resetCircuitBreaker();
 
     // ─── DETECT / VERIFY (zero-config, scans everything) ──
     if (operation === 'detect' || operation === 'verify') {

@@ -21,6 +21,7 @@ import {
 } from './context';
 import { detectNamesInText, NAME_CONTEXT_WORDS } from './names';
 import { hasContextWords } from './context';
+import { generatePseudonym } from './pseudonymize';
 import {
   analyzeWithPresidio,
   getRedactorLabel,
@@ -136,8 +137,6 @@ function applyRedaction(
     case 'redact':
       return `[REDACTED]`;
     case 'pseudonymize': {
-      // Generate format-preserving fake data, store mapping in vault for reversal
-      const { generatePseudonym } = require('./pseudonymize');
       if (dedup) {
         const existing = vault.findByOriginal(sessionId, match);
         if (existing) return existing.token;

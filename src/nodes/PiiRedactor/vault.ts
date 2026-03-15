@@ -112,6 +112,7 @@ export class MemoryVault implements IVault {
         const created = new Date(session.createdAt).getTime();
         if (now - created > session.ttl) {
           memoryStore.delete(id);
+          reverseIndex.delete(id);
           removed++;
         }
       }
