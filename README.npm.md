@@ -202,16 +202,18 @@ Add your own patterns for anything specific to your business:
 
 ---
 
-## 6 Operations: When to use what
+## 8 Operations: When to use what
 
 | Operation | When to use it | What it does | Example workflow |
 |-----------|---------------|-------------|-----------------|
-| **Redact** | Before sending data to an LLM, API, or third-party service | Detects and replaces all sensitive data with safe tokens. Stores originals in vault for later restoration. | `[Data Source] > Redact > [OpenAI] > Restore > [Output]` |
+| **Redact** | Before sending data to an LLM, API, or third-party service | Detects and replaces all sensitive data with safe tokens. Stores originals in vault for later restoration. Also includes prompt injection detection. | `[Data Source] > Redact > [OpenAI] > Restore > [Output]` |
 | **Restore** | After the LLM or service has processed the tokenized data | Swaps all tokens back to original values using the vault. Your output has real data again. | Place after your LLM node, before the final output. |
 | **Detect** | Compliance audits, data assessment, before deciding to redact | Scans all data for sensitive information and returns a full report. Does NOT modify the data. Use this to understand what PII exists. | `[Data Source] > Detect > [If PII found] > Redact` |
 | **Verify** | After redaction, to confirm nothing leaked through | Re-scans redacted output to check if any PII slipped past. Returns PASS or FAIL with details of any leaks. Defense-in-depth. | `[Data Source] > Redact > [LLM] > Verify > [Alert if FAIL]` |
+| **Classify** | Data governance, sensitivity labeling, routing decisions | Assigns sensitivity labels (PUBLIC / INTERNAL / CONFIDENTIAL / RESTRICTED) based on what PII categories are found. Includes escalation rules. | `[Data Source] > Classify > [If RESTRICTED] > Block` |
 | **Purge** | GDPR right to erasure, cleanup, end of workflow | Deletes vault sessions from memory or disk. Ensures no PII mapping data remains after processing. Required for GDPR Article 17 compliance. | `[End of workflow] > Purge` |
-| **Stats** | Debugging, monitoring, admin | Shows all active vault sessions with entry counts and creation times. Use to monitor vault health and check for stale sessions. | Run manually to inspect vault state. |
+| **Stats** | Debugging, monitoring, admin | Shows all active vault sessions with entry counts, creation times, TTL, and vault storage type. | Run manually to inspect vault state. |
+| **ROPA Report** | GDPR Article 30 compliance | Generates structured Records of Processing Activities covering all 8 fields required by GDPR Art.30(1). Auto-populated from redaction results. | After Redact, generate compliance documentation. |
 
 **Recommended workflow for production:**
 ```
@@ -220,16 +222,19 @@ Add your own patterns for anything specific to your business:
 
 ---
 
-## 4 ways to redact
+## 7 Redaction Modes
 
 Choose the right mode for your use case:
 
 | Mode | Output | Reversible? | Best for |
 |------|--------|-------------|----------|
-| **Token** | `[EMAIL_0]` | Yes - vault restores originals | LLM workflows (recommended) |
+| **Token** | `[EMAIL_0]` | Yes | LLM workflows (recommended) |
 | **Mask** | `j***@e***.com` | No | Logs, dashboards, support tickets |
 | **Hash** | `[EMAIL:a3f2b8c91d4e]` | No | Analytics, deduplication |
 | **Redact** | `[REDACTED]` | No | Maximum privacy, audit trails |
+| **Pseudonymize** | `sarah.miller@example.com` | Yes | GDPR pseudonymization, demo data, QA environments |
+| **Blackout** | `████████` | No | Visual censoring, document redaction, like a black marker |
+| **Remove** | *(empty string)* | No | Complete deletion, no trace left, total removal |
 
 ---
 
@@ -325,7 +330,7 @@ If you need help setting up PII-safe AI workflows, custom redaction rules, or en
 
 ## Enterprise Features
 
-### 5 Redaction Modes
+### 7 Redaction Modes
 | Mode | Output | Reversible | Best for |
 |------|--------|------------|----------|
 | **Token** | `[EMAIL_0]` | Yes | LLM workflows |
@@ -333,6 +338,8 @@ If you need help setting up PII-safe AI workflows, custom redaction rules, or en
 | **Hash** | `[EMAIL:a3f2b8c91d4e]` | No | Analytics |
 | **Redact** | `[REDACTED]` | No | Maximum privacy |
 | **Pseudonymize** | `sarah.miller@example.com` | Yes | GDPR pseudonymization, demo data, QA |
+| **Blackout** | `████████` | No | Visual censoring, like a black marker |
+| **Remove** | *(empty string)* | No | Complete deletion, no trace left |
 
 ### Confidence Scoring and Threshold
 Every detection gets a confidence score (0.0 to 1.0). Set a threshold to only redact high-confidence matches. Checksum-validated patterns (credit cards, IBANs) score 0.95. Broad patterns score lower. Reduces false positives by up to 50%.

@@ -27,7 +27,7 @@ src/nodes/PiiRedactor/
 ├── engine.ts             # Core redaction/restore engine
 ├── patterns.ts           # 216 regex patterns with validators
 ├── context.ts            # Confidence scoring, context word boosting
-├── names.ts              # Name dictionary (3000+ names, 15 languages)
+├── names.ts              # Name dictionary (2200+ names, 18 countries)
 ├── vault.ts              # Memory + File vault with encryption
 ├── encryption.ts         # AES-256-GCM vault encryption (scrypt KDF)
 ├── presidio.ts           # Optional Presidio NLP client (circuit breaker)
@@ -64,6 +64,8 @@ Production flow: `Detect > Redact > [LLM] > Verify > Restore > Purge`
 | Hash | `[EMAIL:a3f2b8c91d4e]` | No | Hashing |
 | Redact | `[REDACTED]` | No | Anonymization |
 | Pseudonymize | `sarah.miller@example.com` | Yes | Pseudonymization (Art.4(5)) |
+| Blackout | `████████` | No | Visual censoring |
+| Remove | *(empty)* | No | Complete deletion |
 
 ## Security Features
 
