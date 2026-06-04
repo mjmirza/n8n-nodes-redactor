@@ -1,0 +1,12 @@
+name: fallow dead-code
+on: [pull_request, push]
+jobs:
+  dead-code:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - name: fallow audit (new-only)
+        run: npx -y fallow@2.88.2 audit --base "origin/${{ github.base_ref || 'main' }}" --gate new-only

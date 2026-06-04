@@ -58,6 +58,7 @@
   "main": "dist/nodes/PiiRedactor/PiiRedactor.node.js",
   "types": "dist/nodes/PiiRedactor/PiiRedactor.node.d.ts",
   "scripts": {
+    "prepare": "git config core.hooksPath .husky || true",
     "build": "tsc -p tsconfig.json && cp src/nodes/PiiRedactor/redact.png dist/nodes/PiiRedactor/redact.png",
     "dev": "tsc -w -p tsconfig.json",
     "test": "jest --no-cache",
