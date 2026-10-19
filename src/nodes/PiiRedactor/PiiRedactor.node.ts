@@ -775,6 +775,8 @@ export class PiiRedactor implements INodeType {
 
   async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
     const items = this.getInputData();
+    // Aggregate outputs (summaries, reports) link back to every input item.
+    const allPaired = items.map((_, i) => ({ item: i }));
     const operation = this.getNodeParameter('operation', 0) as string;
 
     // Reset Presidio circuit breaker at start of each execution
@@ -813,7 +815,7 @@ export class PiiRedactor implements INodeType {
 
       if (operation === 'detect') {
         // Always return original data + detection summary as last item
-        const returnData = items.map((item) => ({ json: item.json }));
+        const returnData: INodeExecutionData[] = items.map((item, i) => ({ json: item.json, pairedItem: { item: i } }));
         const report = buildReport(tempSessionId, allHits);
 
         // Summary always appended so user sees results
@@ -832,11 +834,11 @@ export class PiiRedactor implements INodeType {
 
         if (includeReport) {
           // Full report on second output
-          return [returnData, [{ json: { ...summary, hits: report.hits } as unknown as IDataObject }]];
+          return [returnData, [{ json: { ...summary, hits: report.hits } as unknown as IDataObject, pairedItem: allPaired }]];
         }
 
         // Append summary as last item in single output
-        returnData.push({ json: summary as unknown as IDataObject });
+        returnData.push({ json: summary as unknown as IDataObject, pairedItem: allPaired });
         return [returnData];
       }
 
@@ -861,6 +863,7 @@ export class PiiRedactor implements INodeType {
             itemIndex: h.itemIndex,
           })),
         } as unknown as IDataObject,
+        pairedItem: allPaired,
       }]];
     }
 
@@ -895,6 +898,7 @@ export class PiiRedactor implements INodeType {
           itemsScanned: items.length,
           timestamp: new Date().toISOString(),
         } as unknown as IDataObject,
+        pairedItem: allPaired,
       }]];
     }
 
@@ -925,13 +929,18 @@ export class PiiRedactor implements INodeType {
               ttlMinutes: s.ttl > 0 ? Math.round(s.ttl / 60000) : 'no expiry',
             })),
           } as unknown as IDataObject,
+          pairedItem: allPaired,
         },
       ]];
     }
 
-    const sessionId = this.getNodeParameter('sessionId', 0) as string;
-    if (!sessionId) {
-      throw new NodeOperationError(this.getNode(), 'Session ID is required');
+    // Only Redact and Restore are bound to a session. Purge and Stats are not.
+    let sessionId = '';
+    if (operation === 'redact' || operation === 'restore') {
+      sessionId = this.getNodeParameter('sessionId', 0) as string;
+      if (!sessionId) {
+        throw new NodeOperationError(this.getNode(), 'Session ID is required');
+      }
     }
 
     // ─── REDACT ──────────────────────────────
@@ -1047,7 +1056,7 @@ export class PiiRedactor implements INodeType {
           }
         }
 
-        returnData.push({ json: redacted });
+        returnData.push({ json: redacted, pairedItem: { item: i } });
         allHits.push(...hits);
       }
 
@@ -1093,12 +1102,13 @@ export class PiiRedactor implements INodeType {
           json: {
             _promptInjection: injectionResult,
           } as unknown as IDataObject,
+          pairedItem: allPaired,
         });
       }
 
       if (includeReport) {
         const report = buildReport(sessionId, allHits);
-        return [returnData, [{ json: report as unknown as IDataObject }]];
+        return [returnData, [{ json: report as unknown as IDataObject, pairedItem: allPaired }]];
       }
       return [returnData];
     }
@@ -1107,21 +1117,7 @@ export class PiiRedactor implements INodeType {
     if (operation === 'restore') {
       const deleteAfterRestore = this.getNodeParameter('deleteAfterRestore', 0, true) as boolean;
 
-      let session = vault.getSession(sessionId);
-      let actualSessionId = sessionId;
-
-      // Safe fallback: if exact session not found and there is EXACTLY ONE
-      // session in the vault, use it. This handles step-by-step testing in
-      // n8n where each "Execute step" creates a new execution ID.
-      // We ONLY fall back when there is no ambiguity (1 session).
-      // With multiple sessions, we refuse to guess to prevent cross-user leakage.
-      if (!session) {
-        const allSessions = vault.listSessions();
-        if (allSessions.length === 1) {
-          actualSessionId = allSessions[0].sessionId;
-          session = vault.getSession(actualSessionId);
-        }
-      }
+      const session = vault.getSession(sessionId);
 
       if (!session) {
         throw new NodeOperationError(
@@ -1133,12 +1129,12 @@ export class PiiRedactor implements INodeType {
       const returnData: INodeExecutionData[] = [];
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
-        const restored = restoreValue(item.json, vault, actualSessionId) as IDataObject;
-        returnData.push({ json: restored });
+        const restored = restoreValue(item.json, vault, sessionId) as IDataObject;
+        returnData.push({ json: restored, pairedItem: { item: i } });
       }
 
       if (deleteAfterRestore) {
-        vault.deleteSession(actualSessionId);
+        vault.deleteSession(sessionId);
       }
 
       return [returnData];
@@ -1164,6 +1160,7 @@ export class PiiRedactor implements INodeType {
               entriesDeleted: entryCount,
               message: `Session purged successfully.`,
             } as unknown as IDataObject,
+            pairedItem: allPaired,
           }]];
         } else {
           return [[{
@@ -1172,6 +1169,7 @@ export class PiiRedactor implements INodeType {
               sessionId: purgeSessionId,
               message: `No session found with this ID.`,
             } as unknown as IDataObject,
+            pairedItem: allPaired,
           }]];
         }
       } else {
@@ -1189,6 +1187,7 @@ export class PiiRedactor implements INodeType {
             totalEntriesDeleted: totalEntries,
             message: `All ${sessions.length} session(s) purged successfully.`,
           } as unknown as IDataObject,
+          pairedItem: allPaired,
         }]];
       }
     }

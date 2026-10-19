@@ -654,6 +654,9 @@ export function redactValue(
   }
 
   if (typeof value === 'number' && !ctx.skipSemantic) {
+    if (!shouldProcessField(currentPath, ctx.fieldMode, ctx.fieldRules)) {
+      return value;
+    }
     const semantic = getSemanticLabel(currentPath, siblingKeys);
     if (semantic && semantic.label) {
       const semConf = semantic.label === 'IDENTIFIER' ? AMBIGUOUS_FIELD_CONFIDENCE : SEMANTIC_CONFIDENCE;
