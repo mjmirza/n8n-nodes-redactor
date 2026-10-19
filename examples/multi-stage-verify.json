@@ -1,17 +1,144 @@
 {
-  "meta": { "templateId": "pii-multi-stage-verify", "categories": ["AI", "Security", "Compliance"] },
+  "meta": {
+    "templateId": "pii-multi-stage-verify",
+    "categories": [
+      "AI",
+      "Security",
+      "Compliance"
+    ]
+  },
   "name": "Multi-Stage PII Pipeline with Verification",
   "nodes": [
-    { "parameters": {}, "id": "t1", "name": "Start", "type": "n8n-nodes-base.manualTrigger", "typeVersion": 1, "position": [200, 300] },
-    { "parameters": { "mode": "raw", "jsonOutput": "{\"message\": \"Dear Support, I am Mrs. Sarah Johnson (sarah@bigcorp.com). My IBAN is DE89370400440532013000.\"}" }, "id": "s1", "name": "Input Data", "type": "n8n-nodes-base.set", "typeVersion": 3.4, "position": [420, 300] },
-    { "parameters": { "operation": "redact", "redactionMode": "token", "promptInjection": true, "auditLog": true }, "id": "r1", "name": "Redact + Injection Check", "type": "n8n-nodes-redactor.redactor", "typeVersion": 1, "position": [640, 300] },
-    { "parameters": { "operation": "verify" }, "id": "v1", "name": "Verify Clean", "type": "n8n-nodes-redactor.redactor", "typeVersion": 1, "position": [860, 300] },
-    { "parameters": { "operation": "restore" }, "id": "r2", "name": "Restore", "type": "n8n-nodes-redactor.redactor", "typeVersion": 1, "position": [1080, 300] }
+    {
+      "parameters": {},
+      "id": "t1",
+      "name": "Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "{\"message\": \"Dear Support, I am Mrs. Sarah Johnson (sarah@bigcorp.com). My IBAN is DE89370400440532013000.\"}"
+      },
+      "id": "s1",
+      "name": "Input Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        420,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "redact",
+        "redactionMode": "token",
+        "promptInjection": true,
+        "auditLog": true
+      },
+      "id": "r1",
+      "name": "Redact + Injection Check",
+      "type": "n8n-nodes-redactor.redactor",
+      "typeVersion": 1,
+      "position": [
+        640,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "verify"
+      },
+      "id": "v1",
+      "name": "Verify Clean",
+      "type": "n8n-nodes-redactor.redactor",
+      "typeVersion": 1,
+      "position": [
+        860,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "restore"
+      },
+      "id": "r2",
+      "name": "Restore",
+      "type": "n8n-nodes-redactor.redactor",
+      "typeVersion": 1,
+      "position": [
+        860,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Stop the run if Verify found PII that slipped through redaction.\nif ($json.status === 'FAIL') {\n  throw new Error(`PII leak: ${$json.leaksFound} value(s) still detectable after redaction`);\n}\nreturn $input.all();"
+      },
+      "id": "c1",
+      "name": "Stop on Leak",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        200
+      ]
+    }
   ],
   "connections": {
-    "Start": { "main": [[{ "node": "Input Data", "type": "main", "index": 0 }]] },
-    "Input Data": { "main": [[{ "node": "Redact + Injection Check", "type": "main", "index": 0 }]] },
-    "Redact + Injection Check": { "main": [[{ "node": "Verify Clean", "type": "main", "index": 0 }]] },
-    "Verify Clean": { "main": [[{ "node": "Restore", "type": "main", "index": 0 }]] }
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Input Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Input Data": {
+      "main": [
+        [
+          {
+            "node": "Redact + Injection Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redact + Injection Check": {
+      "main": [
+        [
+          {
+            "node": "Verify Clean",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Restore",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Clean": {
+      "main": [
+        [
+          {
+            "node": "Stop on Leak",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   }
 }

@@ -5,3 +5,4 @@ dist/
 *.log
 README.dev.md
 .fallow/
+.claude/
