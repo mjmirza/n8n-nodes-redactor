@@ -93,6 +93,8 @@ export class Redactor implements INodeType {
       // ═══════════════════════════════════════
       // OPERATION
       // ═══════════════════════════════════════
+      // Resources would change the saved parameter shape; they arrive with node v2 in 2.0.0.
+      // eslint-disable-next-line @n8n/community-nodes/resource-operation-pattern
       {
         displayName: 'Operation',
         name: 'operation',
