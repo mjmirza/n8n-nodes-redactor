@@ -1,7 +1,7 @@
 {
   "name": "n8n-nodes-redactor",
-  "version": "1.10.0",
-  "description": "Redact, remove, mask and anonymize sensitive data before LLMs. Detect PII, personal information, emails, phones, addresses, IBAN, credit cards, names, SSN, passport, tax ID. Reversible vault restore. GDPR HIPAA CCPA DACH EU compliant. 50+ patterns. 100% local. Built by next8n.",
+  "version": "1.11.0",
+  "description": "Redact, mask and anonymize PII before it reaches an LLM, then restore it. 216 patterns for emails, phones, addresses, IBAN, cards, names, SSN, passport and tax IDs. Reversible vault, GDPR Art.30 ROPA record, prompt-injection check. Runs locally. For n8n 2.x.",
   "keywords": [
     "n8n-community-node-package",
     "n8n",
@@ -45,9 +45,13 @@
     "workflow",
     "automation"
   ],
-  "author": "Mirza Iqbal / next8n (https://next8n.com)",
-  "license": "FUCL",
-  "homepage": "https://next8n.com",
+  "author": {
+    "name": "Mirza Iqbal",
+    "email": "support@next8n.com",
+    "url": "https://next8n.com"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/mjmirza/n8n-nodes-redactor#readme",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/mjmirza/n8n-nodes-redactor.git"
@@ -55,33 +59,48 @@
   "bugs": {
     "url": "https://github.com/mjmirza/n8n-nodes-redactor/issues"
   },
-  "main": "dist/nodes/PiiRedactor/PiiRedactor.node.js",
-  "types": "dist/nodes/PiiRedactor/PiiRedactor.node.d.ts",
   "scripts": {
-    "build": "tsc -p tsconfig.json && cp src/nodes/PiiRedactor/redact.png dist/nodes/PiiRedactor/redact.png",
-    "dev": "tsc -w -p tsconfig.json",
-    "test": "jest --no-cache",
-    "lint": "eslint src/ --ext .ts",
-    "prepublishOnly": "cp README.md README.dev.md && cp README.npm.md README.md && npm run build",
-    "postpublish": "mv README.dev.md README.md"
+    "build": "n8n-node build",
+    "build:watch": "tsc --watch",
+    "dev": "n8n-node dev",
+    "lint": "n8n-node lint",
+    "lint:fix": "n8n-node lint --fix",
+    "test": "jest",
+    "typecheck": "tsc --noEmit",
+    "hooks": "git config core.hooksPath .husky"
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.map",
+    "README.md",
+    "LICENSE"
   ],
   "n8n": {
     "n8nNodesApiVersion": 1,
+    "strict": false,
+    "credentials": [],
     "nodes": [
-      "dist/nodes/PiiRedactor/PiiRedactor.node.js"
+      "dist/nodes/Redactor/Redactor.node.js"
     ]
   },
   "devDependencies": {
+    "@n8n/node-cli": "^0.52.5",
     "@types/jest": "^30.0.0",
     "@types/node": "^20.0.0",
+    "eslint": "^9.32.0",
     "jest": "^29.7.0",
+    "prettier": "^3.6.2",
     "ts-jest": "^29.4.6",
     "typescript": "^5.4.0"
   },
   "peerDependencies": {
     "n8n-workflow": "*"
+  },
+  "engines": {
+    "node": ">=20.15"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }

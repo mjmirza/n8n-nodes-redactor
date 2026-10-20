@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Managed by agent-os. .claude/ guard + fallow dead-code gate (fail-open).
+STAGED_CLAUDE=$(git diff --cached --name-only | grep '\.claude/' || true)
+if [ -n "$STAGED_CLAUDE" ]; then
+  echo "BLOCKED: .claude/ files must never be committed"; echo "$STAGED_CLAUDE"; exit 1
+fi
+if [ -x node_modules/.bin/fallow ]; then FALLOW="node_modules/.bin/fallow";
+elif command -v fallow >/dev/null 2>&1; then FALLOW="fallow";
+else FALLOW="npx -y fallow@2.88.2"; fi
+UPSTREAM="$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
+if [ -n "$UPSTREAM" ]; then FB="$(git merge-base "$UPSTREAM" HEAD 2>/dev/null || echo "$UPSTREAM")";
+elif git rev-parse --verify -q main >/dev/null 2>&1; then FB="main"; else FB="HEAD"; fi
+$FALLOW audit --base "$FB" --gate new-only --quiet --gate-marker pre-commit
+FRC=$?
+if [ "$FRC" -eq 1 ]; then echo "[fallow] new dead code introduced. clean it, or: $FALLOW fix --dry-run"; exit 1;
+elif [ "$FRC" -ge 2 ]; then echo "[fallow] runner unavailable (rc=$FRC) - commit allowed"; fi

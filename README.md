@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://unpkg.com/n8n-nodes-redactor@1.0.2/dist/nodes/PiiRedactor/redact.png" alt="Redactor" width="80" />
+  <img src="https://raw.githubusercontent.com/mjmirza/n8n-nodes-redactor/master/.github/assets/logo.png" alt="Redactor" width="96" />
 </p>
 
 <h1 align="center">n8n-nodes-redactor</h1>
@@ -12,17 +12,17 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/n8n-nodes-redactor"><img src="https://img.shields.io/npm/v/n8n-nodes-redactor?style=for-the-badge&color=CB3837&label=npm" alt="npm version" /></a>
   <a href="https://www.npmjs.com/package/n8n-nodes-redactor"><img src="https://img.shields.io/npm/dt/n8n-nodes-redactor?style=for-the-badge&color=blue&label=downloads" alt="npm downloads" /></a>
-  <a href="#license"><img src="https://img.shields.io/badge/license-FUCL-orange?style=for-the-badge" alt="License" /></a>
-  <img src="https://img.shields.io/badge/PII_Types-216+-success?style=for-the-badge" alt="216+ PII Types" />
-  <img src="https://img.shields.io/badge/Tests-426_Passed-brightgreen?style=for-the-badge" alt="426 Tests Passed" />
-  <img src="https://img.shields.io/badge/Categories-12-success?style=for-the-badge" alt="12 Categories" />
-  <img src="https://img.shields.io/badge/Countries-35+-success?style=for-the-badge" alt="35+ Countries" />
-  <img src="https://img.shields.io/badge/Operations-8-success?style=for-the-badge" alt="8 Operations" />
+  <a href="#license"><img src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge" alt="MIT License" /></a>
+  <a href="https://docs.npmjs.com/generating-provenance-statements"><img src="https://img.shields.io/badge/npm-Provenance_Signed-2ea44f?style=for-the-badge" alt="npm provenance" /></a>
+  <img src="https://img.shields.io/badge/PII_Patterns-216-success?style=for-the-badge" alt="216 PII patterns" />
+  <img src="https://img.shields.io/badge/Tests-437_Passed-brightgreen?style=for-the-badge" alt="437 tests passed" />
+  <img src="https://img.shields.io/badge/Categories-11-success?style=for-the-badge" alt="11 categories" />
+  <img src="https://img.shields.io/badge/Operations-7-success?style=for-the-badge" alt="7 operations" />
+  <img src="https://img.shields.io/badge/n8n-2.x_Ready-FF6D5A?style=for-the-badge" alt="Tested on n8n 2.x" />
   <img src="https://img.shields.io/badge/Vault-AES--256--GCM_Encrypted-7B61FF?style=for-the-badge" alt="AES-256-GCM Vault" />
   <img src="https://img.shields.io/badge/Presidio-NLP_Optional-7B61FF?style=for-the-badge" alt="Presidio NLP" />
   <img src="https://img.shields.io/badge/Vault-Reversible-7B61FF?style=for-the-badge" alt="Reversible Vault" />
-  <img src="https://img.shields.io/badge/GDPR-Ready-00C4B4?style=for-the-badge" alt="GDPR Ready" />
-  <img src="https://img.shields.io/badge/HIPAA-Ready-00C4B4?style=for-the-badge" alt="HIPAA Ready" />
+  <img src="https://img.shields.io/badge/GDPR-Art.30_ROPA_Record-00C4B4?style=for-the-badge" alt="GDPR Art.30 ROPA record" />
   <img src="https://img.shields.io/badge/100%25-Local_Processing-10A37F?style=for-the-badge" alt="100% Local" />
   <img src="https://img.shields.io/badge/n8n-Community_Node-FF6D5A?style=for-the-badge" alt="n8n Community Node" />
   <img src="https://img.shields.io/badge/AI_Agent-Compatible-10A37F?style=for-the-badge" alt="AI Agent Compatible" />
@@ -40,7 +40,7 @@ You know this is a problem. Your clients know it too. But rebuilding every workf
 
 **This node fixes it in 2 minutes.**
 
-Drop it between your data source and your LLM node. It automatically detects and replaces 200+ types of sensitive data with safe tokens. The LLM processes the clean data. Then the node swaps the original values back in. Your customer data never leaves your server.
+Drop it between your data source and your LLM node. It automatically detects and replaces 216 kinds of sensitive data with safe tokens. The LLM processes the clean data. Then the node swaps the original values back in. Your customer data never leaves your server.
 
 No cloud service. No API keys. No third-party dependency. Everything runs locally on your machine.
 
@@ -81,7 +81,7 @@ The LLM never saw the real data. Your customer never knew the difference.
 
 ---
 
-## What it detects (125+ sensitive data types across 11 categories)
+## What it detects (216 patterns across 11 categories)
 
 ### Contact Information
 | Type | Examples |
@@ -202,7 +202,7 @@ Add your own patterns for anything specific to your business:
 
 ---
 
-## 8 Operations: When to use what
+## 7 Operations: When to use what
 
 | Operation | When to use it | What it does | Example workflow |
 |-----------|---------------|-------------|-----------------|
@@ -211,9 +211,10 @@ Add your own patterns for anything specific to your business:
 | **Detect** | Compliance audits, data assessment, before deciding to redact | Scans all data for sensitive information and returns a full report. Does NOT modify the data. Use this to understand what PII exists. | `[Data Source] > Detect > [If PII found] > Redact` |
 | **Verify** | After redaction, to confirm nothing leaked through | Re-scans redacted output to check if any PII slipped past. Returns PASS or FAIL with details of any leaks. Defense-in-depth. | `[Data Source] > Redact > [LLM] > Verify > [Alert if FAIL]` |
 | **Classify** | Data governance, sensitivity labeling, routing decisions | Assigns sensitivity labels (PUBLIC / INTERNAL / CONFIDENTIAL / RESTRICTED) based on what PII categories are found. Includes escalation rules. | `[Data Source] > Classify > [If RESTRICTED] > Block` |
-| **Purge** | GDPR right to erasure, cleanup, end of workflow | Deletes vault sessions from memory or disk. Ensures no PII mapping data remains after processing. Required for GDPR Article 17 compliance. | `[End of workflow] > Purge` |
+| **Purge** | GDPR right to erasure, cleanup, end of workflow | Deletes vault sessions from memory or disk, so no PII mapping is left behind. Supports GDPR Article 17 (right to erasure) requests. | `[End of workflow] > Purge` |
 | **Stats** | Debugging, monitoring, admin | Shows all active vault sessions with entry counts, creation times, TTL, and vault storage type. | Run manually to inspect vault state. |
-| **ROPA Report** | GDPR Article 30 compliance | Generates structured Records of Processing Activities covering all 8 fields required by GDPR Art.30(1). Auto-populated from redaction results. | After Redact, generate compliance documentation. |
+
+**ROPA record (a Redact option, not a separate operation):** turn on *Include Audit Report*, then *Include GDPR Art.30 ROPA Record*, and fill in the controller details. The report output then carries a Records of Processing Activities entry built from this run.
 
 **Recommended workflow for production:**
 ```
@@ -293,7 +294,7 @@ npm install n8n-nodes-redactor
 2. **Add "Redactor"** to your workflow, set operation to **Redact**
 3. **Connect it** before your OpenAI/Claude/Gemini node
 4. **Add another "Redactor"** after the LLM node, set operation to **Restore**
-5. Both nodes share the same Session ID (defaults to execution ID - works automatically)
+5. Both nodes share the same Session ID (defaults to the execution ID, so a full run works automatically). Testing one step at a time? Set the same fixed Session ID, for example `test-1`, on both nodes.
 6. **Run your workflow.** Customer data stays on your server.
 
 That's it. No configuration needed for the default case.
@@ -358,13 +359,13 @@ Assigns sensitivity labels (PUBLIC / INTERNAL / CONFIDENTIAL / RESTRICTED) based
 Encrypt vault files at rest with a passphrase. Each tenant uses a different passphrase for complete isolation. Even with filesystem access, encrypted files are unreadable without the key. scrypt key derivation resists brute-force attacks.
 
 ### Persistent Audit Log
-JSONL audit log of all redaction activity. Compatible with Splunk, ELK, Datadog. Daily rotation + 100MB size limit. Compliant with GDPR Art.30, HIPAA (6-year), SOX (7-year), PCI DSS (1-year) retention requirements.
+JSONL audit log of all redaction activity. Compatible with Splunk, ELK, Datadog. Daily rotation + 100MB size limit. Self-hosted n8n only. Helps you meet GDPR Art.30, HIPAA, SOX and PCI DSS record-keeping, which still depends on how you store and retain the files.
 
 ### GDPR Art.30 ROPA Report
-Generates structured compliance reports covering all 8 fields required by GDPR Article 30(1): controller, purposes, data subjects, personal data categories, recipients, third-country transfers, retention, and security measures. Auto-populated from redaction results.
+Adds a structured Records of Processing Activities entry to the Redact report output, covering the fields in GDPR Article 30(1): controller, purposes, legal basis, data subjects, personal data categories, recipients, retention, and security measures. Detection results fill it in, you supply the controller details in the node.
 
 ### Per-Tenant Profiles
-Save and load redaction configurations per client/tenant. Each profile defines: enabled patterns, allow/deny lists, confidence threshold, redaction mode, and compliance settings. Agencies managing multiple clients can switch profiles per workflow.
+Coming in 2.0.0. Per-client redaction settings (patterns, allow and deny lists, threshold, mode) supplied as JSON in the node, so they work on n8n Cloud too. Earlier docs listed this as available; it was not reachable from the node and is being rebuilt.
 
 ---
 
@@ -389,7 +390,7 @@ For docker-compose setup and language configuration, see [docs/PRESIDIO_SETUP.md
 
 ## Missing a use case? We'll build it for you.
 
-This node covers 210+ data types across 22 privacy regulations. But every business has unique data: internal codes, proprietary identifiers, industry-specific formats.
+This node ships 216 built-in patterns. But every business has unique data: internal codes, proprietary identifiers, industry-specific formats.
 
 **You can add your own patterns directly in the node UI** using the Custom Patterns section. Define any regex, give it a label, and the engine will detect and redact it alongside the built-in patterns.
 
@@ -413,31 +414,8 @@ If there is a specific use case that is not covered here and you want us to cove
 
 ## License
 
-**Fair Use Code License (FUCL)**
+MIT. See [LICENSE](LICENSE). Copyright (c) 2026 Mirza Iqbal / [next8n](https://next8n.com).
 
-Copyright (c) 2026 Mirza Iqbal / [next8n](https://next8n.com). All rights reserved.
+Free to use, modify and redistribute, including commercially, as long as the copyright notice stays in place. Provided "as is", without warranty. This node helps you reduce what reaches an LLM; it is not legal advice and does not by itself make a workflow GDPR or HIPAA compliant.
 
-This node is published as an n8n community node for the benefit of the n8n ecosystem and the teams building AI workflows that need to handle customer data responsibly. However, the intellectual property, source code, and all associated rights are owned exclusively by the copyright holder.
-
-**Permitted:**
-- Install and use this node for your own internal workflows and business automation
-
-**Prohibited without explicit written consent:**
-- Copying, forking, or reproducing the source code in any form
-- Commercial redistribution, resale, sublicensing, or white-labeling
-- Creating derivative works or competing products based on this code
-- Public redistribution of modified or unmodified versions
-- Using the Software as part of a commercial service offering
-- Removing or altering copyright notices or attribution
-
-**Attribution:** This node was developed and is actively maintained by [next8n](https://next8n.com). Attribution must be preserved in all copies.
-
-This software is provided "as is", without warranty of any kind, express or implied.
-
-**We built it. We maintain it. We own the rights to the code.**
-
-**Legal notice:** This is an original, independently authored work. The entire source code is the intellectual property of the copyright holder. No third-party proprietary code is included. All PII detection runs locally using pattern matching and validation algorithms authored by next8n.
-
-Interested in collaborating or contributing? We're open to partnerships. Let's talk.
-
-For commercial licensing, partnership, or custom development: [services.next8n.com](https://services.next8n.com)
+For partnership or custom development: [services.next8n.com](https://services.next8n.com)
