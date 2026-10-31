@@ -1,8 +1,6 @@
 # Publishes to npm when a version tag (v1.2.3) is pushed.
-# Uses npm trusted publishing (OIDC), so there is no NPM_TOKEN secret, and npm
-# attaches a provenance statement that links the package to this exact commit.
-# One-time setup on npmjs.com: package Settings > Trusted Publisher > GitHub Actions,
-# owner mjmirza, repository n8n-nodes-redactor, workflow publish.yml.
+# Publishes as npm user nex8n via the NPM_TOKEN secret. --provenance attaches a
+# signed statement linking the package to this exact commit (needs id-token: write).
 name: Publish
 
 on:
@@ -32,3 +30,5 @@ jobs:
       - run: npm run build
       - run: tools/check-tarball.sh
       - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
