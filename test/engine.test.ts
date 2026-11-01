@@ -573,7 +573,7 @@ describe('Audit report', () => {
 
     const report = buildReport('test-session', hits);
 
-    expect(report.sessionId).toBe('test-session');
+    expect(report.sessionId).toBe('session:0d31e96c871cabe126f756205bd1981d8963264437be7127d7ed57e91fdaf8b9');
     expect(report.totalHits).toBe(4);
     expect(report.hitsByCategory.contact).toBe(3);
     expect(report.hitsByCategory.identity).toBe(1);

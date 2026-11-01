@@ -9,7 +9,7 @@ import { MemoryVault } from '../nodes/Redactor/vault';
 import { redactValue } from '../nodes/Redactor/engine';
 import type { RedactionContext } from '../nodes/Redactor/types';
 
-import { run, persist } from './harness';
+import { run, persist, cpuNow } from './harness';
 
 const EMAIL_RE = String.raw`\w+@\w+[.]\w+`;
 
@@ -122,9 +122,9 @@ describe('re-review 42-6: sequential overlapping repetition is refused', () => {
       enabledPatterns: [], customPatterns: [{ label: 'w', regex: EMAIL_RE }], mode: 'token', dedup: true,
       fieldRules: [], fieldMode: 'all', skipSemantic: true,
     };
-    const started = Date.now();
+    const started = cpuNow();
     const out = redactValue({ note: 'a'.repeat(19_000) + '? mail bob@example.com' }, ctx, vault, 'cap', [], 0);
-    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(cpuNow() - started).toBeLessThan(10_000);
     expect(JSON.stringify(out)).not.toContain('bob@example.com');
   });
 });

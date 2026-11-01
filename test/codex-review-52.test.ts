@@ -8,7 +8,7 @@ import { parseTenantProfile } from '../nodes/Redactor/profiles';
 import { resetCircuitBreaker } from '../nodes/Redactor/presidio';
 import type { RedactionContext, RedactionHit } from '../nodes/Redactor/types';
 
-import { run, persist, fast, engineSetup } from './harness';
+import { run, persist, fast, engineSetup, cpuNow } from './harness';
 
 const setup = engineSetup;
 
@@ -102,9 +102,9 @@ describe('re-review 52-10, 13, 14: linear time', () => {
 
   it('maps 8,000 distinct emails quickly', async () => {
     const note = Array.from({ length: 8000 }, (_, i) => `user${i}@example.com`).join(';');
-    const started = Date.now();
+    const started = cpuNow();
     await run({ operation: 'redact', sessionId: 'many' }, [{ note }]);
-    expect(Date.now() - started).toBeLessThan(4000);
+    expect(cpuNow() - started).toBeLessThan(4000);
   });
 
   it('redacts 16,000 distinct names quickly', () => {

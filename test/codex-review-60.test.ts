@@ -7,7 +7,7 @@ import { scanForInjection } from '../nodes/Redactor/injection';
 import { resetCircuitBreaker } from '../nodes/Redactor/presidio';
 import type { RedactionContext } from '../nodes/Redactor/types';
 
-import { run, persist, expectRegexRefused, engineSetup as setup, fast } from './harness';
+import { run, persist, expectRegexRefused, engineSetup as setup, fast, cpuNow } from './harness';
 
 type Entity = { entity_type: string; start: number; end: number; score: number };
 
@@ -54,9 +54,9 @@ describe('re-review 60-2: built-in patterns scan in linear time', () => {
 describe('re-review 60-3: memory vault misses are indexed', () => {
   it('maps 16,000 distinct emails quickly', async () => {
     const note = Array.from({ length: 16000 }, (_, i) => `user${i}@example.com`).join(';');
-    const started = Date.now();
+    const started = cpuNow();
     await run({ operation: 'redact', sessionId: 'many', vaultStorage: 'memory' }, [{ note }]);
-    expect(Date.now() - started).toBeLessThan(4000);
+    expect(cpuNow() - started).toBeLessThan(4000);
   });
 });
 
@@ -153,9 +153,9 @@ describe('re-review 60-17 and 18: linear overlap handling', () => {
   it('applies 40,000 disjoint Presidio spans quickly', async () => {
     const n = 40_000;
     const spans = (t: string) => (t.length > 100 ? Array.from({ length: n }, (_, i) => ({ entity_type: 'PERSON', start: 15 * i, end: 15 * i + 14, score: 0.99 })) : []);
-    const started = Date.now();
+    const started = cpuNow();
     const { out } = await withPresidio({ note: 'Xochitl Quispe;'.repeat(n) }, { mode: 'redact' }, spans);
-    expect(Date.now() - started).toBeLessThan(3000);
+    expect(cpuNow() - started).toBeLessThan(3000);
     expect(out.note).toBe('[REDACTED];'.repeat(n));
   });
 });

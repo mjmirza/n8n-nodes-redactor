@@ -79,7 +79,8 @@ describe('Presidio Client (mocked n8n transport)', () => {
   });
 
   test('accepts a string body', async () => {
-    const result = await analyzeWithPresidio('http://p', 'x y', 'en', 0.4, 1000, async () => ({ statusCode: 200, body: JSON.stringify([entity]) }));
+    // The text is long enough for the entity's span, so this checks string-body parsing, not offset validation.
+    const result = await analyzeWithPresidio('http://p', 'John Smith', 'en', 0.4, 1000, async () => ({ statusCode: 200, body: JSON.stringify([entity]) }));
     expect(result).toEqual([entity]);
   });
 

@@ -380,15 +380,46 @@ function scanInternalHosts(text: string): Span[] {
   );
 }
 
-/** JSON Web Tokens: a header starting eyJ, then two dot-separated parts. */
+/** A JWT header or claims segment must decode to a JSON object, including legal leading whitespace. */
+function jwtObject(segment: string): Record<string, unknown> | null {
+  try {
+    const value: unknown = JSON.parse(Buffer.from(segment, 'base64url').toString('utf8'));
+    return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+interface JwtSegment {
+  start: number;
+  end: number;
+  object?: Record<string, unknown> | null;
+}
+
+/** Decodes a segment once, and only when it sits in a dot chain long enough to be a token. */
+function segmentObject(text: string, seg: JwtSegment): Record<string, unknown> | null {
+  if (seg.object === undefined) seg.object = jwtObject(text.slice(seg.start, seg.end));
+  return seg.object;
+}
+
+/** Dot-joined Base64URL runs of three or more parts, where a header with alg is followed by a JSON object. */
 function scanJwts(text: string): Span[] {
-  return scanBackLabels(
-    text,
-    /\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+/g,
-    /[A-Za-z0-9_-]/,
-    (t, at) => t.startsWith('eyJ', at) && wordStart(t, at),
-    3,
-  );
+  const spans: Span[] = [];
+  const segments = /[A-Za-z0-9_-]+/g;
+  const chain: JwtSegment[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = segments.exec(text)) !== null) {
+    const previous = chain[chain.length - 1];
+    if (previous && (m.index !== previous.end + 1 || text[previous.end] !== '.')) chain.length = 0;
+    chain.push({ start: m.index, end: segments.lastIndex });
+    if (chain.length < 3) continue;
+    const header = segmentObject(text, chain[0]);
+    if (typeof header?.alg === 'string' && segmentObject(text, chain[1])) {
+      spans.push({ start: chain[0].start, end: segments.lastIndex });
+      chain.length = 0;
+    } else chain.shift();
+  }
+  return spans;
 }
 
 const LDAP_ATTRS = ['CN', 'OU', 'DC', 'ST', 'O', 'C', 'L'];
@@ -449,6 +480,33 @@ function scanLdapDns(text: string): Span[] {
 
 const isLineBreak = (ch: string | undefined): boolean => ch === '\n' || ch === '\r';
 
+/** Quoted values honour doubled enclosing quotes; unquoted quotes are ordinary value characters. */
+function connValueEnd(text: string, from: number, limit: number): number {
+  let at = from;
+  while (at < limit && /\s/.test(text[at])) at++;
+  if (text[at] === '"' || text[at] === "'") at = quotedValueEnd(text, at, limit);
+  while (at < limit && text[at] !== ';') at++;
+  return at;
+}
+
+/** The index after the closing quote of the value opened at at, reading a doubled quote as a literal one. */
+function quotedValueEnd(text: string, at: number, limit: number): number {
+  const quote = text[at++];
+  while (at < limit) {
+    if (text[at++] !== quote) continue;
+    if (text[at] !== quote) return at;
+    at++;
+  }
+  return at;
+}
+
+/** Find a segment delimiter without interpreting semicolons inside a quoted value as separators. */
+function connSegmentEnd(text: string, from: number, limit: number): number {
+  let at = from;
+  while (at < limit && text[at] !== '=' && text[at] !== ';') at++;
+  return text[at] === '=' ? connValueEnd(text, at + 1, limit) : at;
+}
+
 /** The line around at, read once: its end and its last password segment. */
 function connLine(text: string, at: number): { end: number; password: { semi: number; end: number } | null; semi: number } {
   let lineStart = at;
@@ -461,8 +519,8 @@ function connLine(text: string, at: number): { end: number; password: { semi: nu
 /** The first ; at or after from on the line, or -1. Searched once and reused, so starts before it never rescan. */
 function nextSemi(text: string, line: { end: number; semi: number }, from: number): number {
   if (line.semi !== -1 && line.semi < from) {
-    line.semi = text.indexOf(';', from);
-    if (line.semi > line.end) line.semi = -1;
+    line.semi = connValueEnd(text, from, line.end);
+    if (line.semi === line.end) line.semi = -1;
   }
   return line.semi;
 }
@@ -472,8 +530,7 @@ function lastPasswordSegment(text: string, lineStart: number, lineEnd: number): 
   let found: { semi: number; end: number } | null = null;
   let segStart = lineStart;
   while (segStart <= lineEnd) {
-    let segEnd = text.indexOf(';', segStart);
-    if (segEnd < 0 || segEnd > lineEnd) segEnd = lineEnd;
+    const segEnd = connSegmentEnd(text, segStart, lineEnd);
     const segment = text.slice(segStart, segEnd);
     let key = -1;
     for (const k of segment.matchAll(/(?:Password|Pwd)=/gi)) {

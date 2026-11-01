@@ -8,6 +8,11 @@ import * as crypto from 'crypto';
 import { RedactionHit, RedactionMode } from './types';
 import { ClassificationLabel } from './classification';
 
+/** A value-free reference shared by reports and audit records for the same session. */
+export function sessionReference(sessionId: string): string {
+  return `session:${crypto.createHash('sha256').update('redactor-session:').update(sessionId).digest('hex')}`;
+}
+
 /**
  * Counts hits by a field. Counting in a Map and building own properties keeps labels such as constructor or
  * __proto__ as ordinary counters.
@@ -95,6 +100,6 @@ export function buildAuditEntry(
     patternsUsed,
     presidioEnabled,
     ...(presidioUnscannedTexts > 0 ? { presidioUnscannedTexts } : {}),
-    sessionId,
+    sessionId: sessionId === undefined ? undefined : sessionReference(sessionId),
   };
 }

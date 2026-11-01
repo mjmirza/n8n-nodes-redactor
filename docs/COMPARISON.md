@@ -76,11 +76,11 @@ The answer with most tools is either "no" or "it's complicated." With Redactor, 
 | HIPAA ready | **Yes** | No | No | Yes | No | Partial | Yes | Yes | Yes |
 | CCPA/CPRA | **Yes** | No | No | Unknown | No | Yes | Yes | Yes | Yes |
 | PCI-DSS | **Yes (Luhn validated)** | Partial | Presidio | Unknown | No | Partial | Yes | Yes | Partial |
-| SOX audit retention | **Yes (7-year JSONL logs)** | No | No | No | No | No | Yes | Unknown | Partial |
+| SOX audit retention | **External storage required** | No | No | No | No | No | Yes | Unknown | Partial |
 | GDPR Art.9 special categories | **Yes (race, religion, political, health, sexual orientation)** | No | No | Unknown | No | Partial | Yes | Yes | Partial |
 | GDPR Art.17 right to erasure | **Yes (Purge operation)** | No | No | No | No | No | Yes | Unknown | Partial |
 | GDPR Art.30 ROPA | **Yes (auto-generated reports)** | No | No | No | No | No | No | No | No |
-| Persistent audit log | **Yes (JSONL, daily rotation)** | No | No | No | No | No | Yes | Yes | Yes |
+| Persistent audit log | **Report output, external storage required** | No | No | No | No | No | Yes | Yes | Yes |
 | Data classification labels | **Yes (4 levels with escalation)** | No | No | No | No | No | Yes | No | Yes |
 | | | | | | | | | | |
 | **ENTERPRISE** | | | | | | | | | |
@@ -179,14 +179,16 @@ Detects person names in free text without NLP models. Covers US, UK, Germany, Fr
 | GDPR Art.30 Records of processing | ROPA documentation | **Yes (auto-generated)** | No | No | No |
 | GDPR Art.33 Breach notification | 72-hour reporting | **Audit log provides evidence** | No | No | Yes |
 | HIPAA Safe Harbor | 18 PHI identifiers | **All 18 covered** | 4 covered | Partial | Yes |
-| HIPAA Audit Trail | 6-year retention | **Yes (JSONL logs)** | No | No | Yes |
+| HIPAA Audit Trail | 6-year retention | **External storage required** | No | No | Yes |
 | PCI-DSS | Cardholder data | **Yes (Luhn, expiry, CVV)** | CC only | Partial | Yes |
-| SOX | 7-year audit retention | **Yes (configurable)** | No | No | Yes |
+| SOX | 7-year audit retention | **External storage required** | No | No | Yes |
 | CCPA/CPRA | Consumer data rights | **Yes** | No | No | Yes |
 
 ---
 
 ## Why Consultants Choose Redactor
+
+In version 7, Audit Log emits an audit record on the Report output. The node does not write persistent JSONL logs, rotate files or enforce a retention period. Connect Report to a database, file node or SIEM to retain these records. Your downstream storage controls retention, including any six-year or seven-year policy. Enabling Audit Log alone does not retain an audit trail.
 
 ### The Problem
 Your client asks: "We want to use AI for customer support, but GDPR says we can't send customer data to OpenAI."

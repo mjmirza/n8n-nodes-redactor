@@ -5,6 +5,20 @@ import { INJECTION_DESCRIPTIONS, PromptInjectionResult } from './injection';
 
 const VAULT_CREDENTIAL = 'redactorVaultApi';
 
+/** Direct settings get the same fail-closed pattern selection as tenant profiles. */
+export function selectedPatterns(fns: IExecuteFunctions, known: string[], recommended: string[]): string[] {
+  const scope = runSetting(fns, 'detectionScope', 'recommended');
+  if (scope === 'all') return known;
+  if (scope === 'recommended') return recommended;
+  if (scope !== 'select') throw new NodeOperationError(fns.getNode(), 'Detection Scope must be recommended, all or select');
+  const names = runSetting(fns, 'piiTypes');
+  const allowed = new Set(known);
+  if (!Array.isArray(names) || names.some((name) => typeof name !== 'string' || !allowed.has(name))) {
+    throw new NodeOperationError(fns.getNode(), 'PII Types must be an array of known pattern names');
+  }
+  return names;
+}
+
 /** Whether a saved parameter value holds an n8n expression anywhere inside it. */
 function hasExpression(value: unknown): boolean {
   if (typeof value === 'string') return value.startsWith('=');
@@ -116,9 +130,9 @@ export function assertUserRegexes(
     if (problem) refuse(`Custom pattern "${cp.label}"`, problem);
   }
   for (const list of lists) {
-    for (const entry of list.entries) {
+    for (const [index, entry] of list.entries.entries()) {
       const problem = entry.type === 'regex' ? checkRegex(entry.value) : null;
-      if (problem) refuse(`${list.name} entry "${entry.value}"`, problem);
+      if (problem) refuse(`${list.name} entry ${index + 1}`, problem);
     }
   }
 }

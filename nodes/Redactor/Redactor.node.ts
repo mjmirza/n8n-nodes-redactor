@@ -30,7 +30,7 @@ import { buildAuditEntry } from './audit';
 import { markUnscanned, presidioUnscanned, PresidioRequester } from './presidio';
 import { MODES, parseTenantProfile } from './profiles';
 import { generateRopaRecord } from './ropa';
-import { assertUserRegexes, resolvePassphrase, runSetting, sanitizeInjection, workflowNamespace } from './runtime';
+import { assertUserRegexes, resolvePassphrase, runSetting, sanitizeInjection, selectedPatterns, workflowNamespace } from './runtime';
 
 /**
  * Curated high-precision pattern set. These patterns have low false-positive
@@ -1194,15 +1194,7 @@ export class Redactor implements INodeType {
           description: `Use one of: ${MODES.join(', ')}.`,
         });
       }
-      const detectionScope = runSetting(this, 'detectionScope', 'recommended') as string;
-      let enabledPatterns: string[];
-      if (detectionScope === 'all') {
-        enabledPatterns = getPatternOptions().map((p) => p.value);
-      } else if (detectionScope === 'recommended') {
-        enabledPatterns = RECOMMENDED_PATTERNS;
-      } else {
-        enabledPatterns = runSetting(this, 'piiTypes') as string[];
-      }
+      let enabledPatterns = selectedPatterns(this, getPatternOptions().map((p) => p.value), RECOMMENDED_PATTERNS);
       let dedup = runSetting(this, 'dedup', true) as boolean;
       let fieldMode = runSetting(this, 'fieldMode', 'all') as 'all' | 'allowlist' | 'denylist';
       let sessionTtl = runSetting(this, 'sessionTtl', 60) as number;
@@ -1245,6 +1237,9 @@ export class Redactor implements INodeType {
         presidioUrl = runSetting(this, 'presidioUrl', 'http://localhost:5002') as string;
         presidioLanguage = runSetting(this, 'presidioLanguage', 'en') as string;
         presidioOnFailure = runSetting(this, 'presidioOnFailure', 'stop') as string;
+        if (presidioOnFailure !== 'stop' && presidioOnFailure !== 'continue') {
+          throw new NodeOperationError(this.getNode(), 'If Presidio Fails must be stop or continue');
+        }
         if (!/^https?:[/][/][^/\s]/i.test(String(presidioUrl).trim())) {
           throw new NodeOperationError(this.getNode(), 'Presidio URL must be an http or https address', {
             description: 'Set Presidio URL, for example http://localhost:5002, or turn off Enhanced NLP Detection.',
@@ -1414,7 +1409,7 @@ export class Redactor implements INodeType {
 
       // A session whose TTL ran out during the run lost the new mappings, so its tokens could never be restored.
       if (!vault.getSession(sessionId)) {
-        throw new NodeOperationError(this.getNode(), `Session "${sessionId}" expired during the run`, {
+        throw new NodeOperationError(this.getNode(), 'Session expired during the run', {
           description: 'Its TTL ran out before Redact finished, so nothing was output. Run again, or raise Session TTL.',
         });
       }
@@ -1480,7 +1475,7 @@ export class Redactor implements INodeType {
       if (!session) {
         throw new NodeOperationError(
           this.getNode(),
-          `No vault found for session "${sessionId}" that this passphrase can open. Ensure a Redact node ran first with the same Session ID, vault storage type and passphrase.`,
+          'No vault found for this session that this passphrase can open. Ensure a Redact node ran first with the same Session ID, vault storage type and passphrase.',
           {
             description:
               'Testing step by step? Each "Execute step" gets a new execution ID, and n8n saves workflow storage only after production runs of an active workflow. Run the whole workflow, or set the same fixed Session ID (for example "test-1") on both nodes. Restore only works in the workflow that ran Redact.',

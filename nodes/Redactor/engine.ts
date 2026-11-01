@@ -22,7 +22,7 @@ import {
 } from './context';
 import { detectNamesInText, NAME_CONTEXT_WORDS } from './names';
 import { generatePseudonym } from './pseudonymize';
-import { countHits } from './audit';
+import { countHits, sessionReference } from './audit';
 import {
   analyzeWithPresidio,
   getRedactorLabel,
@@ -393,6 +393,9 @@ function typedTable(entries: Record<string, VaultEntry>): Map<string, string> {
 
 /** An existing mapping of the original with the same numeric or boolean type as the context. */
 function findTyped(vault: IVault, sessionId: string, original: string, ctx: RedactionContext): VaultEntry | undefined {
+  // The vault's own index answers most lookups; the typed table covers an original stored under another type.
+  const direct = vault.findByOriginal(sessionId, original);
+  if (direct && reusable(direct, original, ctx)) return direct;
   const entries = vault.getSession(sessionId)?.entries;
   if (!entries) return undefined;
   const token = typedTable(entries).get(typedKey(original, ctx.numeric, ctx.boolean));
@@ -1375,8 +1378,8 @@ const DENY_DECISION: Decision = {
 };
 
 function denyListStage(pass: TextPass): void {
-  for (const entry of pass.ctx.denyList ?? []) {
-    if (entry.type === 'regex') assertUserRegexInput(pass.source, `Deny list regex "${entry.value}"`);
+  for (const [index, entry] of (pass.ctx.denyList ?? []).entries()) {
+    if (entry.type === 'regex') assertUserRegexInput(pass.source, `Deny list entry ${index + 1} regex`);
     try {
       const re = denyListRegex(entry);
       if (re) replaceFree(pass, re, () => DENY_DECISION, entry.type === 'regex');
@@ -1649,11 +1652,26 @@ export function ensureRestorable(
   const session = vault.getSession(sessionId);
   if (!session || ctx.mode !== 'pseudonymize') return outputs;
   const restore = makeRestorer(session.entries);
+  // Repair tokens must not spell token-shaped text already in any output. Collected once, only when a repair is needed.
+  let reserved = false;
   const check = (input: string, output: string): string => {
-    if (input === output) return output;
-    return restoreString(output, restore, session.entries) === input ? output : wholeToken(input, vault, sessionId, ctx);
+    if (restoreString(output, restore, session.entries) === input) return output;
+    if (!reserved) {
+      ctx.reservedTokens = collectTokenLike(outputs, ctx.reservedTokens);
+      reserved = true;
+    }
+    return wholeToken(input, vault, sessionId, ctx);
   };
-  return outputs.map((out, i) => restorablePair(inputs[i], out, check, ctx, '', '', new HitFixer(hits, i)));
+  const fixed = outputs.map((out, i) => restorablePair(inputs[i], out, check, ctx, '', '', new HitFixer(hits, i)));
+  // Without a repair every string and key already restored exactly, so the whole-output check runs only after one.
+  if (!reserved) return fixed;
+  const finalRestore = makeRestorer(session.entries);
+  fixed.forEach((out, i) => {
+    if (JSON.stringify(restoreWith(out, finalRestore, session.entries)) !== JSON.stringify(inputs[i])) {
+      throw new Error('Pseudonym repair could not preserve restoration, so nothing was output.');
+    }
+  });
+  return fixed;
 }
 
 /**
@@ -2000,7 +2018,7 @@ export function buildReport(sessionId: string, hits: RedactionHit[]): RedactionR
   const hitsByPattern = countHits(hits, 'patternLabel');
 
   return {
-    sessionId,
+    sessionId: sessionReference(sessionId),
     timestamp: new Date().toISOString(),
     totalHits: hits.length,
     hitsByCategory,

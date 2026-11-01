@@ -118,6 +118,17 @@ Every version:
 
 7.0 is a major release because saved workflows of every node version can produce different output. Nothing needs to be reconfigured, but check downstream steps that read redacted values.
 
+- Pseudonym repair reserves token-shaped text from every generated output before allocating repair tokens and checks restoration against the final vault, including after workflow storage is reloaded.
+- Connection-string detection consumes quoted values with embedded semicolons and doubled enclosing quotes, so no password suffix survives Redact or passes Verify.
+- JWT detection scans Base64URL segments and validates decoded JSON objects instead of requiring fixed prefixes, so legal whitespace before claims is covered by Redact and Verify.
+- Presidio responses with negative, empty, reversed or out-of-range spans count as scan failures. Bounds use the submitted text's code-point length. The default stops output, and explicit continuation reports unscanned texts and PARTIAL audit status.
+- Direct PII Types selections must be arrays of known pattern names, and unknown Detection Scope values stop the run instead of silently disabling detection.
+- If Presidio Fails accepts only stop or continue. Invalid expression results stop the run before scanning.
+- Allow list and deny list regex errors identify the list and its one-based row index without exposing entry contents, including input-length failures.
+- Audit records and full redaction reports use a deterministic opaque session reference instead of the raw Session ID. Session errors omit the identifier, including missing, expired and unreadable sessions.
+- The comparison guide describes audit records on Report and explains that downstream storage controls persistence, rotation and retention. Audit Log alone retains no audit trail.
+- CI now runs on pushes to every branch, as well as pull requests, while keeping GitHub Actions pinned by SHA.
+
 - More text is redacted: five-word names, decomposed accents, names with particles such as `van` or `de`, labelled names with apostrophes, hyphens or inner capitals, a valid card after a stray digit, Unicode email local parts, IBANs grouped with nonbreaking spaces, IPv6 after a colon label, the address `::`, full `AB` blood types, connection-string passwords of any length on one line, and LDAP DNs of any length. A connection-string password and an LDAP value now end at a line break.
 - An element of an array is judged with the keys next to the array, so `id: ["ACME-SECRET-ID"]` beside a name is redacted like `id: "ACME-SECRET-ID"`.
 - A boolean under a sensitive key, such as `disability: true`, is replaced with a token and counted in Classify and ROPA. Restore returns the boolean.

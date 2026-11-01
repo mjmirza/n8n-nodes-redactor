@@ -287,7 +287,7 @@ describe('Audit Log', () => {
     expect(entry.totalHits).toBe(2);
     expect(entry.hitsByCategory).toEqual({ contact: 2 });
     expect(entry.hitsByPattern).toEqual({ EMAIL: 2 });
-    expect(entry.sessionId).toBe('test-session');
+    expect(entry.sessionId).toBe('session:0d31e96c871cabe126f756205bd1981d8963264437be7127d7ed57e91fdaf8b9');
   });
 
   test('audit entry has all required fields', () => {

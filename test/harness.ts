@@ -81,11 +81,20 @@ export function engineSetup(overrides: Partial<RedactionContext>): { vault: Memo
   return { vault, ctx, hits: [] };
 }
 
-/** Runs fn and fails when it takes ms or longer. */
+/**
+ * Milliseconds of CPU time this test process has used. Speed limits measure this rather than wall time, so other
+ * work on a loaded machine cannot make a linear-time check fail.
+ */
+export function cpuNow(): number {
+  const usage = process.cpuUsage();
+  return (usage.user + usage.system) / 1000;
+}
+
+/** Runs fn and fails when it takes ms or more of CPU time. */
 export function fast(fn: () => void, ms: number): void {
-  const started = Date.now();
+  const started = cpuNow();
   fn();
-  expect(Date.now() - started).toBeLessThan(ms);
+  expect(cpuNow() - started).toBeLessThan(ms);
 }
 
 /** Redacts one note with default settings and returns the redacted text. */

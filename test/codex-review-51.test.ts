@@ -6,7 +6,7 @@ import { MemoryVault } from '../nodes/Redactor/vault';
 import { redactValue } from '../nodes/Redactor/engine';
 import type { RedactionContext, RedactionHit } from '../nodes/Redactor/types';
 
-import { expectRegexRefused, run, persist } from './harness';
+import { expectRegexRefused, run, persist, cpuNow } from './harness';
 
 function redactWith(input: unknown, overrides: Partial<RedactionContext>): IDataObject {
   const vault = new MemoryVault();
@@ -57,9 +57,9 @@ describe('re-review 51-5: input equal to an earlier token round trips', () => {
 
 describe('re-review 51-6: matching stays linear in the number of matches', () => {
   it('redacts 64,000 emails quickly', () => {
-    const started = Date.now();
+    const started = cpuNow();
     const out = redactWith({ note: 'alice@example.com;'.repeat(64000) }, { enabledPatterns: ['email'], mode: 'redact' });
-    expect(Date.now() - started).toBeLessThan(2500);
+    expect(cpuNow() - started).toBeLessThan(2500);
     expect(out.note).toBe('[REDACTED];'.repeat(64000));
   });
 });

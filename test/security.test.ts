@@ -1,6 +1,7 @@
 import { MemoryVault } from '../nodes/Redactor/vault';
 import { redactValue, restoreValue, buildReport } from '../nodes/Redactor/engine';
 import { RedactionContext, RedactionHit } from '../nodes/Redactor/types';
+import { cpuNow } from './harness';
 
 function createContext(overrides: Partial<RedactionContext> = {}): RedactionContext {
   return {
@@ -63,7 +64,7 @@ describe('ReDoS prevention', () => {
     vault.getOrCreateSession('redos-3', 0);
     const hits: RedactionHit[] = [];
     const adversarial = 'Server=x;' + 'a'.repeat(10000);
-    const start = Date.now();
+    const start = cpuNow();
     redactValue(
       { text: adversarial },
       createContext({ enabledPatterns: ['connStringKV'] }),
@@ -72,7 +73,7 @@ describe('ReDoS prevention', () => {
       hits,
       0,
     );
-    const elapsed = Date.now() - start;
+    const elapsed = cpuNow() - start;
     // Should complete in under 5 seconds, not hang
     expect(elapsed).toBeLessThan(5000);
   });
@@ -152,13 +153,13 @@ describe('Restore safety', () => {
       createdAt: new Date().toISOString(),
     });
 
-    const start = Date.now();
+    const start = cpuNow();
     const result = restoreValue(
       { text: 'Message: [EMAIL_0]' },
       vault,
       'loop-1',
     ) as any;
-    const elapsed = Date.now() - start;
+    const elapsed = cpuNow() - start;
 
     // Must complete quickly (no infinite loop)
     expect(elapsed).toBeLessThan(1000);

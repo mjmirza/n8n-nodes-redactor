@@ -9,7 +9,7 @@ import { generatePseudonym } from '../nodes/Redactor/pseudonymize';
 import { parseTenantProfile } from '../nodes/Redactor/profiles';
 import type { RedactionContext } from '../nodes/Redactor/types';
 
-import { run, persist, engineSetup, fast } from './harness';
+import { run, persist, engineSetup, fast, cpuNow } from './harness';
 
 /** Memory sessions are shared by name, so each case starts from an empty session. */
 function setup(overrides: Partial<RedactionContext>): ReturnType<typeof engineSetup> {
@@ -22,9 +22,9 @@ type Entity = { entity_type: string; start: number; end: number; score: number }
 
 function roundTrip(input: IDataObject, overrides: Partial<RedactionContext>): { out: IDataObject; back: unknown; ms: number } {
   const { vault, ctx, hits } = setup(overrides);
-  const started = Date.now();
+  const started = cpuNow();
   const out = redactValue(input, ctx, vault, 's', hits, 0) as IDataObject;
-  const ms = Date.now() - started;
+  const ms = cpuNow() - started;
   return { out, back: restoreValue(out, vault, 's'), ms };
 }
 
@@ -38,9 +38,9 @@ async function withPresidio(input: IDataObject, overrides: Partial<RedactionCont
     ...overrides,
   });
   const first = redactValue(input, ctx, vault, 's', hits, 0) as Record<string, unknown>;
-  const started = Date.now();
+  const started = cpuNow();
   const out = (await enhanceWithPresidio(first, ctx, vault, 's', hits, 0)) as IDataObject;
-  return { out, hits, vault, ms: Date.now() - started };
+  return { out, hits, vault, ms: cpuNow() - started };
 }
 
 describe('re-review 61-1: wildcard field rules', () => {
@@ -150,9 +150,9 @@ describe('re-review 61-4: built-in detectors scan in linear time', () => {
 
 describe('re-review 61-5: horizontal rule injection regex', () => {
   it('scans a long run of spaces quickly', () => {
-    const started = Date.now();
+    const started = cpuNow();
     const result = scanForInjection({ note: '---new' + ' '.repeat(200_000) + '!' });
-    expect(Date.now() - started).toBeLessThan(1000);
+    expect(cpuNow() - started).toBeLessThan(1000);
     expect(result.detected).toBe(false);
   });
 
@@ -175,11 +175,18 @@ describe('re-review 61-6: URL overlap retries', () => {
 
 describe('re-review 61-7: pseudonym generation', () => {
   it('pseudonymizes 32,000 distinct addresses in linear time', () => {
-    const input = { note: Array.from({ length: 32_000 }, (_, i) => `user${i}@example.com`).join(';') };
-    const { out, back, ms } = roundTrip(input, { mode: 'pseudonymize', enabledPatterns: ['email'], inputText: collectInputText(input) });
+    const run = (count: number) => {
+      const input = { note: Array.from({ length: count }, (_, i) => `user${i}@example.com`).join(';') };
+      return { input, ...roundTrip(input, { mode: 'pseudonymize', enabledPatterns: ['email'], inputText: collectInputText(input) }) };
+    };
+    const small = run(8_000);
+    const { input, out, back, ms } = run(32_000);
     expect(out.note).not.toMatch(/user\d+@/);
     expect(back).toEqual(input);
-    expect(ms).toBeLessThan(4000);
+    // Four times the input must cost well under the sixteen times a quadratic scan would. Comparing two runs on the
+    // same machine keeps the check valid when other work slows the machine down.
+    expect(ms).toBeLessThan(8 * Math.max(small.ms, 50));
+    expect(ms).toBeLessThan(20_000);
   });
 
   it.each([10, 5000])('still avoids text already present in an input padded by %d', (pad) => {

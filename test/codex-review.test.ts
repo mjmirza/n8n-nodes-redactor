@@ -12,7 +12,7 @@ import { checkRegex } from '../nodes/Redactor/regexSafety';
 import { resetCircuitBreaker, PresidioRequester } from '../nodes/Redactor/presidio';
 import { RedactionContext, RedactionHit } from '../nodes/Redactor/types';
 
-import { run, persist } from './harness';
+import { run, persist, cpuNow } from './harness';
 
 function ctxOf(overrides: Partial<RedactionContext> = {}): RedactionContext {
   return {
@@ -289,9 +289,9 @@ describe('finding 13: one regex check for profiles and runtime', () => {
   it('a nested quantifier never stalls the engine', () => {
     const vault = new MemoryVault();
     vault.getOrCreateSession('stall', 0);
-    const start = Date.now();
+    const start = cpuNow();
     redactValue({ t: 'a'.repeat(40) + '!' }, ctxOf({ enabledPatterns: [], customPatterns: [{ label: 'E', regex: '^(a+)+$' }] }), vault, 'stall', [], 0);
-    expect(Date.now() - start).toBeLessThan(1000);
+    expect(cpuNow() - start).toBeLessThan(1000);
   });
 });
 

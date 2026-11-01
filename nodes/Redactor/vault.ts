@@ -41,7 +41,7 @@ const MAX_TOTAL_SESSIONS = 20000; // Hard memory ceiling across all workflows
 function assertNoConflict(session: VaultSession, entry: VaultEntry): void {
   const existing = session.entries[entry.token];
   if (existing && existing.original !== entry.original) {
-    throw new Error(`Vault token "${entry.token}" already maps to a different value in session "${session.sessionId}"`);
+    throw new Error('Vault token already maps to a different value in this session');
   }
 }
 
@@ -258,7 +258,7 @@ export class WorkflowVault implements IVault {
     if (existing) return existing;
     if (this.isUnreadable(sessionId)) {
       throw new Error(
-        `Session "${sessionId}" exists but cannot be decrypted with this passphrase. Use the passphrase it was written with, or a different Session ID.`,
+        'Session exists but cannot be decrypted with this passphrase. Use the passphrase it was written with, or a different Session ID.',
       );
     }
     const session: VaultSession = { sessionId, entries: {}, createdAt: new Date().toISOString(), ttl };
@@ -346,7 +346,7 @@ export class WorkflowVault implements IVault {
     const session = this.cache.get(sessionId);
     if (!session) return;
     if (this.isUnreadable(sessionId)) {
-      throw new Error(`Refusing to overwrite session "${sessionId}": it cannot be decrypted with this passphrase.`);
+      throw new Error('Refusing to overwrite session: it cannot be decrypted with this passphrase.');
     }
     const sessions = this.writableSessions();
     const k = this.key(sessionId);

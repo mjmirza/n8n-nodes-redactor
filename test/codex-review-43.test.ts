@@ -8,7 +8,7 @@ import { MemoryVault } from '../nodes/Redactor/vault';
 import { redactValue } from '../nodes/Redactor/engine';
 import type { RedactionContext, RedactionHit } from '../nodes/Redactor/types';
 
-import { run, persist, expectRegexRefused } from './harness';
+import { run, persist, expectRegexRefused, cpuNow } from './harness';
 
 function redactWith(input: Record<string, unknown>, overrides: Partial<RedactionContext>): Record<string, unknown> {
   const vault = new MemoryVault();
@@ -74,9 +74,9 @@ describe('re-review 43-3: validator bypasses are refused', () => {
 
 describe('re-review 43-4: allow-list regexes are bounded too', () => {
   it('redacts a huge value quickly instead of testing the allow-list regex on it', () => {
-    const started = Date.now();
+    const started = cpuNow();
     const out = redactWith({ name: 'a'.repeat(200_000) }, { allowList: [{ value: 'a+!', type: 'regex' }] });
-    expect(Date.now() - started).toBeLessThan(5000);
+    expect(cpuNow() - started).toBeLessThan(5000);
     expect(out.name).toBe('[REDACTED]');
   });
 });

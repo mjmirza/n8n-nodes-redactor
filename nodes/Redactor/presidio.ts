@@ -165,12 +165,19 @@ export function markUnscanned(request: PresidioRequester): void {
 }
 
 /** An entity this node can apply: a type, whole offsets and a finite score. */
-function validEntity(e: unknown): e is PresidioEntity {
+function validEntity(e: unknown, textLength: number): e is PresidioEntity {
   if (e === null || typeof e !== 'object') return false;
   const r = e as Record<string, unknown>;
-  return typeof r.entity_type === 'string' && Number.isInteger(r.start) && Number.isInteger(r.end)
-    && typeof r.score === 'number' && Number.isFinite(r.score);
+  return typeof r.entity_type === 'string' && validSpan(r.start, r.end, textLength) && validScore(r.score);
 }
+
+/** Whole offsets that cover at least one character of the submitted text. */
+function validSpan(start: unknown, end: unknown, textLength: number): boolean {
+  if (!Number.isInteger(start) || !Number.isInteger(end)) return false;
+  return (start as number) >= 0 && (end as number) > (start as number) && (end as number) <= textLength;
+}
+
+const validScore = (score: unknown): boolean => typeof score === 'number' && Number.isFinite(score);
 
 /** Forget every breaker state (tests use this to start clean). */
 export function resetCircuitBreaker(): void {
@@ -237,7 +244,8 @@ export async function analyzeWithPresidio(
     }
 
     const entities = parseBody(result.body) as PresidioEntity[];
-    if (!Array.isArray(entities) || !entities.every(validEntity)) {
+    const textLength = Array.from(text).length;
+    if (!Array.isArray(entities) || !entities.every((e) => validEntity(e, textLength))) {
       recordFailure(request, baseUrl);
       return [];
     }
