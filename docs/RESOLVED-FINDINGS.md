@@ -1,12 +1,12 @@
 # Resolved findings
 
-Every finding from the reviews of 6.1.0 (round 0) and of the 7.0.0 branch (rounds 1 to 9) is fixed and pinned by a
+Every finding from the reviews of 6.1.0 (round 0) and of the 7.0.0 branch (rounds 1 to 9, then the final scoped round 10) is fixed and pinned by a
 regression test that fails on the code before its fix. Reviewers should not re-raise a finding listed here unless they
 show that its pinned test is wrong.
 
 The test column names the `describe` block. Unless the column names another file, it lives in
-`test/codex-review-<NN>.test.ts`, where `<NN>` is the number in the block name (round 0 is `61`, rounds 1 to 9 are
-`70` to `78`). The location is where the reviewer found the defect, so line numbers refer to the code at that time.
+`test/codex-review-<NN>.test.ts`, where `<NN>` is the number in the block name (round 0 is `61`, rounds 1 to 10 are
+`70` to `79`). The location is where the reviewer found the defect, so line numbers refer to the code at that time.
 
 Maintainer decisions that are out of scope for review are listed in [DESIGN-DECISIONS.md](DESIGN-DECISIONS.md).
 
@@ -100,4 +100,9 @@ Maintainer decisions that are out of scope for review are listed in [DESIGN-DECI
 | R9-8 | Medium | audit.ts:98 | Personal Session IDs escape into audit records and errors | re-review 78-8: personal session IDs stay out of diagnostics | fddd578 |
 | R9-9 | Medium | COMPARISON.md:79 | Documentation promises nonexistent audit retention | re-review 78-9: audit retention belongs to downstream storage | fddd578 |
 | R9-10 | Low | README.md:149 | Documented CI coverage exceeds configured coverage | re-review 78-10: CI covers pushes to every branch | fddd578 |
-
+| R10-1 | High | patterns.ts:487 | Braced ODBC passwords leak suffixes | re-review 79-1: braced ODBC passwords | 6b724f7 |
+| R10-2 | High | patterns.ts:536 | Whitespace around = bypasses connection-string parsing | re-review 79-2: whitespace around connection-string equals signs | 6b724f7 |
+| R10-3 | Medium | patterns.ts:408 | Hyphen-prefixed JWTs regress | re-review 79-3: hyphen-prefixed JWTs | 6b724f7 |
+| R10-4 | Medium | patterns.ts:415 | Empty-signature JWTs remain undetected | re-review 79-4: empty-signature unsecured JWTs | 6b724f7 |
+| R10-5 | Medium | audit.ts:13 | Numeric personal Session IDs escape through a new error | re-review 79-5: numeric personal Session IDs | 6b724f7 |
+| R10-6 | Medium | engine.ts:1670 | The final restoration check falsely rejects valid output | re-review 79-6: restoration ignores object property enumeration order | 6b724f7 |
