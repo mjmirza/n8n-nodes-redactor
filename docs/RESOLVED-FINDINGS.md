@@ -113,3 +113,5 @@ Maintainer decisions that are out of scope for review are listed in [DESIGN-DECI
 | R11-P2 | High | patterns.ts | Property test counterexample: AMQP URLs and apostrophes in URL credentials | re-review 80-5: authenticated connection URLs | 181bea8 |
 | R11-P | Class | patterns.ts | Connection-string class: ADO.NET, ODBC and URL forms, Unicode whitespace, literal braces, semicolons and equals signs, any key order and casing | test/connstring-property.test.ts, 10,000 runs, seed 7012026 | 181bea8 |
 | R11-G | Medium | engine.ts:1476 | Each Redact run matched every token the session had ever stored, so long-lived sessions slowed every run | re-review 80-session-growth: a long-lived session keeps each run cheap | 181bea8 |
+| R12-1 | High | patterns.ts:653 | Prose with a key=value pair, such as User=guest., hid a later connection string | re-review 80-6 (codex-review-80) and the generated prose prefix in test/connstring-property.test.ts | 63d316a |
+| R12-2 | Medium | engine.ts:1488 | Prior-token filtering built a suffix array, so long inputs cost far more than in 7.0.0 | re-review 80-7 (codex-review-80) | 63d316a |
