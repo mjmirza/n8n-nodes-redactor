@@ -54,6 +54,7 @@ const CLASS_ESCAPES: Record<string, (set: Charset) => void> = {
 };
 
 const HEX = /^[0-9a-fA-F]+$/;
+const CONTROL: Record<string, number> = { n: 10, r: 13, t: 9, v: 11, f: 12 };
 
 /** Length and code point of the escape at i: \xHH, \uHHHH, \cX, \0, or one escaped character. */
 export function readEscape(src: string, i: number): { length: number; code: number | null } {
@@ -63,8 +64,16 @@ export function readEscape(src: string, i: number): { length: number; code: numb
   if (e === 'u' && hex(4)) return { length: 6, code: parseInt(src.slice(i + 2, i + 6), 16) };
   if (e === 'c' && /[A-Za-z]/.test(src[i + 2] ?? '')) return { length: 3, code: src.charCodeAt(i + 2) % 32 };
   if (e === '0') return { length: 2, code: 0 };
+  const control = CONTROL[e];
+  if (control !== undefined) return { length: 2, code: control };
   if (/[a-zA-Z0-9]/.test(e)) return { length: 2, code: null };
   return { length: 2, code: e.charCodeAt(0) };
+}
+
+function codeSet(code: number): Charset {
+  const set = emptySet();
+  addCode(set, code);
+  return set;
 }
 
 /** The set for the escape at i, unfolded. Unknown letter escapes count as anything. */
@@ -84,6 +93,7 @@ function escapeSet(src: string, i: number): Charset {
 
 /** Reads one class member at j. Returns its set, the index after it, and its code for ranges. */
 function classMember(body: string, j: number): { set: Charset; next: number; code: number | null } {
+  if (body[j] === '\\' && body[j + 1] === 'b') return { set: codeSet(8), next: j + 2, code: 8 };
   if (body[j] === '\\') {
     const { length, code } = readEscape(body, j);
     return { set: escapeSet(body, j), next: j + length, code };

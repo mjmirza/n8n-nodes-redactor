@@ -73,6 +73,13 @@ Sessions written before the change keep working, because the passphrase is the s
 - A number that a pattern matched only in part is replaced with one `[NUMBER_n]` token, so it never shares a token with a string of the same digits.
 - Each mention of a repeated name is scored on its own context, so a later mention with a context word such as "spoke with" can be redacted at a threshold the first mention misses.
 
+## Behaviour changes in 5.1
+
+- The regex safety check refuses the empty classes `[]` and `[^]`, legacy octal escapes such as `\061`, letter escapes it does not know such as `\a` or `\p`, and class ranges with `\d`, `\w` or `\s` as an end such as `[a-\d]`. These were misread by the check and could hide slow patterns. Write the character itself, a `\xHH` escape, or a plain range instead.
+- Each detector matches against the original value, not the partly redacted one. A lookbehind such as `(?<=ID )[0-9]+` still sees text an earlier detector replaced, and `^` only matches at the start of the value.
+- Tokens for a custom label keep only letters, digits and underscores, so the label `my-secret` produces `[MY_SECRET_0]`. Restore still reads tokens from earlier versions.
+- A key named `__proto__` is kept as an ordinary property on Redact and Restore.
+
 ## Tenant profile fields
 
 All fields are optional. Unknown fields are rejected so a typo never passes silently.
