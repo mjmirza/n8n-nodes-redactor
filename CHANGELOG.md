@@ -6,6 +6,30 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 Planned: random scoped tokens.
 
+## [6.0.0] - 2026-11-01
+
+Fixes every finding from a seventh adversarial review, run against 5.2.0. Each one has a regression test in `test/codex-review-52.test.ts`. The node gains version 2. New nodes use it, and saved workflows keep version 1, so the two output changes below never reach an existing workflow silently. Deliberate limits are recorded in `docs/DESIGN-DECISIONS.md`.
+
+### Security
+- **An overlapped detection left its tail exposed.** A deny entry `alice` turned `alice@example.com` into `[DENY_LIST_0]@example.com`. The free rest of an overlapped detection is now redacted with its own mapping.
+- **Token-shaped input skipped explicit rules.** A deny entry or custom pattern that matched text such as `[SECRET_123]` was ignored. Positions now protect generated tokens, so input that only looks like one is treated like any other text.
+- **Real surnames were listed as non-names**, and a leading word such as `This` hid the whole name after it. Surnames such as `Qureshi` and `Iqbal` are names now, and a capitalized run is split at non-name words.
+- **Presidio skipped free-text keys.** A key such as `"Xochitl Quispe"` is now analyzed under the same field rules.
+- **Common email, card, phone and key forms were missed.** Email now covers apostrophes, quoted local parts and international domains. Cards cover 13 to 19 digits. German phones cover the compact `+49...` form. Private keys and PGP private key blocks are replaced through the END line.
+- **Email matching took quadratic time on long text.** It now uses a linear scanner.
+
+### Fixed
+- An earlier token inside a field the rules exclude restored to its original. It now gets its own mapping.
+- Reversible redaction and name matching took quadratic time. A token counter, an original-value index and one pass per detector keep them linear.
+- 130,000 hits overflowed the call stack. Hits are now appended one by one.
+- Classify ignored numbers. It scans them like Redact.
+- Injection detection skipped strings in arrays and depended on property order. It now gathers every string first and aggregates the same way whatever the order.
+- With Dedup off, a repeated name shared one token and one hit. Each mention now has its own.
+- ROPA claimed a 7-year audit retention the node never enforces, and said sessions expire after 0 minutes when the TTL is 0. It now states only what the node does.
+- An unknown custom category crashed the report. Version 2 refuses it with a clear error, and version 1 files it under `other`.
+- Tenant profiles accepted inherited names such as `constructor` as fields. They are refused now.
+- Negative zero restored as zero.
+
 ## [5.2.0] - 2026-11-01
 
 Fixes every finding from a sixth adversarial review, run against 5.1.0. Each one has a regression test in `test/codex-review-51.test.ts`.

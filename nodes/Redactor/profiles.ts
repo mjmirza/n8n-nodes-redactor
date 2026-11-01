@@ -160,7 +160,7 @@ export function parseTenantProfile(input: unknown, knownPatterns?: string[]): Te
   }
   if (!isObject(raw)) fail('must be a JSON object');
 
-  const unknown = Object.keys(raw).filter((k) => !(k in PARSERS));
+  const unknown = Object.keys(raw).filter((k) => !Object.prototype.hasOwnProperty.call(PARSERS, k));
   if (unknown.length) fail(`unknown field(s) ${unknown.join(', ')}`);
 
   const profile: Record<string, unknown> = {};

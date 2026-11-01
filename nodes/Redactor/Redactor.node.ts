@@ -78,13 +78,25 @@ const RECOMMENDED_PATTERNS = [
   'uuid', 'imei', 'iccid',
 ];
 
+/** Version 1 keeps sensitivity levels under hitsByCategory. Version 2 counts PII categories there. */
+function versionRopaSummary(ropa: IDataObject, byLevel: Record<string, number>, typeVersion: number): void {
+  const summary = ropa.processingSummary as IDataObject;
+  if (typeVersion >= 2) {
+    summary.hitsBySensitivity = { ...byLevel };
+  } else {
+    summary.hitsByPiiCategory = summary.hitsByCategory;
+    summary.hitsByCategory = { ...byLevel };
+  }
+}
+
 export class Redactor implements INodeType {
   description: INodeTypeDescription = {
     displayName: 'Redactor',
     name: 'redactor',
     icon: { light: 'file:redactor.svg', dark: 'file:redactor.dark.svg' },
     group: ['transform'],
-    version: 1,
+    version: [1, 2],
+    defaultVersion: 2,
     subtitle: '={{$parameter["operation"]}}',
     usableAsTool: true,
     description:
@@ -929,7 +941,7 @@ export class Redactor implements INodeType {
       for (let i = 0; i < items.length; i++) {
         const hits: RedactionHit[] = [];
         redactValue(items[i].json, ctx, tempVault, tempSessionId, hits, i);
-        allHits.push(...hits);
+        for (const hit of hits) allHits.push(hit);
       }
       tempVault.deleteSession(tempSessionId);
 
@@ -1012,13 +1024,14 @@ export class Redactor implements INodeType {
         dedup: true,
         fieldRules: [],
         fieldMode: 'all',
+        scanNumbers: true,
       };
 
       const allHits: RedactionHit[] = [];
       for (let i = 0; i < items.length; i++) {
         const hits: RedactionHit[] = [];
         redactValue(items[i].json, ctx, tempVault, tempSessionId, hits, i);
-        allHits.push(...hits);
+        for (const hit of hits) allHits.push(hit);
       }
       tempVault.deleteSession(tempSessionId);
 
@@ -1214,6 +1227,7 @@ export class Redactor implements INodeType {
         keyOrigins: new WeakMap(),
         inputText: collectInputText(items.map((it) => it.json)),
         lockedSpans: new WeakMap(),
+        keyLocks: new WeakMap(),
         priorTokens: priorTokenMatcher(vault.getSession(sessionId)?.entries),
       };
 
@@ -1249,7 +1263,7 @@ export class Redactor implements INodeType {
         }
 
         returnData.push({ json: redacted, pairedItem: { item: i } });
-        allHits.push(...hits);
+        for (const hit of hits) allHits.push(hit);
       }
 
       // Persist vault
@@ -1301,6 +1315,7 @@ export class Redactor implements INodeType {
             { name: String(d.controllerName ?? ''), contactEmail: String(d.controllerContact ?? ''), dpo: d.dpo ? String(d.dpo) : undefined },
             list(d.purposes), String(d.legalBasis ?? 'legitimate_interest'), list(d.dataSubjects), list(d.recipients), [],
           ) as unknown as IDataObject;
+          versionRopaSummary(report.ropa as IDataObject, classifyData(allHits).hitCountByLevel, this.getNode().typeVersion);
         }
         return [returnData, [{ json: report, pairedItem: allPaired }]];
       }

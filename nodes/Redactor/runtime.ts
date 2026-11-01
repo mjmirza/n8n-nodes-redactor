@@ -1,6 +1,6 @@
 import { IExecuteFunctions, NodeOperationError } from 'n8n-workflow';
 import { checkRegex } from './regexSafety';
-import { AllowDenyEntry, CustomPattern } from './types';
+import { AllowDenyEntry, CustomPattern, isPiiCategory, PII_CATEGORIES } from './types';
 import { INJECTION_DESCRIPTIONS, PromptInjectionResult } from './injection';
 
 const VAULT_CREDENTIAL = 'redactorVaultApi';
@@ -57,6 +57,14 @@ export function workflowNamespace(fns: IExecuteFunctions): string {
 }
 
 /** Refuses unsafe or invalid user regexes explicitly instead of skipping them silently. */
+/** Node version 2 refuses an unknown category. Version 1 files it under other, so saved workflows keep running. */
+function assertCategory(fns: IExecuteFunctions, cp: CustomPattern): void {
+  if (fns.getNode().typeVersion < 2 || !cp.category || isPiiCategory(cp.category)) return;
+  throw new NodeOperationError(fns.getNode(), `Custom pattern "${cp.label}" has an unknown category "${cp.category}"`, {
+    description: `Use one of ${PII_CATEGORIES.join(', ')}.`,
+  });
+}
+
 export function assertUserRegexes(
   fns: IExecuteFunctions,
   customPatterns: CustomPattern[],
@@ -69,6 +77,7 @@ export function assertUserRegexes(
   };
   for (const cp of customPatterns) {
     if (!cp.label || !cp.regex) continue;
+    assertCategory(fns, cp);
     const problem = checkRegex(cp.regex);
     if (problem) refuse(`Custom pattern "${cp.label}"`, problem);
   }

@@ -183,6 +183,8 @@ const MAX_STORED_SESSIONS = 500;
 
 /** Persists in workflow static data. n8n saves it after production executions only. */
 export class WorkflowVault implements IVault {
+  private readonly originals = new WeakMap<VaultSession, Map<string, VaultEntry>>();
+
   private cache: Map<string, VaultSession> = new Map();
 
   // Reads never write the store, so read-only runs cannot persist a stale snapshot.
@@ -264,12 +266,26 @@ export class WorkflowVault implements IVault {
     if (!session) return;
     assertNoConflict(session, entry);
     session.entries[entry.token] = entry;
+    const index = this.originals.get(session);
+    const first = index?.get(entry.original);
+    if (index && (!first || first.token === entry.token)) index.set(entry.original, entry);
   }
 
   findByOriginal(sessionId: string, original: string): VaultEntry | undefined {
     const session = this.cache.get(sessionId);
     if (!session) return undefined;
-    return Object.values(session.entries).find((e) => e.original === original);
+    return this.originalIndex(session).get(original);
+  }
+
+  /** First entry per original, built once per session, so lookups never scan every entry. */
+  private originalIndex(session: VaultSession): Map<string, VaultEntry> {
+    let index = this.originals.get(session);
+    if (!index) {
+      index = new Map();
+      for (const entry of Object.values(session.entries)) if (!index.has(entry.original)) index.set(entry.original, entry);
+      this.originals.set(session, index);
+    }
+    return index;
   }
 
   deleteSession(sessionId: string): void {

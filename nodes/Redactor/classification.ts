@@ -84,13 +84,16 @@ export function classifyData(hits: RedactionHit[]): ClassificationLabel {
     RESTRICTED: 0,
   };
 
-  const categoryCounts: Record<string, number> = {};
+  // A Map, so any category text, even __proto__, is plain data.
+  const categoryCounts = new Map<string, number>();
   let totalConfidence = 0;
 
   for (const hit of hits) {
-    const catLevel = CATEGORY_SENSITIVITY[hit.category] || 'INTERNAL';
+    const catLevel = Object.prototype.hasOwnProperty.call(CATEGORY_SENSITIVITY, hit.category)
+      ? CATEGORY_SENSITIVITY[hit.category]
+      : 'INTERNAL';
     hitCountByLevel[catLevel]++;
-    categoryCounts[hit.category] = (categoryCounts[hit.category] || 0) + 1;
+    categoryCounts.set(hit.category, (categoryCounts.get(hit.category) ?? 0) + 1);
     totalConfidence += hit.confidence || 0.65;
   }
 
@@ -116,12 +119,12 @@ export function classifyData(hits: RedactionHit[]): ClassificationLabel {
   }
 
   // Find top category
-  const topCategory = Object.entries(categoryCounts)
-    .sort((a, b) => b[1] - a[1])[0][0] as PiiCategory;
+  const ranked = [...categoryCounts.entries()].sort((a, b) => b[1] - a[1]);
+  const topCategory = ranked[0][0] as PiiCategory;
 
   // Build reason string
   const reasonParts: string[] = [];
-  for (const [cat, count] of Object.entries(categoryCounts).sort((a, b) => b[1] - a[1])) {
+  for (const [cat, count] of ranked) {
     reasonParts.push(`${count} ${cat}`);
   }
   let reason = `Contains: ${reasonParts.join(', ')}.`;

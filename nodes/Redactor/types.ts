@@ -8,6 +8,10 @@ export interface PiiPattern {
   regex: RegExp;
   /** Optional validator to reduce false positives */
   validate?: (match: string) => boolean;
+  // A character every match contains. Text without it is skipped.
+  anchor?: string;
+  // A linear scanner used instead of the regex where the regex would backtrack.
+  scan?: (text: string) => Array<{ start: number; end: number }>;
   /** Description shown in the UI */
   description?: string;
   /** Context words that boost confidence when found near a match */
@@ -15,6 +19,14 @@ export interface PiiPattern {
   /** Base confidence score (0.0 to 1.0) before context boosting */
   baseConfidence?: number;
 }
+
+export const PII_CATEGORIES = [
+  'identity', 'financial', 'contact', 'network', 'location', 'temporal',
+  'medical', 'crypto', 'enterprise', 'vehicle', 'biometric', 'other',
+] as const;
+
+export const isPiiCategory = (value: unknown): value is PiiCategory =>
+  typeof value === 'string' && (PII_CATEGORIES as readonly string[]).includes(value);
 
 export type PiiCategory =
   | 'identity'
@@ -125,6 +137,8 @@ export interface RedactionContext {
   inputText?: string;
   // Positions of replacements per output container and key, so Presidio never re-redacts them.
   lockedSpans?: WeakMap<object, Map<string, Array<[number, number]>>>;
+  // Replacement positions inside output keys, per container and key, for Presidio.
+  keyLocks?: WeakMap<object, Map<string, Array<[number, number]>>>;
   // Spans of the value most recently produced, picked up by its container.
   lastLocked?: Array<[number, number]>;
   // Matches tokens the session mapped before this run, so equal input text gets its own mapping.

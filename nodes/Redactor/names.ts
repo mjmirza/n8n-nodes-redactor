@@ -1629,9 +1629,12 @@ const NOT_NAMES: Set<string> = new Set([
   // Business terms
   'Company','Corporation','Inc','Ltd','GmbH','LLC','Group','Team','Department','Division',
   'Total','Amount','Price','Cost','Rate','Tax','Fee','Balance',
-  // Pakistani/South Asian additions
-  'Solangi','Ghaffar','Shaikh','Syed','Qureshi','Mirza','Abbasi','Awan','Bhutto','Butt','Chaudhry','Durrani','Gilani','Hashmi','Iqbal','Jatoi','Leghari','Mengal','Niazi','Raisani','Talpur','Zardari',
 ]);
+
+// Real South Asian surnames. They are names, so they belong with the surnames, never with the non-names.
+for (const surname of ['Solangi','Ghaffar','Shaikh','Syed','Qureshi','Mirza','Abbasi','Awan','Bhutto','Butt','Chaudhry','Durrani','Gilani','Hashmi','Iqbal','Jatoi','Leghari','Mengal','Niazi','Raisani','Talpur','Zardari']) {
+  LAST_NAMES.add(surname);
+}
 
 /**
  * Detect person names in free text using the name dictionary.
@@ -1645,28 +1648,31 @@ export function detectNamesInText(text: string): Array<{name: string; start: num
 
   let match: RegExpExecArray | null;
   while ((match = capitalWordSeq.exec(text)) !== null) {
-    const fullMatch = match[1];
-    const words = fullMatch.split(/\s+/);
-
-    // Skip if any word is in the NOT_NAMES list
-    if (words.some((w) => NOT_NAMES.has(w))) continue;
-
-    // Check if at least one word is a known first name
-    const hasFirstName = words.some((w) => FIRST_NAMES.has(w));
-    // Check if at least one word is a known last name
-    const hasLastName = words.some((w) => LAST_NAMES.has(w));
-
-    // Require at least one known name part
-    if (hasFirstName || hasLastName) {
-      results.push({
-        name: fullMatch,
-        start: match.index,
-        end: match.index + fullMatch.length,
-      });
-    }
+    for (const run of nameRuns(match[1], match.index)) results.push(run);
   }
 
   return results;
+}
+
+/** Splits a capitalized sequence at non-name words, so a leading "This" never hides the name after it. */
+function nameRuns(sequence: string, offset: number): Array<{name: string; start: number; end: number}> {
+  const runs: Array<{name: string; start: number; end: number}> = [];
+  let words: Array<{ word: string; at: number }> = [];
+  const flush = () => {
+    const known = words.some((w) => FIRST_NAMES.has(w.word) || LAST_NAMES.has(w.word));
+    if (words.length >= 2 && known) {
+      const start = offset + words[0].at;
+      const last = words[words.length - 1];
+      runs.push({ name: sequence.slice(words[0].at, last.at + last.word.length), start, end: offset + last.at + last.word.length });
+    }
+    words = [];
+  };
+  for (const m of sequence.matchAll(/\S+/g)) {
+    if (NOT_NAMES.has(m[0])) flush();
+    else words.push({ word: m[0], at: m.index ?? 0 });
+  }
+  flush();
+  return runs;
 }
 
 /**
