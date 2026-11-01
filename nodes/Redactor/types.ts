@@ -127,6 +127,8 @@ export interface RedactionContext {
   lockedSpans?: WeakMap<object, Map<string, Array<[number, number]>>>;
   // Spans of the value most recently produced, picked up by its container.
   lastLocked?: Array<[number, number]>;
+  // Matches tokens the session mapped before this run, so equal input text gets its own mapping.
+  priorTokens?: RegExp;
   // Set while redacting a number, so its mapping never merges with a text mapping.
   numeric?: boolean;
 }
