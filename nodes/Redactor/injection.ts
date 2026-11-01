@@ -387,85 +387,54 @@ export function detectPromptInjection(text: string): PromptInjectionResult {
   };
 }
 
+/** Every string in objects and arrays, with its path, in a stable order. */
+function collectStrings(value: unknown, path: string, into: Array<{ path: string; text: string }>): void {
+  if (typeof value === 'string') {
+    if (value.trim().length > 0) into.push({ path, text: value });
+  } else if (Array.isArray(value)) {
+    value.forEach((item, i) => collectStrings(item, `${path}[${i}]`, into));
+  } else if (value !== null && typeof value === 'object') {
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      collectStrings(item, path ? `${path}.${key}` : key, into);
+    }
+  }
+}
+
+function actionFor(score: number, detected: boolean): PromptInjectionResult['action'] {
+  if (score >= 0.7) return 'BLOCK';
+  if (score >= 0.3) return 'FLAG';
+  return detected ? 'LOG_ONLY' : 'CLEAN';
+}
+
 /**
- * Scan all string values in a data object for prompt injection.
- * Returns the highest-severity result across all fields.
+ * Scan all string values in a data object for prompt injection, in objects and arrays alike.
+ * The strongest field leads and every other detection adds 30 percent of its score, whatever the order.
  */
 export function scanForInjection(
   data: Record<string, unknown>,
   currentPath: string = '',
 ): PromptInjectionResult {
-  let worstResult: PromptInjectionResult = {
-    detected: false,
-    score: 0,
-    action: 'CLEAN',
-    matchedPatterns: [],
-    encodedPayloadsFound: false,
-    zeroWidthCharsFound: false,
-    message: 'No prompt injection detected.',
-  };
-
-  for (const [key, value] of Object.entries(data)) {
-    const fieldPath = currentPath ? `${currentPath}.${key}` : key;
-
-    if (typeof value === 'string' && value.trim().length > 0) {
-      const result = detectPromptInjection(value);
-      if (result.score > worstResult.score) {
-        // Add field path to each match
-        worstResult = {
-          ...result,
-          matchedPatterns: result.matchedPatterns.map((m) => ({
-            ...m,
-            pattern: `[${fieldPath}] ${m.pattern}`,
-          })),
-        };
-      } else if (result.detected) {
-        // Merge matches from lower-scoring fields
-        worstResult.matchedPatterns.push(
-          ...result.matchedPatterns.map((m) => ({
-            ...m,
-            pattern: `[${fieldPath}] ${m.pattern}`,
-          })),
-        );
-        worstResult.score = Math.min(1.0, worstResult.score + result.score * 0.3);
-        worstResult.detected = true;
-        if (result.encodedPayloadsFound) worstResult.encodedPayloadsFound = true;
-        if (result.zeroWidthCharsFound) worstResult.zeroWidthCharsFound = true;
-      }
-    }
-
-    // Recurse into nested objects
-    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-      const nested = scanForInjection(value as Record<string, unknown>, fieldPath);
-      if (nested.score > worstResult.score) {
-        worstResult = nested;
-      } else if (nested.detected) {
-        worstResult.matchedPatterns.push(...nested.matchedPatterns);
-        worstResult.score = Math.min(1.0, worstResult.score + nested.score * 0.3);
-        worstResult.detected = true;
-      }
-    }
-
-    // Recurse into arrays
-    if (Array.isArray(value)) {
-      for (let i = 0; i < value.length; i++) {
-        const item = value[i];
-        if (item !== null && typeof item === 'object') {
-          const nested = scanForInjection(item as Record<string, unknown>, `${fieldPath}[${i}]`);
-          if (nested.detected) {
-            worstResult.matchedPatterns.push(...nested.matchedPatterns);
-            worstResult.score = Math.min(1.0, worstResult.score + nested.score * 0.3);
-            worstResult.detected = true;
-          }
-        }
-      }
-    }
+  const fields: Array<{ path: string; text: string }> = [];
+  collectStrings(data, currentPath, fields);
+  const found = fields
+    .map((f) => ({ path: f.path, result: detectPromptInjection(f.text) }))
+    .filter((f) => f.result.detected)
+    .sort((a, b) => b.result.score - a.result.score || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  if (found.length === 0) {
+    return {
+      detected: false, score: 0, action: 'CLEAN', matchedPatterns: [],
+      encodedPayloadsFound: false, zeroWidthCharsFound: false, message: 'No prompt injection detected.',
+    };
   }
-
-  // Recalculate action based on final merged score
-  if (worstResult.score >= 0.7) worstResult.action = 'BLOCK';
-  else if (worstResult.score >= 0.3) worstResult.action = 'FLAG';
-  else if (worstResult.detected) worstResult.action = 'LOG_ONLY';
-
-  return worstResult;
+  const score = Math.min(1.0, found.slice(1).reduce((sum, f) => sum + f.result.score * 0.3, found[0].result.score));
+  const matchedPatterns = found.flatMap((f) => f.result.matchedPatterns.map((m) => ({ ...m, pattern: `[${f.path}] ${m.pattern}` })));
+  return {
+    ...found[0].result,
+    detected: true,
+    score,
+    action: actionFor(score, true),
+    matchedPatterns,
+    encodedPayloadsFound: found.some((f) => f.result.encodedPayloadsFound),
+    zeroWidthCharsFound: found.some((f) => f.result.zeroWidthCharsFound),
+  };
 }

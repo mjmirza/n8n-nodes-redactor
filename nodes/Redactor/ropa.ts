@@ -57,7 +57,8 @@ export interface RopaRecord {
   // Art.30(1)(g) - Retention
   retentionPolicy: {
     vaultTtlMinutes: number;
-    auditLogRetentionDays: number;
+    // Null, because the node writes audit entries to its output and enforces no retention itself.
+    auditLogRetentionDays: number | null;
     description: string;
   };
 
@@ -84,6 +85,24 @@ export interface RopaRecord {
 /**
  * Generate a ROPA record from redaction results and user-provided context.
  */
+/** States only what the node enforces. A TTL of 0 means sessions never expire on their own. */
+function retentionDescription(vaultTtlMinutes: number, auditLogEnabled: boolean): string {
+  const vault = vaultTtlMinutes > 0
+    ? `Vault sessions expire after ${vaultTtlMinutes} minutes.`
+    : 'Vault sessions do not expire automatically. Purge them when they are no longer needed.';
+  const audit = auditLogEnabled
+    ? 'Audit entries go to the Report output. Their retention depends on where the workflow stores them.'
+    : 'No audit log is written.';
+  return `${vault} ${audit}`;
+}
+
+/** Hits counted per PII category, never per sensitivity level. */
+function countByCategory(hits: RedactionHit[]): Record<string, number> {
+  const counts = new Map<string, number>();
+  for (const hit of hits) counts.set(hit.category, (counts.get(hit.category) ?? 0) + 1);
+  return Object.fromEntries(counts);
+}
+
 export function generateRopaRecord(
   // Auto-populated from redaction
   hits: RedactionHit[],
@@ -139,8 +158,8 @@ export function generateRopaRecord(
 
     retentionPolicy: {
       vaultTtlMinutes,
-      auditLogRetentionDays: 2555, // 7 years (SOX)
-      description: `Vault sessions auto-expire after ${vaultTtlMinutes} minutes. Audit logs retained for 7 years.`,
+      auditLogRetentionDays: null,
+      description: retentionDescription(vaultTtlMinutes, auditLogEnabled),
     },
 
     securityMeasures: {
@@ -157,7 +176,7 @@ export function generateRopaRecord(
       redactionMode,
       patternsUsed,
       classificationLevel: classification.level,
-      hitsByCategory: classification.hitCountByLevel,
+      hitsByCategory: countByCategory(hits),
     },
   };
 }

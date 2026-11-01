@@ -10,6 +10,7 @@ import {
   RedactionHit,
   RedactionReport,
   VaultEntry,
+  isPiiCategory,
 } from './types';
 import {
   calculateConfidence,
@@ -68,7 +69,6 @@ function setOwn(obj: Record<string, unknown>, key: string, value: unknown): void
 /**
  * Token format regex — used to skip already-redacted regions.
  */
-const TOKEN_RE = /^\[[A-Z][A-Z0-9_]*_\d+\]$/;
 
 /**
  * Generate a masked version of a string.
@@ -159,12 +159,16 @@ function applyRedaction(
   return irreversible ? irreversible(match, pattern.label) : match;
 }
 
+// The next index per session's entry table, so a fresh token never recounts every entry.
+const nextIndex = new WeakMap<object, number>();
+
 /** Next unused token for the label, skipping vault tokens and token-shaped input text. */
 function freshToken(label: string, vault: IVault, sessionId: string, reserved?: Set<string>): string {
   const entries = vault.getSession(sessionId)?.entries ?? {};
-  let index = Object.keys(entries).length;
+  let index = nextIndex.get(entries) ?? Object.keys(entries).length;
   let token = generateToken(label, index);
   while (entries[token] || reserved?.has(token)) token = generateToken(label, ++index);
+  nextIndex.set(entries, index + 1);
   return token;
 }
 
@@ -697,7 +701,8 @@ function redactNumber(
   display: string,
   siblingKeys?: string[],
 ): unknown {
-  const text = String(value);
+  // String(-0) is "0", so negative zero is written out to survive Restore.
+  const text = Object.is(value, -0) ? '-0' : String(value);
   // Numeric mappings never share an entry with a text occurrence of the same digits.
   const numCtx: RedactionContext = { ...ctx, dedup: false, numeric: true };
   let out: string | null = null;
@@ -712,6 +717,27 @@ function redactNumber(
   const mapped = numericMapping(out, text, ctx, vault, sessionId);
   ctx.lastLocked = [[0, mapped.length]];
   return mapped;
+}
+
+/** A key that would clash gets one reversible token for the whole original, or a numeric suffix when irreversible. */
+function distinctKey(
+  out: string,
+  original: string,
+  clashes: (k: string) => boolean,
+  ctx: RedactionContext,
+  vault: IVault,
+  sessionId: string,
+  reserved: Iterable<string>,
+): string {
+  if (ctx.mode === 'token' || ctx.mode === 'pseudonymize') {
+    const token = freshToken('KEY', vault, sessionId, new Set([...(ctx.reservedTokens ?? []), ...reserved]));
+    vault.addEntry(sessionId, { token, original, patternLabel: 'KEY', category: 'other', createdAt: new Date().toISOString() });
+    ctx.lastLocked = [[0, token.length]];
+    return token;
+  }
+  let suffixed = out;
+  for (let n = 1; clashes(suffixed); n++) suffixed = `${out}_${n}`;
+  return suffixed;
 }
 
 /** Keys can carry PII too, so they are scanned like text and never take another key's name. */
@@ -729,16 +755,19 @@ function redactKey(
   if (out === key) return key;
   const clashes = (k: string) => k === '' || Object.prototype.hasOwnProperty.call(taken, k) || sourceKeys.has(k);
   if (!clashes(out)) return out;
-  if (ctx.mode === 'token' || ctx.mode === 'pseudonymize') {
-    // A dedicated token for the whole key keeps it reversible.
-    const token = freshToken('KEY', vault, sessionId, new Set([...(ctx.reservedTokens ?? []), ...sourceKeys, ...Object.keys(taken)]));
-    vault.addEntry(sessionId, { token, original: key, patternLabel: 'KEY', category: 'other', createdAt: new Date().toISOString() });
-    return token;
-  }
-  let suffixed = out;
-  for (let n = 1; clashes(suffixed); n++) suffixed = `${out}_${n}`;
-  return suffixed;
+  return distinctKey(out, key, clashes, ctx, vault, sessionId, [...sourceKeys, ...Object.keys(taken)]);
 }
+
+/** Remembers where replacements sit in a key, so Presidio never re-redacts them. */
+function rememberKeyLock(ctx: RedactionContext, container: object, key: string): void {
+  if (ctx.lastLocked && ctx.keyLocks) {
+    const byKey = ctx.keyLocks.get(container) ?? new Map<string, Array<[number, number]>>();
+    byKey.set(key, ctx.lastLocked);
+    ctx.keyLocks.set(container, byKey);
+  }
+  ctx.lastLocked = undefined;
+}
+
 
 function redactObject(
   value: Record<string, unknown>,
@@ -758,9 +787,11 @@ function redactObject(
   for (const [k, v] of entries) {
     const fieldPath = path ? `${path}.${k}` : k;
     const keyHits: RedactionHit[] = [];
+    ctx.lastLocked = undefined;
     const outKey = shouldProcessField(fieldPath, ctx.fieldMode, ctx.fieldRules)
       ? redactKey(k, obj, sourceKeys, ctx, vault, sessionId, itemIndex, keyHits)
-      : k;
+      : protectLiterals(k, ctx, vault, sessionId, hits, itemIndex);
+    rememberKeyLock(ctx, obj, outKey);
     origins.set(outKey, k);
     const childDisplay = display ? `${display}.${outKey}` : outKey;
     for (const h of keyHits) hits.push({ ...h, field: childDisplay });
@@ -786,7 +817,7 @@ export function redactValue(
 ): unknown {
   const processed = shouldProcessField(currentPath, ctx.fieldMode, ctx.fieldRules);
   if (typeof value === 'string') {
-    if (!processed) return value;
+    if (!processed) return protectLiterals(value, ctx, vault, sessionId, hits, itemIndex);
     if (!ctx.skipSemantic) {
       const semantic = redactSemantic(value, ctx, vault, sessionId, hits, itemIndex, currentPath, displayPath, siblingKeys);
       if (semantic !== null) return semantic;
@@ -817,11 +848,12 @@ export function redactValue(
 
 const escapeRe = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/** Free text is untouched source text starting at src. Locked text is a replacement this pass produced. */
+/** A run of the output covering source[src, end). Free text is untouched source text, locked text is a replacement. */
 interface Segment {
   text: string;
   locked: boolean;
   src: number;
+  end: number;
 }
 
 // User regexes never run on longer text. Their matches would be missed silently, so the run stops instead.
@@ -836,8 +868,23 @@ function assertUserRegexInput(text: string, what: string): void {
   );
 }
 
-/** Returns a replacement, or null to leave the match as free text. Offsets are source positions. */
-type Replacer = (match: string, sourceOffset: number) => string | null;
+type HitDetail = Pick<RedactionHit, 'patternName' | 'patternLabel' | 'category' | 'confidence'>;
+
+/** What a detector decided about a match. store replaces the default vault mapping and hit. */
+interface Decision {
+  pattern: RedactionPattern;
+  detail?: HitDetail;
+  store?: (text: string) => string;
+}
+
+/** Decides whether a match is redacted. Offsets are source positions. */
+type Decider = (match: string, sourceOffset: number) => Decision | null;
+
+interface Pending {
+  start: number;
+  end: number;
+  decision: Decision;
+}
 
 /** Walks the segments once per detector. Matches arrive in source order, so the walk never goes back. */
 class SegmentCursor {
@@ -851,17 +898,16 @@ class SegmentCursor {
 
   /** The free segment that wholly contains the range, or undefined when any part is already claimed. */
   freeAt(start: number, end: number): Segment | undefined {
-    while (this.cur && (this.cur.locked || this.cur.src + this.cur.text.length <= start)) this.take();
+    while (this.cur && (this.cur.locked || this.cur.end <= start)) this.take();
     const cur = this.cur;
-    return cur && cur.src <= start && end <= cur.src + cur.text.length ? cur : undefined;
+    return cur && cur.src <= start && end <= cur.end ? cur : undefined;
   }
 
   lock(start: number, end: number, replacement: string): void {
     const cur = this.cur!;
-    if (start > cur.src) this.next.push({ text: cur.text.slice(0, start - cur.src), locked: false, src: cur.src });
-    this.next.push({ text: replacement, locked: true, src: -1 });
-    const tail = end - cur.src;
-    if (tail < cur.text.length) this.cur = { text: cur.text.slice(tail), locked: false, src: end };
+    if (start > cur.src) this.next.push(freeSlice(cur, cur.src, start));
+    this.next.push({ text: replacement, locked: true, src: start, end });
+    if (end < cur.end) this.cur = freeSlice(cur, end, cur.end);
     else this.cur = this.segs[++this.i];
   }
 
@@ -876,23 +922,92 @@ class SegmentCursor {
   }
 }
 
+function freeSlice(seg: Segment, start: number, end: number): Segment {
+  return { text: seg.text.slice(start - seg.src, end - seg.src), locked: false, src: start, end };
+}
+
+/** Stores the replacement and records the hit. The caller locks it by position. */
+function redactMatch(pass: TextPass, match: string, decision: Decision): string {
+  if (decision.store) return decision.store(match);
+  const replacement = applyRedaction(match, decision.pattern, pass.ctx, pass.vault, pass.sessionId);
+  if (decision.detail) {
+    pass.hits.push({ token: replacement, original: '***', field: pass.fieldPath, itemIndex: pass.itemIndex, ...decision.detail });
+  }
+  return replacement;
+}
+
+/** First segment index whose source end lies after pos. Segments are in source order. */
+function segmentAfter(segs: Segment[], pos: number): number {
+  let lo = 0;
+  let hi = segs.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (segs[mid].end <= pos) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/** Redacts the free parts of a detection that overlapped earlier replacements, so no tail stays exposed. */
+function claimPending(pass: TextPass, pending: Pending[]): void {
+  for (const p of pending) {
+    let i = segmentAfter(pass.segs, p.start);
+    while (i < pass.segs.length && pass.segs[i].src < p.end) {
+      const seg = pass.segs[i];
+      if (seg.locked) {
+        i++;
+        continue;
+      }
+      const start = Math.max(seg.src, p.start);
+      const end = Math.min(seg.end, p.end);
+      const parts: Segment[] = [];
+      if (start > seg.src) parts.push(freeSlice(seg, seg.src, start));
+      parts.push({ text: redactMatch(pass, pass.source.slice(start, end), p.decision), locked: true, src: start, end });
+      if (end < seg.end) parts.push(freeSlice(seg, end, seg.end));
+      pass.segs.splice(i, 1, ...parts);
+      i += parts.length;
+    }
+  }
+}
+
+/** Claims one candidate. Returns false when it touched earlier replacements and was queued instead. */
+function claimOne(pass: TextPass, cursor: SegmentCursor, pending: Pending[], start: number, end: number, decide: Decider): boolean {
+  const text = pass.source.slice(start, end);
+  const free = cursor.freeAt(start, end) !== undefined;
+  const decision = decide(text, start);
+  if (decision && free) cursor.lock(start, end, redactMatch(pass, text, decision));
+  else if (decision) pending.push({ start, end, decision });
+  return free;
+}
+
 /** Matches against the whole source, so anchors and lookbehind keep their meaning, and replaces only free text. */
-function replaceFree(pass: TextPass, re: RegExp, fn: Replacer): void {
+function replaceFree(pass: TextPass, re: RegExp, decide: Decider): void {
   const global = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
   const cursor = new SegmentCursor(pass.segs);
+  const pending: Pending[] = [];
   let m: RegExpExecArray | null;
   while ((m = global.exec(pass.source)) !== null) {
     const start = m.index;
-    const end = start + m[0].length;
     // A match touching claimed text is retried one position later, so a free match it overlapped is still found.
-    if (m[0] === '' || !cursor.freeAt(start, end)) {
-      global.lastIndex = start + 1;
-      continue;
-    }
-    const replacement = fn(m[0], start);
-    if (replacement !== null) cursor.lock(start, end, replacement);
+    if (m[0] === '' || !claimOne(pass, cursor, pending, start, start + m[0].length, decide)) global.lastIndex = start + 1;
   }
   pass.segs = cursor.finish();
+  claimPending(pass, pending);
+}
+
+/** Claims precomputed spans in source order, the longest first where two start together. */
+function replaceSpans(pass: TextPass, spans: Array<{ start: number; end: number }>, decide: Decider): void {
+  const ordered = [...spans].sort((a, b) => a.start - b.start || b.end - a.end);
+  const cursor = new SegmentCursor(pass.segs);
+  const pending: Pending[] = [];
+  let reach = -1;
+  for (const span of ordered) {
+    if (span.end <= reach) continue;
+    claimOne(pass, cursor, pending, span.start, span.end, decide);
+    reach = span.end;
+  }
+  pass.segs = cursor.finish();
+  claimPending(pass, pending);
 }
 
 /** State shared by the stages of one text pass. */
@@ -908,96 +1023,82 @@ interface TextPass {
   fieldPath: string;
 }
 
-type HitDetail = Pick<RedactionHit, 'patternName' | 'patternLabel' | 'category' | 'confidence'>;
-
-/** Stores the replacement and records the hit. The caller locks it by position. */
-function redactMatch(pass: TextPass, match: string, pattern: RedactionPattern, detail: HitDetail): string {
-  const replacement = applyRedaction(match, pattern, pass.ctx, pass.vault, pass.sessionId);
-  pass.hits.push({ token: replacement, original: '***', field: pass.fieldPath, itemIndex: pass.itemIndex, ...detail });
-  return replacement;
-}
-
 function denyListRegex(entry: AllowDenyEntry): RegExp | null {
   if (entry.type === 'regex') return isSafeRegex(entry.value) ? new RegExp(entry.value, 'gi') : null;
   return new RegExp(escapeRe(entry.value), 'gi'); // exact and contains match without \b, so #SECRET works
 }
+
+const DENY_DECISION: Decision = {
+  pattern: { label: 'DENY_LIST', category: 'other' },
+  detail: { patternName: 'denyList', patternLabel: 'DENY_LIST', category: 'other', confidence: DENY_LIST_CONFIDENCE },
+};
 
 function denyListStage(pass: TextPass): void {
   for (const entry of pass.ctx.denyList ?? []) {
     if (entry.type === 'regex') assertUserRegexInput(pass.source, `Deny list regex "${entry.value}"`);
     try {
       const re = denyListRegex(entry);
-      if (!re) continue;
-      replaceFree(pass, re, (match) =>
-        TOKEN_RE.test(match)
-          ? null
-          : redactMatch(pass, match, { label: 'DENY_LIST', category: 'other' }, {
-              patternName: 'denyList', patternLabel: 'DENY_LIST', category: 'other', confidence: DENY_LIST_CONFIDENCE,
-            }),
-      );
+      if (re) replaceFree(pass, re, () => DENY_DECISION);
     } catch { /* skip invalid */ }
   }
 }
 
-function builtInMatch(pass: TextPass, pattern: PiiPattern, match: string, offset: number): string | null {
-  if (TOKEN_RE.test(match) || (match.startsWith('[') && match.endsWith(']'))) return null;
+function builtInDecision(pass: TextPass, pattern: PiiPattern, match: string, offset: number): Decision | null {
   const validatorPassed = pattern.validate ? pattern.validate(match) : true;
   if (!validatorPassed || isAllowListed(match, pass.ctx.allowList)) return null;
   const confidence = calculateConfidence(pattern.name, !!pattern.validate, validatorPassed, pass.source, offset, offset + match.length);
   if (confidence < pass.threshold) return null;
-  return redactMatch(pass, match, pattern, {
-    patternName: pattern.name, patternLabel: pattern.label, category: pattern.category, confidence,
-  });
+  return { pattern, detail: { patternName: pattern.name, patternLabel: pattern.label, category: pattern.category, confidence } };
 }
 
 // Checksum-validated patterns (IBAN, cards) claim their text first, so a loose pattern cannot grab digits inside them.
 function builtInStage(pass: TextPass): void {
   const enabled = getPatternsByNames(pass.ctx.enabledPatterns);
   for (const pattern of [...enabled.filter((p) => p.validate), ...enabled.filter((p) => !p.validate)]) {
-    replaceFree(pass, pattern.regex, (match, offset) => builtInMatch(pass, pattern, match, offset));
+    if (pattern.anchor && !pass.source.includes(pattern.anchor)) continue;
+    const decide: Decider = (match, offset) => builtInDecision(pass, pattern, match, offset);
+    if (pattern.scan) replaceSpans(pass, pattern.scan(pass.source), decide);
+    else replaceFree(pass, pattern.regex, decide);
   }
 }
 
-/** Distinct names in the source, longest first, so a longer name is never split by a shorter one. */
-function sourceNames(pass: TextPass): string[] {
-  const names = new Set(detectNamesInText(pass.source).map((nm) => nm.name));
-  // Free text is scanned too, so the unclaimed rest of a partly claimed name is still found.
-  for (const seg of pass.segs) if (!seg.locked) for (const nm of detectNamesInText(seg.text)) names.add(nm.name);
-  return [...names].sort((x, y) => y.length - x.length);
+/** Name spans detected in the source and in free text, so the free rest of a partly claimed name is found too. */
+function nameSpans(pass: TextPass): Array<{ start: number; end: number }> {
+  const spans = detectNamesInText(pass.source).map((nm) => ({ start: nm.start, end: nm.end }));
+  for (const seg of pass.segs) {
+    if (seg.locked) continue;
+    for (const nm of detectNamesInText(seg.text)) spans.push({ start: seg.src + nm.start, end: seg.src + nm.end });
+  }
+  return spans;
 }
 
-/** Each occurrence is scored on its own context, so one weak mention never hides a strong one. */
+/** Each occurrence is scored on its own context and redacted on its own, so Dedup applies per mention. */
 function nameStage(pass: TextPass): void {
   if (pass.ctx.skipSemantic) return;
-  for (const name of sourceNames(pass)) {
-    if ((name.includes('[') && name.includes(']')) || isAllowListed(name, pass.ctx.allowList)) continue;
-    let replacement: string | undefined;
-    replaceFree(pass, new RegExp(escapeRe(name), 'g'), (match, start) => {
-      const confidence = hasContextWords(pass.source, start, start + match.length, NAME_CONTEXT_WORDS) ? 0.8 : 0.65;
-      if (confidence < pass.threshold) return null;
-      replacement ??= redactMatch(pass, match, { label: 'PERSON_NAME', category: 'identity' }, {
-        patternName: 'personNameDict', patternLabel: 'PERSON_NAME', category: 'identity', confidence,
-      });
-      return replacement;
-    });
-  }
+  replaceSpans(pass, nameSpans(pass), (match, start) => {
+    if (isAllowListed(match, pass.ctx.allowList)) return null;
+    const confidence = hasContextWords(pass.source, start, start + match.length, NAME_CONTEXT_WORDS) ? 0.8 : 0.65;
+    if (confidence < pass.threshold) return null;
+    return {
+      pattern: { label: 'PERSON_NAME', category: 'identity' },
+      detail: { patternName: 'personNameDict', patternLabel: 'PERSON_NAME', category: 'identity', confidence },
+    };
+  });
 }
 
 function customStage(pass: TextPass): void {
   if (CUSTOM_PATTERN_CONFIDENCE < pass.threshold) return;
   for (const cp of pass.ctx.customPatterns) {
     if (!cp.label || !cp.regex || !isSafeRegex(cp.regex)) continue;
-    const pattern = { label: cp.label.toUpperCase(), category: (cp.category as PiiCategory) || 'identity' };
+    const category: PiiCategory = isPiiCategory(cp.category) ? cp.category : cp.category ? 'other' : 'identity';
+    const pattern = { label: cp.label.toUpperCase(), category };
+    const decision: Decision = {
+      pattern,
+      detail: { patternName: `custom_${cp.label}`, patternLabel: pattern.label, category: pattern.category, confidence: CUSTOM_PATTERN_CONFIDENCE },
+    };
     assertUserRegexInput(pass.source, `Custom pattern "${cp.label}"`);
     try {
-      replaceFree(pass, new RegExp(cp.regex, 'g'), (match) =>
-        TOKEN_RE.test(match) || isAllowListed(match, pass.ctx.allowList)
-          ? null
-          : redactMatch(pass, match, pattern, {
-              patternName: `custom_${cp.label}`, patternLabel: pattern.label, category: pattern.category,
-              confidence: CUSTOM_PATTERN_CONFIDENCE,
-            }),
-      );
+      replaceFree(pass, new RegExp(cp.regex, 'g'), (match) => (isAllowListed(match, pass.ctx.allowList) ? null : decision));
     } catch { /* skip invalid regex */ }
   }
 }
@@ -1036,11 +1137,34 @@ export function priorTokenMatcher(entries: Record<string, unknown> | undefined):
 function literalStage(pass: TextPass): void {
   const { ctx, vault, sessionId } = pass;
   if (!ctx.priorTokens || (ctx.mode !== 'token' && ctx.mode !== 'pseudonymize')) return;
-  replaceFree(pass, ctx.priorTokens, (match) => {
-    const token = freshToken('LITERAL', vault, sessionId, ctx.reservedTokens);
-    vault.addEntry(sessionId, { token, original: match, patternLabel: 'LITERAL', category: 'other', createdAt: new Date().toISOString() });
-    return token;
-  });
+  const decision: Decision = {
+    pattern: { label: 'LITERAL', category: 'other' },
+    store: (match) => {
+      const token = freshToken('LITERAL', vault, sessionId, ctx.reservedTokens);
+      vault.addEntry(sessionId, { token, original: match, patternLabel: 'LITERAL', category: 'other', createdAt: new Date().toISOString() });
+      return token;
+    },
+  };
+  replaceFree(pass, ctx.priorTokens, () => decision);
+}
+
+/** Fields the rules exclude are not scanned, but earlier tokens in them still get their own mapping. */
+function protectLiterals(
+  text: string,
+  ctx: RedactionContext,
+  vault: IVault,
+  sessionId: string,
+  hits: RedactionHit[],
+  itemIndex: number,
+): string {
+  if (!ctx.priorTokens) return text;
+  const pass: TextPass = {
+    source: text, segs: [{ text, locked: false, src: 0, end: text.length }], threshold: 0,
+    ctx, vault, sessionId, hits, itemIndex, fieldPath: '',
+  };
+  literalStage(pass);
+  recordLocked(ctx, pass.segs);
+  return pass.segs.map((seg) => seg.text).join('');
 }
 
 /** Redacts PII in a text string. Each stage leaves earlier replacements untouched. */
@@ -1054,7 +1178,7 @@ function redactText(
   fieldPath: string,
 ): string {
   const pass: TextPass = {
-    source: text, segs: [{ text, locked: false, src: 0 }], threshold: ctx.confidenceThreshold ?? 0,
+    source: text, segs: [{ text, locked: false, src: 0, end: text.length }], threshold: ctx.confidenceThreshold ?? 0,
     ctx, vault, sessionId, hits, itemIndex, fieldPath,
   };
   literalStage(pass);
@@ -1148,7 +1272,7 @@ async function presidioRedactString(
   path: string,
   locked: Array<[number, number]>,
 ): Promise<string> {
-  if (value.trim().length === 0 || TOKEN_RE.test(value)) return value;
+  if (value.trim().length === 0) return value;
   const entities = await analyzeWithPresidio(
     ctx.presidioUrl!, value, ctx.presidioLanguage || 'en', 0.4, 10000, ctx.presidioRequest,
   );
@@ -1156,7 +1280,6 @@ async function presidioRedactString(
   let text = value;
   for (const span of spans) {
     const matchedText = value.slice(span.start, span.end);
-    if (TOKEN_RE.test(matchedText) || (matchedText.startsWith('[') && matchedText.endsWith(']'))) continue;
     if (isAllowListed(matchedText, ctx.allowList)) continue;
     const label = getRedactorLabel(span.entityType);
     const category = getRedactorCategory(span.entityType) as PiiCategory;
@@ -1169,6 +1292,35 @@ async function presidioRedactString(
     });
   }
   return text;
+}
+
+// A one-word identifier such as "note" or "customer_id" is a schema name, so only free-text keys go to Presidio.
+const IDENTIFIER_KEY = /^[\p{L}_$][\p{L}\p{N}_$-]*$/u;
+
+/** Keys can carry names too, so Presidio scans them under the same field rules and never merges two keys. */
+async function presidioKey(
+  key: string,
+  original: string,
+  taken: Record<string, unknown>,
+  ctx: RedactionContext,
+  vault: IVault,
+  sessionId: string,
+  hits: RedactionHit[],
+  itemIndex: number,
+  path: string,
+  policyPath: string,
+): Promise<string> {
+  if (IDENTIFIER_KEY.test(key) || !shouldProcessField(policyPath, ctx.fieldMode, ctx.fieldRules)) return key;
+  const locked = ctx.keyLocks?.get(taken)?.get(key) ?? [];
+  let out = key;
+  try {
+    out = await presidioRedactString(key, ctx, vault, sessionId, hits, itemIndex, path, locked);
+  } catch {
+    return key; // Presidio failed for this key. Regex results stand.
+  }
+  const clashes = (k: string) => k === '' || Object.prototype.hasOwnProperty.call(taken, k);
+  if (out === key || !clashes(out)) return out;
+  return distinctKey(out, original, clashes, ctx, vault, sessionId, Object.keys(taken));
 }
 
 async function presidioWalk(
@@ -1206,7 +1358,8 @@ async function presidioWalk(
       const child = path ? `${path}.${k}` : k;
       const childPolicy = policyPath ? `${policyPath}.${original}` : original;
       const lock = ctx.lockedSpans?.get(value)?.get(k);
-      setOwn(out, k, await presidioWalk(v, ctx, vault, sessionId, hits, itemIndex, child, childPolicy, lock));
+      const key = await presidioKey(k, original, out, ctx, vault, sessionId, hits, itemIndex, child, childPolicy);
+      setOwn(out, key, await presidioWalk(v, ctx, vault, sessionId, hits, itemIndex, child, childPolicy, lock));
     }
     return out;
   }

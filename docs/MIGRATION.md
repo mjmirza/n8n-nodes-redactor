@@ -85,6 +85,22 @@ Sessions written before the change keep working, because the passphrase is the s
 - Input text equal to a token the session already maps, such as `[EMAIL_0]` from an earlier run, is replaced with a `[LITERAL_n]` token and restores as that same text. If a workflow redacts already redacted data in the same session, run Restore twice to get back to the originals.
 - The regex safety check refuses a variable repetition inside a lookahead or lookbehind, such as `(?=a+)`. Fixed counts such as `(?=[0-9]{4})` are still accepted.
 
+## Moving to 6.0 and node version 2
+
+New Redactor nodes use node version 2. Saved workflows keep version 1 until you replace the node, so nothing below changes for them silently.
+
+Version 2 only, the two output changes:
+
+- In the ROPA record, `processingSummary.hitsByCategory` counts PII categories such as `contact`. The sensitivity level counts move to `hitsBySensitivity`. Version 1 keeps the levels under `hitsByCategory` and adds `hitsByPiiCategory`.
+- A custom pattern whose category is not one of the listed categories stops the run with an error. Version 1 files it under `other`.
+
+Every version, the detection and correctness fixes:
+
+- More text is redacted. Names after words such as `This`, surnames such as `Qureshi`, 13 to 19 digit cards, compact `+49` numbers, whole private key blocks, apostrophes and quoted local parts in emails, and international email domains. Check downstream steps that expected these values in clear text.
+- Deny list entries and custom patterns now apply to text that looks like a token, such as `[SECRET_123]`.
+- The ROPA retention text and `auditLogRetentionDays` (now `null`) state only what the node enforces.
+- Presidio also analyzes keys that contain spaces or punctuation. Single-word keys are not sent, see [DESIGN-DECISIONS.md](DESIGN-DECISIONS.md).
+
 ## Tenant profile fields
 
 All fields are optional. Unknown fields are rejected so a typo never passes silently.

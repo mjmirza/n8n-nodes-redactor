@@ -22,6 +22,41 @@ function luhnCheck(num: string): boolean {
 /**
  * IBAN checksum validation (ISO 13616)
  */
+const EMAIL_LOCAL = /[A-Za-z0-9._%+'!#$&*/=?^`{|}~-]/;
+const EMAIL_DOMAIN = /[\p{L}\p{N}.-]/u;
+const EMAIL_DOMAIN_SHAPE = /^[\p{L}\p{N}-]+(?:[.][\p{L}\p{N}-]+)*[.]\p{L}{2,}$/u;
+
+/** Start of the local part before the @ at at, including a quoted local part. Returns -1 when empty. */
+function emailLocalStart(text: string, at: number): number {
+  if (text[at - 1] === '"') {
+    const open = text.lastIndexOf('"', at - 2);
+    const quoted = open >= 0 ? text.slice(open + 1, at - 1) : '';
+    return quoted.length > 0 && !/[\r\n"]/.test(quoted) ? open : -1;
+  }
+  let start = at;
+  while (start > 0 && EMAIL_LOCAL.test(text[start - 1])) start--;
+  return start < at ? start : -1;
+}
+
+/** End of the domain after the @ at at, trimmed of trailing dots and hyphens. Returns -1 without a valid TLD. */
+function emailDomainEnd(text: string, at: number): number {
+  let end = at + 1;
+  while (end < text.length && EMAIL_DOMAIN.test(text[end])) end++;
+  while (end > at + 1 && /[.-]/.test(text[end - 1])) end--;
+  return EMAIL_DOMAIN_SHAPE.test(text.slice(at + 1, end)) ? end : -1;
+}
+
+/** Finds addresses around each @ in one linear pass, so a long run of letters never backtracks. */
+function scanEmails(text: string): Array<{ start: number; end: number }> {
+  const spans: Array<{ start: number; end: number }> = [];
+  for (let at = text.indexOf('@'); at >= 0; at = text.indexOf('@', at + 1)) {
+    const start = emailLocalStart(text, at);
+    const end = start < 0 ? -1 : emailDomainEnd(text, at);
+    if (end > 0) spans.push({ start, end });
+  }
+  return spans;
+}
+
 function ibanCheck(iban: string): boolean {
   const cleaned = iban.replace(/\s/g, '').toUpperCase();
   if (cleaned.length < 15 || cleaned.length > 34) return false;
@@ -48,8 +83,10 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'email',
     label: 'EMAIL',
     category: 'contact',
-    regex: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g,
-    description: 'Email addresses',
+    regex: /[a-zA-Z0-9._%+'-]+@[\p{L}\p{N}.-]+[.]\p{L}{2,}/gu,
+    anchor: '@',
+    scan: scanEmails,
+    description: 'Email addresses, including quoted local parts and international domains',
   },
   {
     name: 'phone',
@@ -69,7 +106,7 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'phoneDE',
     label: 'PHONE_DE',
     category: 'contact',
-    regex: /(?:0|\+49)\s?\d{2,4}[\s/]\d{3,8}(?:[\s-]\d{1,5})?/g,
+    regex: /(?:0|\+49)\s?\d{2,4}[\s/]\d{3,8}(?:[\s-]\d{1,5})?|\+49\d{9,12}\b/g,
     description: 'German phone numbers (089 1234 5678, +49 30 12345678)',
   },
   {
@@ -304,9 +341,9 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'creditCard',
     label: 'CREDIT_CARD',
     category: 'financial',
-    regex: /\b(?:\d{4}[\s-]?){3}\d{4}\b/g,
+    regex: /\b(?:\d[\s-]?){12,18}\d\b/g,
     validate: (match: string) => luhnCheck(match),
-    description: 'Credit/debit card numbers (Luhn validated)',
+    description: 'Credit/debit card numbers, 13 to 19 digits (Luhn validated)',
   },
   {
     name: 'iban',
@@ -889,8 +926,8 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'pemPrivateKey',
     label: 'PRIVATE_KEY',
     category: 'enterprise',
-    regex: /-----BEGIN (?:RSA |DSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----/g,
-    description: 'PEM private key headers',
+    regex: /-----BEGIN (RSA |DSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----(?:[\s\S]*?-----END \1?PRIVATE KEY-----|[A-Za-z0-9+/=\s]*)/g,
+    description: 'PEM private keys, the whole block through the END line',
   },
   {
     name: 'sshPublicKey',
@@ -1548,8 +1585,8 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'pgpPrivateKey',
     label: 'PGP_KEY',
     category: 'enterprise',
-    regex: /-----BEGIN PGP PRIVATE KEY BLOCK-----/g,
-    description: 'PGP private key block headers',
+    regex: /-----BEGIN PGP PRIVATE KEY BLOCK-----(?:[\s\S]*?-----END PGP PRIVATE KEY BLOCK-----|[A-Za-z0-9+/=:\s]*)/g,
+    description: 'PGP private key blocks, the whole block through the END line',
   },
   {
     name: 'envSecrets',

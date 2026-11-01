@@ -11,6 +11,7 @@ export interface RunOptions {
   credential?: IDataObject;
   credentialAttached?: boolean;
   credentialError?: Error;
+  typeVersion?: number;
 }
 
 export function run(params: Record<string, unknown>, items: IDataObject[], opts: RunOptions = {}): Promise<INodeExecutionData[][]> {
@@ -20,7 +21,7 @@ export function run(params: Record<string, unknown>, items: IDataObject[], opts:
   const node = {
     name: 'Redactor',
     type: 'n8n-nodes-redactor.redactor',
-    typeVersion: 1,
+    typeVersion: opts.typeVersion ?? 1,
     ...(attached ? { credentials: { redactorVaultApi: { id: 'c1', name: 'Vault' } } } : {}),
   };
   const ctx = {
