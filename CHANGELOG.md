@@ -6,6 +6,20 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 Planned: random scoped tokens.
 
+## [5.1.0] - 2026-11-01
+
+Fixes every finding from a fifth adversarial review, run against 5.0.0. Each one has a regression test in `test/codex-review-50.test.ts`.
+
+### Security
+- **A partly redacted number hid its other digits from Presidio.** In irreversible modes the whole value was marked as replaced. Only the replaced parts are marked now.
+- **Four regex syntaxes slipped past the safety check.** The empty classes `[]` and `[^]`, legacy octal escapes such as `\061`, unknown letter escapes, and class ranges with `\d`, `\w` or `\s` as an end are now refused. Control escapes such as `\n` are modelled exactly, so `[^\n]` correctly overlaps letters.
+- **Later detectors saw split text.** Every detector now matches against the original value and replaces only text no earlier detector claimed, so lookbehind and `^` keep their meaning.
+
+### Fixed
+- A shorter name could split a longer one, leaving `Smith` in `Alice Baker Smith`. Names are replaced longest first.
+- A custom label such as `my-secret` produced tokens that were not reserved against token-like input, so Restore could replace the wrong text. Labels are reduced to letters, digits and underscores in tokens.
+- An own `__proto__` key disappeared on Redact and Restore. Keys are now always written as own properties.
+
 ## [5.0.0] - 2026-11-01
 
 Fixes every finding from a fourth adversarial review, run against 4.3.0. Each one has a regression test in `test/codex-review-43.test.ts`. The major version reflects one new failure mode. a custom or deny list regex now stops the run on a value over 20,000 characters instead of scanning it.

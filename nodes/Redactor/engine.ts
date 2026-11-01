@@ -55,7 +55,14 @@ function isAllowListed(value: string, allowList?: AllowDenyEntry[]): boolean {
  * Generate a deterministic token for a given label + index.
  */
 function generateToken(label: string, index: number): string {
-  return `[${label}_${index}]`;
+  // Labels are reduced to the token grammar, so every generated token is reserved against the input.
+  const safe = label.toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+  return `[${/^[A-Z]/.test(safe) ? safe : `X${safe}`}_${index}]`;
+}
+
+/** Sets an own property, so a key such as __proto__ stays data and never changes the prototype. */
+function setOwn(obj: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(obj, key, { value, enumerable: true, writable: true, configurable: true });
 }
 
 /**
@@ -698,7 +705,8 @@ function redactNumber(
   if (out === null && ctx.scanNumbers) out = redactText(text, numCtx, vault, sessionId, hits, itemIndex, display);
   if (out === null || out === text) return value;
   if (ctx.mode !== 'token' && ctx.mode !== 'pseudonymize') {
-    ctx.lastLocked = [[0, out.length]];
+    // Only the replaced parts are locked, so untouched digits stay open to Presidio.
+    ctx.lastLocked = numCtx.lastLocked;
     return out;
   }
   const mapped = numericMapping(out, text, ctx, vault, sessionId);
@@ -719,7 +727,7 @@ function redactKey(
 ): string {
   const out = redactText(key, ctx, vault, sessionId, keyHits, itemIndex, '');
   if (out === key) return key;
-  const clashes = (k: string) => k === '' || k in taken || sourceKeys.has(k);
+  const clashes = (k: string) => k === '' || Object.prototype.hasOwnProperty.call(taken, k) || sourceKeys.has(k);
   if (!clashes(out)) return out;
   if (ctx.mode === 'token' || ctx.mode === 'pseudonymize') {
     // A dedicated token for the whole key keeps it reversible.
@@ -756,8 +764,8 @@ function redactObject(
     origins.set(outKey, k);
     const childDisplay = display ? `${display}.${outKey}` : outKey;
     for (const h of keyHits) hits.push({ ...h, field: childDisplay });
-    obj[outKey] = lockChild(ctx, obj, outKey, () =>
-      redactValue(v, ctx, vault, sessionId, hits, itemIndex, fieldPath, siblingKeys, childDisplay));
+    setOwn(obj, outKey, lockChild(ctx, obj, outKey, () =>
+      redactValue(v, ctx, vault, sessionId, hits, itemIndex, fieldPath, siblingKeys, childDisplay)));
   }
   ctx.keyOrigins?.set(obj, origins);
   return obj;
@@ -831,30 +839,33 @@ function assertUserRegexInput(text: string, what: string): void {
 /** Returns a replacement, or null to leave the match as free text. Offsets are source positions. */
 type Replacer = (match: string, sourceOffset: number) => string | null;
 
-function replaceInFree(seg: Segment, re: RegExp, fn: Replacer, into: Segment[]): void {
-  let last = 0;
-  for (const m of seg.text.matchAll(re)) {
-    const at = m.index ?? 0;
-    if (m[0] === '') continue;
-    const replacement = fn(m[0], seg.src + at);
-    if (replacement === null) continue;
-    if (at > last) into.push({ text: seg.text.slice(last, at), locked: false, src: seg.src + last });
-    into.push({ text: replacement, locked: true, src: -1 });
-    last = at + m[0].length;
-  }
-  if (last < seg.text.length) into.push({ text: seg.text.slice(last), locked: false, src: seg.src + last });
+/** The free segment that wholly contains the source range, or -1. */
+function freeSegmentAt(segs: Segment[], start: number, end: number): number {
+  return segs.findIndex((seg) => !seg.locked && seg.src <= start && end <= seg.src + seg.text.length);
 }
 
-/** Replaces only in free segments, so one detector never edits another detector's output. */
+/** Locks one source range inside its free segment. */
+function lockRange(segs: Segment[], index: number, start: number, end: number, replacement: string): void {
+  const seg = segs[index];
+  const parts: Segment[] = [];
+  if (start > seg.src) parts.push({ text: seg.text.slice(0, start - seg.src), locked: false, src: seg.src });
+  parts.push({ text: replacement, locked: true, src: -1 });
+  const tail = end - seg.src;
+  if (tail < seg.text.length) parts.push({ text: seg.text.slice(tail), locked: false, src: end });
+  segs.splice(index, 1, ...parts);
+}
+
+/** Matches against the whole source, so anchors and lookbehind keep their meaning, and replaces only free text. */
 function replaceFree(pass: TextPass, re: RegExp, fn: Replacer): void {
   const flags = re.flags.includes('g') ? re.flags : `${re.flags}g`;
-  const global = new RegExp(re.source, flags);
-  const next: Segment[] = [];
-  for (const seg of pass.segs) {
-    if (seg.locked) next.push(seg);
-    else replaceInFree(seg, global, fn, next);
+  for (const m of pass.source.matchAll(new RegExp(re.source, flags))) {
+    const start = m.index ?? 0;
+    const end = start + m[0].length;
+    const index = m[0] === '' ? -1 : freeSegmentAt(pass.segs, start, end);
+    if (index < 0) continue;
+    const replacement = fn(m[0], start);
+    if (replacement !== null) lockRange(pass.segs, index, start, end, replacement);
   }
-  pass.segs = next;
 }
 
 /** State shared by the stages of one text pass. */
@@ -920,19 +931,16 @@ function builtInStage(pass: TextPass): void {
   }
 }
 
-/** Distinct names found in free text. */
-function freeNames(pass: TextPass): Set<string> {
-  const names = new Set<string>();
-  for (const seg of pass.segs) {
-    if (!seg.locked) for (const nm of detectNamesInText(seg.text)) names.add(nm.name);
-  }
-  return names;
+/** Distinct names in the source, longest first, so a longer name is never split by a shorter one. */
+function sourceNames(pass: TextPass): string[] {
+  const names = new Set(detectNamesInText(pass.source).map((nm) => nm.name));
+  return [...names].sort((x, y) => y.length - x.length);
 }
 
 /** Each occurrence is scored on its own context, so one weak mention never hides a strong one. */
 function nameStage(pass: TextPass): void {
   if (pass.ctx.skipSemantic) return;
-  for (const name of freeNames(pass)) {
+  for (const name of sourceNames(pass)) {
     if ((name.includes('[') && name.includes(']')) || isAllowListed(name, pass.ctx.allowList)) continue;
     let replacement: string | undefined;
     replaceFree(pass, new RegExp(escapeRe(name), 'g'), (match, start) => {
@@ -1029,7 +1037,7 @@ function restoreWith(value: unknown, restore: (text: string) => string, entries:
   if (value !== null && typeof value === 'object') {
     const obj: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      obj[restore(k)] = restoreWith(v, restore, entries);
+      setOwn(obj, restore(k), restoreWith(v, restore, entries));
     }
     return obj;
   }
@@ -1151,7 +1159,7 @@ async function presidioWalk(
       const child = path ? `${path}.${k}` : k;
       const childPolicy = policyPath ? `${policyPath}.${original}` : original;
       const lock = ctx.lockedSpans?.get(value)?.get(k);
-      out[k] = await presidioWalk(v, ctx, vault, sessionId, hits, itemIndex, child, childPolicy, lock);
+      setOwn(out, k, await presidioWalk(v, ctx, vault, sessionId, hits, itemIndex, child, childPolicy, lock));
     }
     return out;
   }

@@ -185,6 +185,41 @@ function structuralProblem(src: string): string | null {
   return null;
 }
 
+const KNOWN_ESCAPES = /^(?:[dDwWsSbBnrtvf]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|c[A-Za-z]|0(?![0-9])|[^A-Za-z0-9])/;
+const CLASS_ESCAPE_RANGE = /\\[dDwWsS]-[^\]]|[^[^\\]-\\[dDwWsS]/;
+
+const BAD_ESCAPE = 'uses an escape that is not supported (octal, back-reference or unknown letter)';
+const EMPTY_CLASS = 'uses an empty class [] or [^], which is not supported';
+const ESCAPE_RANGE = 'uses a range with \\d, \\w or \\s as an end, which is not supported';
+
+/** Checks the bracket class starting at i. Returns its end index and any problem. */
+function classProblem(src: string, i: number): { end: number; problem: string | null } {
+  if (/^\[\^?\]/.test(src.slice(i))) return { end: i, problem: EMPTY_CLASS };
+  const end = skipClass(src, i);
+  const body = src.slice(i, end);
+  for (let j = 1; j < body.length; j++) {
+    if (body[j] === '\\' && !KNOWN_ESCAPES.test(body.slice(j + 1))) return { end, problem: BAD_ESCAPE };
+    if (body[j] === '\\') j++;
+  }
+  return { end, problem: CLASS_ESCAPE_RANGE.test(body) ? ESCAPE_RANGE : null };
+}
+
+/** Refuses syntax the structural check cannot model exactly, so it never underestimates a pattern. */
+function unsupportedSyntax(src: string): string | null {
+  let i = 0;
+  while (i < src.length) {
+    if (src[i] === '[') {
+      const { end, problem } = classProblem(src, i);
+      if (problem) return problem;
+      i = end;
+    } else if (src[i] === '\\') {
+      if (!KNOWN_ESCAPES.test(src.slice(i + 1))) return BAD_ESCAPE;
+      i += 2;
+    } else i++;
+  }
+  return null;
+}
+
 /** Validates a user-supplied regex. Returns null when safe, else a reason. */
 export function checkRegex(regexStr: string): string | null {
   if (typeof regexStr !== 'string' || regexStr.length === 0) return 'is empty';
@@ -194,5 +229,5 @@ export function checkRegex(regexStr: string): string | null {
   } catch {
     return 'is not a valid regular expression';
   }
-  return structuralProblem(regexStr);
+  return unsupportedSyntax(regexStr) ?? structuralProblem(regexStr);
 }
