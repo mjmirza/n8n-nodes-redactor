@@ -3,17 +3,9 @@
  */
 import { MemoryVault } from '../nodes/Redactor/vault';
 
-import { run } from './harness';
+import { redactNote as redactIn, run, verifyStatus } from './harness';
 
-async function redactNote(note: string): Promise<string> {
-  const [out] = await run({ operation: 'redact', sessionId: 'r75' }, [{ note }]);
-  return out[0].json.note as string;
-}
-
-async function verifyStatus(note: string): Promise<unknown> {
-  const [out] = await run({ operation: 'verify' }, [{ note }], { typeVersion: 2 });
-  return out[0].json.status;
-}
+const redactNote = (note: string): Promise<string> => redactIn(note, 'r75');
 
 describe('re-review 75-1: quoted environment secrets', () => {
   it.each([

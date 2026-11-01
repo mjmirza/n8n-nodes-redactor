@@ -3,17 +3,9 @@
  */
 import { resetCircuitBreaker } from '../nodes/Redactor/presidio';
 
-import { run } from './harness';
+import { redactNote as redactIn, run, verifyStatus } from './harness';
 
-async function redactNote(note: string): Promise<string> {
-  const [out] = await run({ operation: 'redact', sessionId: 'r72' }, [{ note }]);
-  return out[0].json.note as string;
-}
-
-async function verifyStatus(note: string): Promise<unknown> {
-  const [out] = await run({ operation: 'verify' }, [{ note }], { typeVersion: 2 });
-  return out[0].json.status;
-}
+const redactNote = (note: string): Promise<string> => redactIn(note, 'r72');
 
 describe('re-review 72-1 and 2: credentials', () => {
   it.each([

@@ -87,3 +87,15 @@ export function fast(fn: () => void, ms: number): void {
   fn();
   expect(Date.now() - started).toBeLessThan(ms);
 }
+
+/** Redacts one note with default settings and returns the redacted text. */
+export async function redactNote(note: string, sessionId: string): Promise<string> {
+  const [out] = await run({ operation: 'redact', sessionId }, [{ note }]);
+  return out[0].json.note as string;
+}
+
+/** Runs version 2 Verify on one note and returns its status. */
+export async function verifyStatus(note: string): Promise<unknown> {
+  const [out] = await run({ operation: 'verify' }, [{ note }], { typeVersion: 2 });
+  return out[0].json.status;
+}
