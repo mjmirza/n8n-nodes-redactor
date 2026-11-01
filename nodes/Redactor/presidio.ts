@@ -159,6 +159,19 @@ export function presidioUnscanned(request: PresidioRequester): number {
   return unscanned.get(request) || 0;
 }
 
+/** Counts a text as unscanned when Presidio's answer could not be applied. */
+export function markUnscanned(request: PresidioRequester): void {
+  unscanned.set(request, (unscanned.get(request) || 0) + 1);
+}
+
+/** An entity this node can apply: a type, whole offsets and a finite score. */
+function validEntity(e: unknown): e is PresidioEntity {
+  if (e === null || typeof e !== 'object') return false;
+  const r = e as Record<string, unknown>;
+  return typeof r.entity_type === 'string' && Number.isInteger(r.start) && Number.isInteger(r.end)
+    && typeof r.score === 'number' && Number.isFinite(r.score);
+}
+
 /** Forget every breaker state (tests use this to start clean). */
 export function resetCircuitBreaker(): void {
   breakers = new WeakMap();
@@ -191,7 +204,11 @@ export async function analyzeWithPresidio(
   request?: PresidioRequester,
 ): Promise<PresidioEntity[]> {
   if (!text || text.trim().length === 0) return [];
-  if (!request || !isHttpUrl(baseUrl)) return [];
+  if (!request) return [];
+  if (!isHttpUrl(baseUrl)) {
+    markUnscanned(request);
+    return [];
+  }
 
   // Circuit breaker: skip if too many consecutive failures for this URL
   if (circuitOpen(request, baseUrl)) {
@@ -220,7 +237,7 @@ export async function analyzeWithPresidio(
     }
 
     const entities = parseBody(result.body) as PresidioEntity[];
-    if (!Array.isArray(entities)) {
+    if (!Array.isArray(entities) || !entities.every(validEntity)) {
       recordFailure(request, baseUrl);
       return [];
     }

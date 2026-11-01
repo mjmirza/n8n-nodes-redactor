@@ -27,6 +27,7 @@ import {
   analyzeWithPresidio,
   getRedactorLabel,
   getRedactorCategory,
+  markUnscanned,
 } from './presidio';
 
 /**
@@ -1556,8 +1557,9 @@ function restoreWith(value: unknown, restore: (text: string) => string, entries:
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
       const key = restore(k);
       // Two keys restoring to one name would silently drop a value, so Restore stops instead.
+      // The message never names the key, because the restored key is the original personal data.
       if (Object.prototype.hasOwnProperty.call(obj, key)) {
-        throw new Error(`Restore would merge two keys into "${key}". Rename one of them before restoring.`);
+        throw new Error('Restore would merge two keys into one name. Rename one of them before restoring.');
       }
       setOwn(obj, key, restoreWith(v, restore, entries));
     }
@@ -1917,7 +1919,9 @@ async function presidioWalk(
     try {
       return await presidioRedactString(value, ctx, vault, sessionId, hits, itemIndex, path, locked);
     } catch {
-      return value; // Presidio failed for this field. Regex results stand.
+      // Presidio's answer could not be applied. Regex results stand, and the text counts as unscanned.
+      if (ctx.presidioRequest) markUnscanned(ctx.presidioRequest);
+      return value;
     }
   }
   if (Array.isArray(value)) {

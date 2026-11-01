@@ -121,7 +121,7 @@ Set Verify Output on the Verify node to Items, Stop on FAIL. Verify then passes 
 | Audit report | A second output with hits by category and pattern |
 | Audit log | Turn on Audit Log to get an `audit` record (counts, labels, timing, never values) on the Report output. Send it to any database, sheet or SIEM node |
 | ROPA record | Turn on Include Audit Report, then Include GDPR Art.30 ROPA Record, and fill in the controller details |
-| Presidio | Optional Microsoft Presidio container for names and organisations in free text. See [docs/PRESIDIO_SETUP.md](https://github.com/mjmirza/n8n-nodes-redactor/blob/master/docs/PRESIDIO_SETUP.md). Falls back to built-in patterns when unreachable |
+| Presidio | Optional Microsoft Presidio container for names and organisations in free text. See [docs/PRESIDIO_SETUP.md](https://github.com/mjmirza/n8n-nodes-redactor/blob/master/docs/PRESIDIO_SETUP.md). When Presidio cannot scan a text the run stops, unless If Presidio Fails is set to continue with patterns only |
 | Per-tenant profiles | Turn on Use Tenant Profile and paste JSON. Validated on every run. Fields are listed in [docs/MIGRATION.md](https://github.com/mjmirza/n8n-nodes-redactor/blob/master/docs/MIGRATION.md#tenant-profile-fields) |
 
 This node reduces what reaches a model. It is not legal advice and does not on its own make a workflow GDPR or HIPAA compliant.

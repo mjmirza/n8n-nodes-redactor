@@ -1384,8 +1384,8 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'slackToken',
     label: 'SLACK_TOKEN',
     category: 'enterprise',
-    regex: /\bxox[boaprs]-[A-Za-z0-9-]+/g,
-    description: 'Slack API tokens',
+    regex: /\b(?:xox[boaprse]-|xoxe[.]xox[bp]-|xoxe[.]xapp-|xapp-)[A-Za-z0-9-]+/g,
+    description: 'Slack API tokens, including app-level (xapp-) and refresh (xoxe.) tokens',
   },
   {
     name: 'bearerToken',

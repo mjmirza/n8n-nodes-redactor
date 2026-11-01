@@ -65,6 +65,13 @@ Fixes every finding from a ninth adversarial review, run against 6.1.0. Each one
 - Deduplicate gave repeated numbers and booleans different tokens. Each now shares one token with equal values of the same type.
 - Email pseudonyms used real domains such as `test.io`. Only documentation domains are used.
 - Report hits named a key and token that no longer existed after a pseudonym repair. They follow the repair.
+- Slack app-level tokens (`xapp-`) and refresh tokens (`xoxe.`) were not redacted. They are.
+- An empty or invalid Presidio URL turned NLP detection off silently. It now stops the run.
+- A Presidio answer with malformed entities, such as `[null]` or an entity without a score, counted as a clean scan. It counts as unscanned, so the run stops by default.
+- A Confidence Threshold outside 0 to 1, such as 2, silently turned detection off. It is refused.
+- A Restore key collision put the restored key, which is personal data, into the error message. The message no longer names the key.
+- With Audit Log on and the fallback chosen, a Presidio outage was reported as `SUCCESS`. The audit record is `PARTIAL` and counts the unscanned texts, and the report counts them even without Include Audit Report.
+- The README and Presidio setup guide still promised a silent fallback. They describe the stop default and the option.
 
 ## [6.1.0] - 2026-11-01
 

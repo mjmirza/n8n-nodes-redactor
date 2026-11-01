@@ -40,6 +40,8 @@ export interface AuditLogEntry {
   processingTimeMs: number;
   patternsUsed: number;
   presidioEnabled: boolean;
+  /** Texts Presidio could not scan in this run. Present only when above zero. */
+  presidioUnscannedTexts?: number;
   sessionId?: string;
 }
 
@@ -70,6 +72,7 @@ export function buildAuditEntry(
   presidioEnabled: boolean,
   classification?: ClassificationLabel,
   sessionId?: string,
+  presidioUnscannedTexts = 0,
 ): AuditLogEntry {
   const hitsByCategory = countHits(hits, 'category');
   const hitsByPattern = countHits(hits, 'patternLabel');
@@ -81,7 +84,8 @@ export function buildAuditEntry(
     severity: determineSeverity(classification?.level, hits.length),
     action,
     mode,
-    status: 'SUCCESS',
+    // Text Presidio never scanned makes the run partial, so an audit consumer can tell it from a full scan.
+    status: presidioUnscannedTexts > 0 ? 'PARTIAL' : 'SUCCESS',
     totalHits: hits.length,
     hitsByCategory,
     hitsByPattern,
@@ -90,6 +94,7 @@ export function buildAuditEntry(
     processingTimeMs,
     patternsUsed,
     presidioEnabled,
+    ...(presidioUnscannedTexts > 0 ? { presidioUnscannedTexts } : {}),
     sessionId,
   };
 }

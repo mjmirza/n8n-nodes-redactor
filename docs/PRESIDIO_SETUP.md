@@ -74,7 +74,7 @@ The node will:
 1. First run all regex patterns (fast, local)
 2. Then send remaining text to Presidio for NLP analysis
 3. Merge the results — no duplicates
-4. If Presidio is unreachable, silently fall back to regex-only (no crash)
+4. If Presidio is unreachable or returns an answer it cannot use, stop the run so no unscanned text is output. Set **If Presidio Fails** to **Continue With Patterns Only** to output the pattern-only result instead; the report and audit record then count the unscanned texts
 
 ## Supported languages
 
@@ -135,4 +135,4 @@ For non-English languages, you may need to build a custom Presidio Docker image 
 | "Connection refused" | Verify port mapping: `docker run -p 127.0.0.1:5002:3000 ...` |
 | "No entities detected" | Check language setting matches text language |
 | "Slow processing" | Presidio adds latency; for speed, use regex-only mode |
-| "Node works without Presidio" | Correct! Presidio is optional. Node falls back silently. |
+| "Presidio could not scan N text(s)" | Presidio is down, the URL is wrong, or it returned an unusable answer. Fix the container, or set If Presidio Fails to Continue With Patterns Only |

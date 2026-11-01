@@ -152,6 +152,10 @@ Every version:
 - With Deduplicate on, repeated numbers and booleans under sensitive keys share one token, as repeated text always did. A number never shares a token with the same digits as text.
 - Email pseudonyms use only domains reserved for documentation, such as `example.com` and `shop.test`.
 - After a pseudonym repair, report hits name the repaired key and its token, so each hit points at a field in the output.
+- With Presidio on, an empty or invalid Presidio URL stops the run, and an unusable Presidio answer counts as an unscanned text.
+- A Confidence Threshold outside 0 to 1 stops the run.
+- Slack `xapp-` and `xoxe.` tokens are redacted.
+- An audit record is `PARTIAL` with `presidioUnscannedTexts` when Presidio skipped any text.
 
 ## Tenant profile fields
 

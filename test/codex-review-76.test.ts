@@ -50,7 +50,7 @@ describe('re-review 76-3: Restore never merges two keys', () => {
     await expect(run(
       { operation: 'restore', sessionId: 'r76d', vaultStorage: 'memory' },
       [{ [token]: 1, 'alice@example.com': 2 }],
-    )).rejects.toThrow(/would merge two keys into "alice@example.com"/);
+    )).rejects.toThrow(/would merge two keys into one name/);
   });
 });
 

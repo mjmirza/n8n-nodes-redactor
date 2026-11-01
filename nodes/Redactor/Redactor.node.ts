@@ -27,7 +27,7 @@ import {
 import { classifyData } from './classification';
 import { scanForInjection } from './injection';
 import { buildAuditEntry } from './audit';
-import { presidioUnscanned, PresidioRequester } from './presidio';
+import { markUnscanned, presidioUnscanned, PresidioRequester } from './presidio';
 import { MODES, parseTenantProfile } from './profiles';
 import { generateRopaRecord } from './ropa';
 import { assertUserRegexes, resolvePassphrase, runSetting, sanitizeInjection, workflowNamespace } from './runtime';
@@ -1245,6 +1245,11 @@ export class Redactor implements INodeType {
         presidioUrl = runSetting(this, 'presidioUrl', 'http://localhost:5002') as string;
         presidioLanguage = runSetting(this, 'presidioLanguage', 'en') as string;
         presidioOnFailure = runSetting(this, 'presidioOnFailure', 'stop') as string;
+        if (!/^https?:[/][/][^/\s]/i.test(String(presidioUrl).trim())) {
+          throw new NodeOperationError(this.getNode(), 'Presidio URL must be an http or https address', {
+            description: 'Set Presidio URL, for example http://localhost:5002, or turn off Enhanced NLP Detection.',
+          });
+        }
       }
 
       // Parse allow list
@@ -1301,6 +1306,10 @@ export class Redactor implements INodeType {
             mode: fieldMode === 'allowlist' ? ('include' as const) : ('exclude' as const),
           }));
         }
+      }
+
+      if (typeof confidenceThreshold !== 'number' || !Number.isFinite(confidenceThreshold) || confidenceThreshold < 0 || confidenceThreshold > 1) {
+        throw new NodeOperationError(this.getNode(), `Confidence Threshold must be a number from 0 to 1, got ${String(confidenceThreshold)}`);
       }
 
       if (typeof sessionTtl !== 'number' || !Number.isFinite(sessionTtl) || sessionTtl < 0) {
@@ -1363,7 +1372,7 @@ export class Redactor implements INodeType {
         ) as IDataObject;
 
         // Enhanced NLP detection via Presidio (if enabled)
-        if (ctx.presidioUrl) {
+        if (enablePresidio) {
           try {
             redacted = await enhanceWithPresidio(
               redacted as Record<string, unknown>,
@@ -1377,6 +1386,7 @@ export class Redactor implements INodeType {
             if (presidioOnFailure === 'stop') {
               throw new NodeOperationError(this.getNode(), `Presidio scan failed: ${(error as Error).message}`, { itemIndex: i });
             }
+            markUnscanned(presidioRequester);
           }
         }
 
@@ -1426,7 +1436,7 @@ export class Redactor implements INodeType {
       const auditEntry = auditLog && hasReportOutput
         ? buildAuditEntry(
             'REDACT', mode, allHits, items.length, Date.now() - startTime,
-            enabledPatterns.length, !!ctx.presidioUrl, classifyData(allHits), sessionId,
+            enabledPatterns.length, !!ctx.presidioUrl, classifyData(allHits), sessionId, unscannedTexts,
           )
         : undefined;
 
@@ -1444,7 +1454,7 @@ export class Redactor implements INodeType {
       if (hasReportOutput) {
         const report: IDataObject = includeReport ? (buildReport(sessionId, allHits) as unknown as IDataObject) : {};
         if (auditEntry) report.audit = auditEntry as unknown as IDataObject;
-        if (includeReport && unscannedTexts > 0) report.presidioUnscannedTexts = unscannedTexts;
+        if (unscannedTexts > 0) report.presidioUnscannedTexts = unscannedTexts;
         if (includeReport && (runSetting(this, 'includeRopa', false) as boolean)) {
           const d = runSetting(this, 'ropa', {}) as IDataObject;
           const list = (v: unknown) => String(v ?? '').split(',').map((x) => x.trim()).filter(Boolean);
