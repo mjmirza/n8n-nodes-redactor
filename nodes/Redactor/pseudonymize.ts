@@ -61,9 +61,10 @@ const LAST_NAMES = [
   'Martin', 'Bernard', 'Dubois', 'Rossi', 'Ferrari', 'Kowalski',
 ];
 
+// Only domains reserved for documentation (RFC 2606, RFC 6761), so a pseudonym can never reach a real mailbox.
 const EMAIL_DOMAINS = [
-  'example.com', 'sample.org', 'demo.net', 'test.io', 'mock.dev',
-  'placeholder.com', 'pseudo.org', 'anon.net', 'redacted.io', 'safe.dev',
+  'example.com', 'example.net', 'example.org', 'mail.example.com', 'corp.example.net',
+  'demo.example.org', 'acme.example', 'sample.example', 'shop.test', 'office.test',
 ];
 
 const STREET_NAMES = [

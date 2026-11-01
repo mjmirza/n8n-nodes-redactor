@@ -27,7 +27,7 @@ import {
 import { classifyData } from './classification';
 import { scanForInjection } from './injection';
 import { buildAuditEntry } from './audit';
-import type { PresidioRequester } from './presidio';
+import { presidioUnscanned, PresidioRequester } from './presidio';
 import { MODES, parseTenantProfile } from './profiles';
 import { generateRopaRecord } from './ropa';
 import { assertUserRegexes, resolvePassphrase, runSetting, sanitizeInjection, workflowNamespace } from './runtime';
@@ -730,6 +730,31 @@ export class Redactor implements INodeType {
         description: 'URL of the Presidio Analyzer service. Default: http://localhost:5002. If using docker-compose, use the service name: http://presidio:3000',
       },
       {
+        displayName: 'If Presidio Fails',
+        name: 'presidioOnFailure',
+        type: 'options',
+        displayOptions: {
+          show: {
+            operation: ['redact'],
+            enablePresidio: [true],
+          },
+        },
+        options: [
+          {
+            name: 'Stop the Run',
+            value: 'stop',
+            description: 'Output nothing when any text could not be scanned by Presidio',
+          },
+          {
+            name: 'Continue With Patterns Only',
+            value: 'continue',
+            description: 'Output the pattern-only result and count the unscanned texts in the report',
+          },
+        ],
+        default: 'stop',
+        description: 'What to do when Presidio cannot be reached or returns an error for a text',
+      },
+      {
         displayName: 'Presidio Language',
         name: 'presidioLanguage',
         type: 'options',
@@ -1215,9 +1240,11 @@ export class Redactor implements INodeType {
       const enablePresidio = runSetting(this, 'enablePresidio', false) as boolean;
       let presidioUrl = '';
       let presidioLanguage = 'en';
+      let presidioOnFailure = 'stop';
       if (enablePresidio) {
         presidioUrl = runSetting(this, 'presidioUrl', 'http://localhost:5002') as string;
         presidioLanguage = runSetting(this, 'presidioLanguage', 'en') as string;
+        presidioOnFailure = runSetting(this, 'presidioOnFailure', 'stop') as string;
       }
 
       // Parse allow list
@@ -1346,8 +1373,10 @@ export class Redactor implements INodeType {
               hits,
               i,
             ) as IDataObject;
-          } catch {
-            // Presidio unavailable — continue with regex-only results
+          } catch (error) {
+            if (presidioOnFailure === 'stop') {
+              throw new NodeOperationError(this.getNode(), `Presidio scan failed: ${(error as Error).message}`, { itemIndex: i });
+            }
           }
         }
 
@@ -1357,10 +1386,18 @@ export class Redactor implements INodeType {
       }
 
       // A mapping made for a later item can spell text next to an earlier pseudonym, so every output is checked last.
-      const restorable = ensureRestorable(items.map((it) => it.json), returnData.map((r) => r.json), ctx, vault, sessionId);
+      const restorable = ensureRestorable(items.map((it) => it.json), returnData.map((r) => r.json), ctx, vault, sessionId, allHits);
       restorable.forEach((json, i) => {
         returnData[i].json = json as IDataObject;
       });
+
+      // Text Presidio never scanned must not pass as scanned.
+      const unscannedTexts = enablePresidio ? presidioUnscanned(presidioRequester) : 0;
+      if (unscannedTexts > 0 && presidioOnFailure === 'stop') {
+        throw new NodeOperationError(this.getNode(), `Presidio could not scan ${unscannedTexts} text(s), so nothing was output`, {
+          description: 'Check that Presidio is running at the Presidio URL, or set If Presidio Fails to Continue With Patterns Only.',
+        });
+      }
 
       // An absent setting means off. A setting whose expression fails stops the run before anything is saved.
       const promptInjection = runSetting(this, 'promptInjection', false) as boolean;
@@ -1407,6 +1444,7 @@ export class Redactor implements INodeType {
       if (hasReportOutput) {
         const report: IDataObject = includeReport ? (buildReport(sessionId, allHits) as unknown as IDataObject) : {};
         if (auditEntry) report.audit = auditEntry as unknown as IDataObject;
+        if (includeReport && unscannedTexts > 0) report.presidioUnscannedTexts = unscannedTexts;
         if (includeReport && (runSetting(this, 'includeRopa', false) as boolean)) {
           const d = runSetting(this, 'ropa', {}) as IDataObject;
           const list = (v: unknown) => String(v ?? '').split(',').map((x) => x.trim()).filter(Boolean);
@@ -1443,7 +1481,12 @@ export class Redactor implements INodeType {
       const returnData: INodeExecutionData[] = [];
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
-        const restored = restoreFromSession(item.json, session) as IDataObject;
+        let restored: IDataObject;
+        try {
+          restored = restoreFromSession(item.json, session) as IDataObject;
+        } catch (error) {
+          throw new NodeOperationError(this.getNode(), (error as Error).message, { itemIndex: i });
+        }
         returnData.push(withBinary({ json: restored, pairedItem: { item: i } }, item));
       }
 

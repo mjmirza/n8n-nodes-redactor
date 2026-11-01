@@ -162,12 +162,13 @@ describe('execute v2: Presidio over n8n httpRequest', () => {
     expect(out[0].json.note).not.toContain('Wilma');
   });
 
-  it('falls back to built-in patterns when Presidio is down', async () => {
+  // From 7.0 a Presidio outage stops the run unless If Presidio Fails is set to continue (see codex-review-76).
+  it('falls back to built-in patterns when Presidio is down and fallback is chosen', async () => {
     const httpRequest = jest.fn(async () => {
       throw new Error('ECONNREFUSED');
     });
     const [out] = await run(
-      { operation: 'redact', sessionId: 'pr2', enablePresidio: true, presidioUrl: 'http://presidio:3000' },
+      { operation: 'redact', sessionId: 'pr2', enablePresidio: true, presidioUrl: 'http://presidio:3000', presidioOnFailure: 'continue' },
       [{ email: 'down@example.com' }],
       { httpRequest },
     );

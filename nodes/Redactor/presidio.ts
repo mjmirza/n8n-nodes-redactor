@@ -145,14 +145,24 @@ function recordSuccess(request: PresidioRequester, url: string): void {
   failures(request).set(url, 0);
 }
 
+// Texts Presidio did not scan, per requester, so the run can stop instead of passing them as scanned.
+let unscanned = new WeakMap<PresidioRequester, number>();
+
 function recordFailure(request: PresidioRequester, url: string): void {
   const table = failures(request);
   table.set(url, (table.get(url) || 0) + 1);
+  unscanned.set(request, (unscanned.get(request) || 0) + 1);
+}
+
+/** How many texts this requester sent that Presidio never scanned, through errors or an open breaker. */
+export function presidioUnscanned(request: PresidioRequester): number {
+  return unscanned.get(request) || 0;
 }
 
 /** Forget every breaker state (tests use this to start clean). */
 export function resetCircuitBreaker(): void {
   breakers = new WeakMap();
+  unscanned = new WeakMap();
 }
 
 /**
@@ -184,7 +194,10 @@ export async function analyzeWithPresidio(
   if (!request || !isHttpUrl(baseUrl)) return [];
 
   // Circuit breaker: skip if too many consecutive failures for this URL
-  if (circuitOpen(request, baseUrl)) return [];
+  if (circuitOpen(request, baseUrl)) {
+    unscanned.set(request, (unscanned.get(request) || 0) + 1);
+    return [];
+  }
 
   const requestBody: PresidioAnalyzeRequest = {
     text,

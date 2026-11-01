@@ -58,6 +58,13 @@ Fixes every finding from a ninth adversarial review, run against 6.1.0. Each one
 - A tenant profile that changed only the field mode kept the node's rules in their old mode, so a denylist turned allowlist excluded every field. The node's rules now follow the profile's mode.
 - Restore checked the session once and then looked it up again per item, so a session expiring mid-batch returned some items with unresolved tokens and no error. The whole batch is restored from the session it checked.
 - A negative Session TTL kept the vault forever. It is refused.
+- A blank Allow List row, which the UI adds empty, allowed every value through. Blank rows are ignored.
+- A Presidio outage passed unscanned text through as if scanned. The run now stops by default; a new If Presidio Fails option can continue with patterns only and counts the unscanned texts in the report.
+- Restore merged two keys that restored to the same name and kept one value. It now stops with an error.
+- The default confidence threshold of 0 asked Presidio for every score, so saved workflows replaced low-confidence detections. A threshold of 0 asks for 0.4, as in 6.x.
+- Deduplicate gave repeated numbers and booleans different tokens. Each now shares one token with equal values of the same type.
+- Email pseudonyms used real domains such as `test.io`. Only documentation domains are used.
+- Report hits named a key and token that no longer existed after a pseudonym repair. They follow the repair.
 
 ## [6.1.0] - 2026-11-01
 

@@ -123,7 +123,7 @@ Every version:
 - A boolean under a sensitive key, such as `disability: true`, is replaced with a token and counted in Classify and ROPA. Restore returns the boolean.
 - In Pseudonymize mode, a value whose pseudonym would run together with the text beside it gets a bracketed token such as `[SALARY_3]` instead, so Restore returns the exact original.
 - Overlapping Presidio entities are covered as a whole. Touching parts of the same type become one replacement, and parts of different types keep their own.
-- Presidio is asked for scores from the configured confidence threshold, where 6.x always asked for 0.4 and up. Without a threshold it still asks for 0.4.
+- Presidio is asked for scores from the configured confidence threshold, where 6.x always asked for 0.4 and up. A threshold of 0, the default, still asks for 0.4.
 - Restore and Detect keep binary attachments. Redact removes them unless Binary Attachments is set to Keep Unscanned, because the node does not scan file content. Verify reports `FAIL` and counts `unscannedAttachments` when an item carries an attachment.
 - In Pseudonymize mode, a string or key that would not restore exactly, because a mapping made for another field spells text next to it, is replaced whole by a `[TEXT_n]` token.
 - A Prompt Injection or Presidio setting whose expression fails stops the run with that error.
@@ -146,6 +146,12 @@ Every version:
 - Quoted environment values such as `DB_PASS='azure zebra'` are replaced whole, quotes included, where 6.x stopped at the first space.
 - A tenant profile that sets `fieldMode` without `fieldRules` applies that mode to the node's own field rules.
 - A negative Session TTL stops the run. Use 0 to keep the session until it is purged.
+- With Presidio on, a text Presidio could not scan stops the run by default, because 6.x passed it through as if scanned. Set the new If Presidio Fails option to Continue With Patterns Only to keep the 6.x behaviour; the report then counts the unscanned texts in `presidioUnscannedTexts`.
+- A blank Allow List row is ignored. In 6.x it allowed every value through.
+- Restore stops when two keys would restore to the same name, instead of keeping only one of their values.
+- With Deduplicate on, repeated numbers and booleans under sensitive keys share one token, as repeated text always did. A number never shares a token with the same digits as text.
+- Email pseudonyms use only domains reserved for documentation, such as `example.com` and `shop.test`.
+- After a pseudonym repair, report hits name the repaired key and its token, so each hit points at a field in the output.
 
 ## Tenant profile fields
 

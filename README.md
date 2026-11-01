@@ -21,7 +21,7 @@
 
 ## What you get
 
-- **Personal data never reaches the model.** Emails, phone numbers, IBANs, card numbers, national IDs and 200 more kinds of data are swapped for safe tokens before the LLM call.
+- **Personal data is kept from the model.** Emails, phone numbers, IBANs, card numbers, national IDs and 200 more kinds of data are swapped for safe tokens before the LLM call. Pattern detection cannot know every name, so add Presidio for free-text names, and keep Verify in the chain to catch what slips through.
 - **The answer still makes sense.** After the model replies, the node puts the real values back, so your output reads naturally.
 - **Fewer false alarms.** Card numbers are Luhn checked, IBANs checksum verified, NHS numbers mod 11 validated, so random digits are left alone.
 - **Proof for your records.** An optional audit report, and a GDPR Article 30 processing record built from each run.

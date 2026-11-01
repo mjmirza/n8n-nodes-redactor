@@ -35,6 +35,8 @@ import {
 function isAllowListed(value: string, allowList?: AllowDenyEntry[]): boolean {
   if (!allowList || allowList.length === 0) return false;
   return allowList.some((entry) => {
+    // A blank row, such as the empty one the UI adds, would otherwise allow every value.
+    if (typeof entry.value !== 'string' || entry.value.trim() === '') return false;
     try {
       switch (entry.type) {
         case 'exact':
@@ -120,8 +122,9 @@ function storeReversible(
   makeToken: () => string,
 ): string {
   if (ctx.dedup) {
-    const existing = vault.findByOriginal(sessionId, match);
-    if (existing && !existing.numeric && !existing.boolean) return existing.token;
+    // Reuse only a mapping of the same type, so the number 5 never shares a token with the text "5".
+    const existing = findTyped(vault, sessionId, match, ctx);
+    if (existing) return existing.token;
   }
   const token = makeToken();
   addMapping(vault, sessionId, {
@@ -131,6 +134,7 @@ function storeReversible(
     category: ('category' in pattern ? pattern.category : 'identity') as PiiCategory,
     createdAt: new Date().toISOString(),
     ...(ctx.boolean ? { boolean: true } : {}),
+    ...(ctx.numeric ? { numeric: true } : {}),
   });
   return token;
 }
@@ -366,9 +370,41 @@ function tokenShape(entries: Record<string, VaultEntry>): TokenShape {
 }
 
 /** Adds a mapping and keeps the session's token shape current. */
+// Per session entry table, the token of each typed original, so deduplication can tell 5 from "5".
+const typedIndex = new WeakMap<object, Map<string, string>>();
+
+function typedKey(original: string, numeric?: boolean, boolean?: boolean): string {
+  return `${numeric ? 'n' : boolean ? 'b' : 's'}\u0000${original}`;
+}
+
+function typedTable(entries: Record<string, VaultEntry>): Map<string, string> {
+  let table = typedIndex.get(entries);
+  if (!table) {
+    table = new Map();
+    for (const entry of Object.values(entries)) {
+      const key = typedKey(entry.original, entry.numeric, entry.boolean);
+      if (!table.has(key)) table.set(key, entry.token);
+    }
+    typedIndex.set(entries, table);
+  }
+  return table;
+}
+
+/** An existing mapping of the original with the same numeric or boolean type as the context. */
+function findTyped(vault: IVault, sessionId: string, original: string, ctx: RedactionContext): VaultEntry | undefined {
+  const entries = vault.getSession(sessionId)?.entries;
+  if (!entries) return undefined;
+  const token = typedTable(entries).get(typedKey(original, ctx.numeric, ctx.boolean));
+  const entry = token !== undefined && Object.prototype.hasOwnProperty.call(entries, token) ? entries[token] : undefined;
+  return entry && reusable(entry, original, ctx) ? entry : undefined;
+}
+
 function addMapping(vault: IVault, sessionId: string, entry: VaultEntry): void {
   vault.addEntry(sessionId, entry);
   const entries = vault.getSession(sessionId)?.entries;
+  const typed = entries ? typedIndex.get(entries) : undefined;
+  const key = typedKey(entry.original, entry.numeric, entry.boolean);
+  if (typed && !typed.has(key)) typed.set(key, entry.token);
   const shape = entries ? tokenShapes.get(entries) : undefined;
   if (shape) shapeAdd(shape, entry.token);
 }
@@ -934,6 +970,10 @@ function numericMapping(out: string, text: string, ctx: RedactionContext, vault:
     existing.numeric = true;
     return out;
   }
+  if (ctx.dedup) {
+    const same = findTyped(vault, sessionId, text, { ...ctx, numeric: true, boolean: false });
+    if (same) return same.token;
+  }
   // A composite like [DIG_0][DIG_1] can also come from a string, so the number gets its own token.
   const token = freshToken('NUMBER', vault, sessionId, ctx.reservedTokens);
   addMapping(vault, sessionId, {
@@ -955,8 +995,8 @@ function redactBoolean(
   siblingKeys?: string[],
 ): unknown {
   const text = String(value);
-  // A boolean gets a mapping of its own, typed at creation, and never shares one with the string "true" or "false".
-  const boolCtx: RedactionContext = { ...ctx, dedup: false, boolean: true };
+  // A boolean mapping is typed at creation, so it is shared only with the same boolean, never with the text "true".
+  const boolCtx: RedactionContext = { ...ctx, boolean: true };
   const out = redactSemantic(text, boolCtx, vault, sessionId, hits, itemIndex, path, display, siblingKeys);
   if (out === null || out === text) return value;
   ctx.lastLocked = boolCtx.lastLocked;
@@ -977,8 +1017,8 @@ function redactNumber(
 ): unknown {
   // String(-0) is "0", so negative zero is written out to survive Restore.
   const text = Object.is(value, -0) ? '-0' : String(value);
-  // Numeric mappings never share an entry with a text occurrence of the same digits.
-  const numCtx: RedactionContext = { ...ctx, dedup: false, numeric: true };
+  // Numeric mappings are shared only with the same number, never with a text occurrence of the same digits.
+  const numCtx: RedactionContext = { ...ctx, numeric: true };
   let out: string | null = null;
   if (!ctx.skipSemantic) out = redactSemantic(text, numCtx, vault, sessionId, hits, itemIndex, path, display, siblingKeys);
   if (out === null && ctx.scanNumbers) out = redactText(text, numCtx, vault, sessionId, hits, itemIndex, display);
@@ -1514,7 +1554,12 @@ function restoreWith(value: unknown, restore: (text: string) => string, entries:
   if (value !== null && typeof value === 'object') {
     const obj: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      setOwn(obj, restore(k), restoreWith(v, restore, entries));
+      const key = restore(k);
+      // Two keys restoring to one name would silently drop a value, so Restore stops instead.
+      if (Object.prototype.hasOwnProperty.call(obj, key)) {
+        throw new Error(`Restore would merge two keys into "${key}". Rename one of them before restoring.`);
+      }
+      setOwn(obj, key, restoreWith(v, restore, entries));
     }
     return obj;
   }
@@ -1530,24 +1575,61 @@ function wholeToken(original: string, vault: IVault, sessionId: string, ctx: Red
 
 type RestoreCheck = (input: string, output: string) => string;
 
-/**
- * Pairs an input value with its redacted output and replaces any string or key that would not restore exactly.
- * Properties pair by the original key recorded during redaction, never by position, because a redacted integer-like
- * key moves within the object.
- */
-function restorablePair(input: unknown, output: unknown, check: RestoreCheck, ctx: RedactionContext): unknown {
-  if (typeof input === 'string' && typeof output === 'string') return check(input, output);
-  if (Array.isArray(input) && Array.isArray(output)) return output.map((o, i) => restorablePair(input[i], o, check, ctx));
+const joinPath = (base: string, key: string): string => (base ? `${base}.${key}` : key);
+
+/** Keeps report hits pointing at the output after a key or string is replaced whole. */
+class HitFixer {
+  private readonly hits: RedactionHit[];
+
+  constructor(hits: RedactionHit[], itemIndex: number) {
+    this.hits = hits.filter((h) => h.itemIndex === itemIndex);
+  }
+
+  /** A key renamed from oldKey: hits at or below its path move, and the key's own hit names the new key. */
+  renameKey(oldPath: string, newPath: string, oldKey: string, newKey: string, value: unknown): void {
+    const valueText = typeof value === 'string' ? value : '';
+    for (const hit of this.hits) {
+      if (hit.field === oldPath) {
+        hit.field = newPath;
+        if (oldKey.includes(hit.token) && !valueText.includes(hit.token)) hit.token = newKey;
+      } else if (hit.field.startsWith(`${oldPath}.`) || hit.field.startsWith(`${oldPath}[`)) {
+        hit.field = newPath + hit.field.slice(oldPath.length);
+      }
+    }
+  }
+
+  /** A string value replaced by token: the value's hits name the token, a hit on the key keeps its own. */
+  retokenValue(path: string, key: string, token: string): void {
+    for (const hit of this.hits) {
+      if (hit.field === path && !key.includes(hit.token)) hit.token = token;
+    }
+  }
+}
+
+function restorablePair(
+  input: unknown, output: unknown, check: RestoreCheck, ctx: RedactionContext, path = '', key = '', fixer?: HitFixer,
+): unknown {
+  if (typeof input === 'string' && typeof output === 'string') {
+    const fixed = check(input, output);
+    if (fixed !== output) fixer?.retokenValue(path, key, fixed);
+    return fixed;
+  }
+  if (Array.isArray(input) && Array.isArray(output)) {
+    return output.map((o, i) => restorablePair(input[i], o, check, ctx, `${path}[${i}]`, key, fixer));
+  }
   if (!isPlainRecord(input) || !isPlainRecord(output)) return output;
   const origins = ctx.keyOrigins?.get(output);
   const fixed: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(output)) {
-    const inKey = origins?.get(key) ?? key;
+  for (const [outKey, value] of Object.entries(output)) {
+    const inKey = origins?.get(outKey) ?? outKey;
     if (!Object.prototype.hasOwnProperty.call(input, inKey)) {
-      setOwn(fixed, key, value);
+      setOwn(fixed, outKey, value);
       continue;
     }
-    setOwn(fixed, check(inKey, key), restorablePair(input[inKey], value, check, ctx));
+    const newKey = check(inKey, outKey);
+    const childPath = joinPath(path, newKey);
+    if (newKey !== outKey) fixer?.renameKey(joinPath(path, outKey), childPath, outKey, newKey, value);
+    setOwn(fixed, newKey, restorablePair(input[inKey], value, check, ctx, childPath, newKey, fixer));
   }
   return fixed;
 }
@@ -1559,7 +1641,9 @@ const isPlainRecord = (v: unknown): v is Record<string, unknown> => v !== null &
  * earlier one. After the run, every output string and key is restored with the final vault. One that would not
  * restore to its input is replaced whole by a bracketed token, so Restore always returns the exact input.
  */
-export function ensureRestorable(inputs: unknown[], outputs: unknown[], ctx: RedactionContext, vault: IVault, sessionId: string): unknown[] {
+export function ensureRestorable(
+  inputs: unknown[], outputs: unknown[], ctx: RedactionContext, vault: IVault, sessionId: string, hits: RedactionHit[] = [],
+): unknown[] {
   const session = vault.getSession(sessionId);
   if (!session || ctx.mode !== 'pseudonymize') return outputs;
   const restore = makeRestorer(session.entries);
@@ -1567,7 +1651,7 @@ export function ensureRestorable(inputs: unknown[], outputs: unknown[], ctx: Red
     if (input === output) return output;
     return restoreString(output, restore, session.entries) === input ? output : wholeToken(input, vault, sessionId, ctx);
   };
-  return outputs.map((out, i) => restorablePair(inputs[i], out, check, ctx));
+  return outputs.map((out, i) => restorablePair(inputs[i], out, check, ctx, '', '', new HitFixer(hits, i)));
 }
 
 /**
@@ -1696,12 +1780,18 @@ function presidioSpans(
   ctx: RedactionContext,
   locked: Array<[number, number]>,
 ): Span[] {
-  const threshold = ctx.confidenceThreshold ?? PRESIDIO_DEFAULT_THRESHOLD;
+  const threshold = presidioThreshold(ctx);
   return subtractLocked(resolveOverlaps(toUtf16Spans(value, entities).filter((s) => s.score >= threshold)), locked);
 }
 
 // Without a configured threshold, the Analyzer is asked for scores of 0.4 and up, as before.
 const PRESIDIO_DEFAULT_THRESHOLD = 0.4;
+
+/** The node's default threshold, 0, means none was chosen, so Presidio keeps its 0.4 floor as in 6.x. */
+function presidioThreshold(ctx: RedactionContext): number {
+  const chosen = ctx.confidenceThreshold;
+  return chosen !== undefined && chosen > 0 ? chosen : PRESIDIO_DEFAULT_THRESHOLD;
+}
 
 async function presidioRedactString(
   value: string,
@@ -1715,7 +1805,7 @@ async function presidioRedactString(
 ): Promise<string> {
   if (value.trim().length === 0) return value;
   const entities = await analyzeWithPresidio(
-    ctx.presidioUrl!, value, ctx.presidioLanguage || 'en', ctx.confidenceThreshold ?? PRESIDIO_DEFAULT_THRESHOLD, 10000,
+    ctx.presidioUrl!, value, ctx.presidioLanguage || 'en', presidioThreshold(ctx), 10000,
     ctx.presidioRequest,
   );
   const parts: string[] = [];
