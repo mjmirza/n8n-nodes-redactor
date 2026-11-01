@@ -10,6 +10,7 @@ import {
   RedactionHit,
   RedactionMode,
   RedactionReport,
+  VaultEntry,
 } from './types';
 import {
   calculateConfidence,
@@ -111,7 +112,7 @@ function storeReversible(
 ): string {
   if (dedup) {
     const existing = vault.findByOriginal(sessionId, match);
-    if (existing) return existing.token;
+    if (existing && !existing.numeric) return existing.token;
   }
   const token = makeToken();
   vault.addEntry(sessionId, {
@@ -142,12 +143,10 @@ function applyRedaction(
   vault: IVault,
   sessionId: string,
   dedup: boolean,
+  reserved?: Set<string>,
 ): string {
   if (mode === 'token') {
-    return storeReversible(match, pattern, vault, sessionId, dedup, () => {
-      const session = vault.getSession(sessionId);
-      return generateToken(pattern.label, session ? Object.keys(session.entries).length : 0);
-    });
+    return storeReversible(match, pattern, vault, sessionId, dedup, () => freshToken(pattern.label, vault, sessionId, reserved));
   }
   if (mode === 'pseudonymize') {
     // The pseudonym is stored as the token so Restore can map it back.
@@ -159,6 +158,33 @@ function applyRedaction(
   return irreversible ? irreversible(match, pattern.label) : match;
 }
 
+/** Next unused token for the label, skipping vault tokens and token-shaped input text. */
+function freshToken(label: string, vault: IVault, sessionId: string, reserved?: Set<string>): string {
+  const entries = vault.getSession(sessionId)?.entries ?? {};
+  let index = Object.keys(entries).length;
+  let token = generateToken(label, index);
+  while (entries[token] || reserved?.has(token)) token = generateToken(label, ++index);
+  return token;
+}
+
+const TOKEN_LIKE_RE = /\[[A-Z][A-Z0-9_]*_\d+\]/g;
+
+/** Collects token-shaped text from every string and key, so generated tokens never collide with input. */
+export function collectTokenLike(value: unknown, into: Set<string> = new Set()): Set<string> {
+  const scan = (text: string) => {
+    for (const m of text.matchAll(TOKEN_LIKE_RE)) into.add(m[0]);
+  };
+  if (typeof value === 'string') scan(value);
+  else if (Array.isArray(value)) value.forEach((v) => collectTokenLike(v, into));
+  else if (value !== null && typeof value === 'object') {
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      scan(k);
+      collectTokenLike(v, into);
+    }
+  }
+  return into;
+}
+
 /** Retries deterministically until the pseudonym is free in this session. */
 function uniquePseudonym(vault: IVault, sessionId: string, original: string, label: string): string {
   const entries = vault.getSession(sessionId)?.entries ?? {};
@@ -166,6 +192,7 @@ function uniquePseudonym(vault: IVault, sessionId: string, original: string, lab
     const seed = attempt === 0 ? original : `${original}\u0000${attempt}`;
     const candidate = generatePseudonym(sessionId, seed, label);
     const taken = entries[candidate];
+    if (candidate === original) continue;
     if (!taken || taken.original === original) return candidate;
   }
   return generateToken(label, Object.keys(entries).length);
@@ -613,7 +640,7 @@ function redactSemantic(
   const semConf = semantic.label === 'IDENTIFIER' ? AMBIGUOUS_FIELD_CONFIDENCE : SEMANTIC_CONFIDENCE;
   if (semConf < (ctx.confidenceThreshold ?? 0)) return null;
   const replacement = applyRedaction(
-    raw, { label: semantic.label, category: semantic.category }, ctx.mode, vault, sessionId, ctx.dedup,
+    raw, { label: semantic.label, category: semantic.category }, ctx.mode, vault, sessionId, ctx.dedup, ctx.reservedTokens,
   );
   hits.push({
     token: replacement, original: '***',
@@ -626,7 +653,7 @@ function redactSemantic(
   return replacement;
 }
 
-/** Numbers keep their type unless a semantic field or, when scanning numbers, a pattern claims them. */
+/** Numbers keep their type unless a semantic field or a pattern claims them; a whole-number token restores as a number. */
 function redactNumber(
   value: number,
   ctx: RedactionContext,
@@ -639,30 +666,41 @@ function redactNumber(
   siblingKeys?: string[],
 ): unknown {
   const text = String(value);
-  if (!ctx.skipSemantic) {
-    const semantic = redactSemantic(text, ctx, vault, sessionId, hits, itemIndex, path, display, siblingKeys);
-    if (semantic !== null) return semantic;
-  }
-  if (!ctx.scanNumbers) return value;
-  const scanned = redactText(text, ctx, vault, sessionId, hits, itemIndex, display);
-  return scanned === text ? value : scanned;
+  // A fresh token per number, so a string occurrence of the same digits never restores as a number.
+  const numCtx: RedactionContext = { ...ctx, dedup: false };
+  let out: string | null = null;
+  if (!ctx.skipSemantic) out = redactSemantic(text, numCtx, vault, sessionId, hits, itemIndex, path, display, siblingKeys);
+  if (out === null && ctx.scanNumbers) out = redactText(text, numCtx, vault, sessionId, hits, itemIndex, display);
+  if (out === null || out === text) return value;
+  const entry = vault.getSession(sessionId)?.entries[out];
+  if (entry && entry.original === text) entry.numeric = true;
+  return out;
 }
 
-/** Keys can carry PII too, so they are scanned like text and kept unique within the object. */
+/** Keys can carry PII too, so they are scanned like text and never take another key's name. */
 function redactKey(
   key: string,
   taken: Record<string, unknown>,
+  sourceKeys: Set<string>,
   ctx: RedactionContext,
   vault: IVault,
   sessionId: string,
   itemIndex: number,
   keyHits: RedactionHit[],
 ): string {
-  let out = redactText(key, ctx, vault, sessionId, keyHits, itemIndex, '');
+  const out = redactText(key, ctx, vault, sessionId, keyHits, itemIndex, '');
   if (out === key) return key;
-  const base = out;
-  for (let n = 1; out === '' || out in taken; n++) out = `${base}_${n}`;
-  return out;
+  const clashes = (k: string) => k === '' || k in taken || sourceKeys.has(k);
+  if (!clashes(out)) return out;
+  if (ctx.mode === 'token' || ctx.mode === 'pseudonymize') {
+    // A dedicated token for the whole key keeps it reversible.
+    const token = freshToken('KEY', vault, sessionId, new Set([...(ctx.reservedTokens ?? []), ...sourceKeys, ...Object.keys(taken)]));
+    vault.addEntry(sessionId, { token, original: key, patternLabel: 'KEY', category: 'other', createdAt: new Date().toISOString() });
+    return token;
+  }
+  let suffixed = out;
+  for (let n = 1; clashes(suffixed); n++) suffixed = `${out}_${n}`;
+  return suffixed;
 }
 
 function redactObject(
@@ -677,17 +715,21 @@ function redactObject(
 ): Record<string, unknown> {
   const entries = Object.entries(value);
   const siblingKeys = entries.map(([k]) => k);
+  const sourceKeys = new Set(siblingKeys);
+  const origins = new Map<string, string>();
   const obj: Record<string, unknown> = {};
   for (const [k, v] of entries) {
     const fieldPath = path ? `${path}.${k}` : k;
     const keyHits: RedactionHit[] = [];
     const outKey = shouldProcessField(fieldPath, ctx.fieldMode, ctx.fieldRules)
-      ? redactKey(k, obj, ctx, vault, sessionId, itemIndex, keyHits)
+      ? redactKey(k, obj, sourceKeys, ctx, vault, sessionId, itemIndex, keyHits)
       : k;
+    origins.set(outKey, k);
     const childDisplay = display ? `${display}.${outKey}` : outKey;
     for (const h of keyHits) hits.push({ ...h, field: childDisplay });
     obj[outKey] = redactValue(v, ctx, vault, sessionId, hits, itemIndex, fieldPath, siblingKeys, childDisplay);
   }
+  ctx.keyOrigins?.set(obj, origins);
   return obj;
 }
 
@@ -732,9 +774,143 @@ export function redactValue(
   return value;
 }
 
-/**
- * Redact PII in a text string.
- */
+const escapeRe = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+interface Segment {
+  text: string;
+  locked: boolean;
+}
+
+/** Splits text into free segments and locked ones, the replacements this pass already produced. */
+function segments(text: string, produced: Set<string>): Segment[] {
+  if (produced.size === 0) return [{ text, locked: false }];
+  const guard = new RegExp([...produced].sort((a, b) => b.length - a.length).map(escapeRe).join('|'), 'g');
+  const out: Segment[] = [];
+  let last = 0;
+  for (const m of text.matchAll(guard)) {
+    const at = m.index ?? 0;
+    if (at > last) out.push({ text: text.slice(last, at), locked: false });
+    out.push({ text: m[0], locked: true });
+    last = at + m[0].length;
+  }
+  if (last < text.length) out.push({ text: text.slice(last), locked: false });
+  return out;
+}
+
+type Replacer = (match: string, ...args: unknown[]) => string;
+
+/** Replaces only in free segments, so one detector never edits another detector's output. */
+function replaceOutside(text: string, produced: Set<string>, re: RegExp, fn: Replacer): string {
+  return segments(text, produced)
+    .map((seg) => (seg.locked ? seg.text : seg.text.replace(new RegExp(re.source, re.flags), fn)))
+    .join('');
+}
+
+function occursOutside(text: string, produced: Set<string>, needle: string): boolean {
+  return segments(text, produced).some((seg) => !seg.locked && seg.text.includes(needle));
+}
+
+/** State shared by the stages of one text pass. */
+interface TextPass {
+  source: string;
+  result: string;
+  produced: Set<string>;
+  threshold: number;
+  ctx: RedactionContext;
+  vault: IVault;
+  sessionId: string;
+  hits: RedactionHit[];
+  itemIndex: number;
+  fieldPath: string;
+}
+
+type HitDetail = Pick<RedactionHit, 'patternName' | 'patternLabel' | 'category' | 'confidence'>;
+
+/** Stores the replacement, records the hit, and locks the replacement against later stages. */
+function redactMatch(pass: TextPass, match: string, pattern: RedactionPattern, detail: HitDetail): string {
+  const { ctx, vault, sessionId } = pass;
+  const replacement = applyRedaction(match, pattern, ctx.mode, vault, sessionId, ctx.dedup, ctx.reservedTokens);
+  pass.hits.push({ token: replacement, original: '***', field: pass.fieldPath, itemIndex: pass.itemIndex, ...detail });
+  if (replacement) pass.produced.add(replacement);
+  return replacement;
+}
+
+function denyListRegex(entry: AllowDenyEntry): RegExp | null {
+  if (entry.type === 'regex') return isSafeRegex(entry.value) ? new RegExp(entry.value, 'gi') : null;
+  return new RegExp(escapeRe(entry.value), 'gi'); // exact and contains match without \b, so #SECRET works
+}
+
+function denyListStage(pass: TextPass): void {
+  for (const entry of pass.ctx.denyList ?? []) {
+    try {
+      const re = denyListRegex(entry);
+      if (!re) continue;
+      pass.result = replaceOutside(pass.result, pass.produced, re, (match) =>
+        TOKEN_RE.test(match)
+          ? match
+          : redactMatch(pass, match, { label: 'DENY_LIST', category: 'other' }, {
+              patternName: 'denyList', patternLabel: 'DENY_LIST', category: 'other', confidence: DENY_LIST_CONFIDENCE,
+            }),
+      );
+    } catch { /* skip invalid */ }
+  }
+}
+
+function builtInMatch(pass: TextPass, pattern: PiiPattern, match: string, args: unknown[]): string {
+  if (TOKEN_RE.test(match) || (match.startsWith('[') && match.endsWith(']'))) return match;
+  const validatorPassed = pattern.validate ? pattern.validate(match) : true;
+  if (!validatorPassed || isAllowListed(match, pass.ctx.allowList)) return match;
+  const offsetArg = args[args.length - 2];
+  const offset = typeof offsetArg === 'number' ? offsetArg : 0;
+  const confidence = calculateConfidence(pattern.name, !!pattern.validate, validatorPassed, pass.source, offset, offset + match.length);
+  if (confidence < pass.threshold) return match;
+  return redactMatch(pass, match, pattern, {
+    patternName: pattern.name, patternLabel: pattern.label, category: pattern.category, confidence,
+  });
+}
+
+// Checksum-validated patterns (IBAN, cards) claim their text first, so a loose pattern cannot grab digits inside them.
+function builtInStage(pass: TextPass): void {
+  const enabled = getPatternsByNames(pass.ctx.enabledPatterns);
+  for (const pattern of [...enabled.filter((p) => p.validate), ...enabled.filter((p) => !p.validate)]) {
+    const re = new RegExp(pattern.regex.source, pattern.regex.flags);
+    pass.result = replaceOutside(pass.result, pass.produced, re, (match, ...args) => builtInMatch(pass, pattern, match, args));
+  }
+}
+
+function nameStage(pass: TextPass): void {
+  if (pass.ctx.skipSemantic) return;
+  for (const nm of detectNamesInText(pass.result)) {
+    if ((nm.name.includes('[') && nm.name.includes(']')) || isAllowListed(nm.name, pass.ctx.allowList)) continue;
+    const confidence = hasContextWords(pass.source, nm.start, nm.end, NAME_CONTEXT_WORDS) ? 0.8 : 0.65;
+    if (confidence < pass.threshold || !occursOutside(pass.result, pass.produced, nm.name)) continue;
+    const before = new Set(pass.produced);
+    const replacement = redactMatch(pass, nm.name, { label: 'PERSON_NAME', category: 'identity' }, {
+      patternName: 'personNameDict', patternLabel: 'PERSON_NAME', category: 'identity', confidence,
+    });
+    pass.result = replaceOutside(pass.result, before, new RegExp(escapeRe(nm.name), 'g'), () => replacement);
+  }
+}
+
+function customStage(pass: TextPass): void {
+  if (CUSTOM_PATTERN_CONFIDENCE < pass.threshold) return;
+  for (const cp of pass.ctx.customPatterns) {
+    if (!cp.label || !cp.regex || !isSafeRegex(cp.regex)) continue;
+    const pattern = { label: cp.label.toUpperCase(), category: (cp.category as PiiCategory) || 'identity' };
+    try {
+      pass.result = replaceOutside(pass.result, pass.produced, new RegExp(cp.regex, 'g'), (match) =>
+        TOKEN_RE.test(match) || isAllowListed(match, pass.ctx.allowList)
+          ? match
+          : redactMatch(pass, match, pattern, {
+              patternName: `custom_${cp.label}`, patternLabel: pattern.label, category: pattern.category,
+              confidence: CUSTOM_PATTERN_CONFIDENCE,
+            }),
+      );
+    } catch { /* skip invalid regex */ }
+  }
+}
+
+/** Redacts PII in a text string. Each stage leaves earlier replacements untouched. */
 function redactText(
   text: string,
   ctx: RedactionContext,
@@ -744,156 +920,15 @@ function redactText(
   itemIndex: number,
   fieldPath: string,
 ): string {
-  let result = text;
-  const threshold = ctx.confidenceThreshold ?? 0;
-
-  // ─── DENY LIST: always redact these values first ───
-  if (ctx.denyList && ctx.denyList.length > 0) {
-    for (const entry of ctx.denyList) {
-      try {
-        let re: RegExp;
-        switch (entry.type) {
-          case 'regex':
-            if (!isSafeRegex(entry.value)) continue;
-            re = new RegExp(entry.value, 'gi');
-            break;
-          case 'contains':
-            re = new RegExp(entry.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-            break;
-          default: // exact — use escaped string without \b to match #SECRET, @values etc.
-            re = new RegExp(entry.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-        }
-        result = result.replace(re, (match) => {
-          if (TOKEN_RE.test(match)) return match;
-          const replacement = applyRedaction(
-            match, { label: 'DENY_LIST', category: 'other' as PiiCategory }, ctx.mode, vault, sessionId, ctx.dedup,
-          );
-          hits.push({
-            token: replacement, original: '***',
-            patternName: 'denyList', patternLabel: 'DENY_LIST',
-            category: 'other', field: fieldPath, itemIndex,
-            confidence: DENY_LIST_CONFIDENCE,
-          });
-          return replacement;
-        });
-      } catch { /* skip invalid */ }
-    }
-  }
-
-  // ─── BUILT-IN PATTERNS with confidence scoring ───
-  // Checksum-validated patterns (IBAN, cards) claim their text first, so a loose
-  // pattern such as a phone number cannot grab digits from inside them.
-  const enabled = getPatternsByNames(ctx.enabledPatterns);
-  const activePatterns = [...enabled.filter((p) => p.validate), ...enabled.filter((p) => !p.validate)];
-  for (const pattern of activePatterns) {
-    const re = new RegExp(pattern.regex.source, pattern.regex.flags);
-    result = result.replace(re, (match, ...args) => {
-      // Skip already-redacted tokens
-      if (TOKEN_RE.test(match) || (match.startsWith('[') && match.endsWith(']'))) return match;
-
-      // Run validator if present
-      const validatorPassed = pattern.validate ? pattern.validate(match) : true;
-      if (pattern.validate && !validatorPassed) return match;
-
-      // Allow list check: skip if value is allow-listed
-      if (isAllowListed(match, ctx.allowList)) return match;
-
-      // Calculate confidence score
-      const matchOffset = typeof args[args.length - 2] === 'number' ? args[args.length - 2] : 0;
-      const confidence = calculateConfidence(
-        pattern.name, !!pattern.validate, validatorPassed,
-        text, matchOffset, matchOffset + match.length,
-      );
-
-      // Skip if below confidence threshold
-      if (confidence < threshold) return match;
-
-      const replacement = applyRedaction(
-        match, pattern, ctx.mode, vault, sessionId, ctx.dedup,
-      );
-
-      hits.push({
-        token: replacement, original: '***',
-        patternName: pattern.name, patternLabel: pattern.label,
-        category: pattern.category, field: fieldPath, itemIndex,
-        confidence,
-      });
-
-      return replacement;
-    });
-  }
-
-  // ─── NAME DICTIONARY detection (free-text names) ───
-  if (!ctx.skipSemantic) {
-    const nameMatches = detectNamesInText(result);
-    for (const nm of nameMatches) {
-      // Skip if already redacted (contains token brackets)
-      if (nm.name.includes('[') && nm.name.includes(']')) continue;
-
-      // Allow list check
-      if (isAllowListed(nm.name, ctx.allowList)) continue;
-
-      // Calculate confidence with context words
-      let nameConfidence = 0.65;
-      if (hasContextWords(text, nm.start, nm.end, NAME_CONTEXT_WORDS)) {
-        nameConfidence = 0.80;
-      }
-
-      if (nameConfidence < threshold) continue;
-
-      const replacement = applyRedaction(
-        nm.name, { label: 'PERSON_NAME', category: 'identity' as PiiCategory },
-        ctx.mode, vault, sessionId, ctx.dedup,
-      );
-
-      // Replace in result
-      result = result.split(nm.name).join(replacement);
-
-      hits.push({
-        token: replacement, original: '***',
-        patternName: 'personNameDict', patternLabel: 'PERSON_NAME',
-        category: 'identity', field: fieldPath, itemIndex,
-        confidence: nameConfidence,
-      });
-    }
-  }
-
-  // ─── CUSTOM PATTERNS with safety validation ───
-  for (const cp of ctx.customPatterns) {
-    if (!cp.label || !cp.regex) continue;
-    if (!isSafeRegex(cp.regex)) continue;
-    try {
-      const re = new RegExp(cp.regex, 'g');
-      result = result.replace(re, (match) => {
-        if (TOKEN_RE.test(match)) return match;
-        if (isAllowListed(match, ctx.allowList)) return match;
-
-        if (CUSTOM_PATTERN_CONFIDENCE < threshold) return match;
-
-        const pseudoPattern = {
-          label: cp.label.toUpperCase(),
-          category: (cp.category as PiiCategory) || 'identity',
-        };
-
-        const replacement = applyRedaction(
-          match, pseudoPattern, ctx.mode, vault, sessionId, ctx.dedup,
-        );
-
-        hits.push({
-          token: replacement, original: '***',
-          patternName: `custom_${cp.label}`, patternLabel: pseudoPattern.label,
-          category: pseudoPattern.category, field: fieldPath, itemIndex,
-          confidence: CUSTOM_PATTERN_CONFIDENCE,
-        });
-
-        return replacement;
-      });
-    } catch {
-      // Skip invalid regex
-    }
-  }
-
-  return result;
+  const pass: TextPass = {
+    source: text, result: text, produced: new Set(), threshold: ctx.confidenceThreshold ?? 0,
+    ctx, vault, sessionId, hits, itemIndex, fieldPath,
+  };
+  denyListStage(pass);
+  builtInStage(pass);
+  nameStage(pass);
+  customStage(pass);
+  return pass.result;
 }
 
 /** Single pass over the source string, so an inserted original is never rescanned as a token. */
@@ -904,13 +939,17 @@ function makeRestorer(entries: Record<string, { original: string }>): (text: str
   return (text) => text.replace(re, (token) => entries[token].original);
 }
 
-function restoreWith(value: unknown, restore: (text: string) => string): unknown {
-  if (typeof value === 'string') return restore(value);
-  if (Array.isArray(value)) return value.map((v) => restoreWith(v, restore));
+function restoreWith(value: unknown, restore: (text: string) => string, entries: Record<string, VaultEntry>): unknown {
+  if (typeof value === 'string') {
+    const exact = entries[value];
+    if (exact?.numeric && Number.isFinite(Number(exact.original))) return Number(exact.original);
+    return restore(value);
+  }
+  if (Array.isArray(value)) return value.map((v) => restoreWith(v, restore, entries));
   if (value !== null && typeof value === 'object') {
     const obj: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      obj[restore(k)] = restoreWith(v, restore);
+      obj[restore(k)] = restoreWith(v, restore, entries);
     }
     return obj;
   }
@@ -923,7 +962,7 @@ function restoreWith(value: unknown, restore: (text: string) => string): unknown
 export function restoreValue(value: unknown, vault: IVault, sessionId: string): unknown {
   const session = vault.getSession(sessionId);
   if (!session) return value;
-  return restoreWith(value, makeRestorer(session.entries));
+  return restoreWith(value, makeRestorer(session.entries), session.entries);
 }
 
 interface Span {
@@ -974,7 +1013,7 @@ async function presidioRedactString(
     if (isAllowListed(matchedText, ctx.allowList)) continue;
     const label = getRedactorLabel(span.entityType);
     const category = getRedactorCategory(span.entityType) as PiiCategory;
-    const replacement = applyRedaction(matchedText, { label, category }, ctx.mode, vault, sessionId, ctx.dedup);
+    const replacement = applyRedaction(matchedText, { label, category }, ctx.mode, vault, sessionId, ctx.dedup, ctx.reservedTokens);
     text = text.slice(0, span.start) + replacement + text.slice(span.end);
     hits.push({
       token: replacement, original: '***',
@@ -993,9 +1032,10 @@ async function presidioWalk(
   hits: RedactionHit[],
   itemIndex: number,
   path: string,
+  policyPath: string,
 ): Promise<unknown> {
   if (typeof value === 'string') {
-    if (!shouldProcessField(path, ctx.fieldMode, ctx.fieldRules)) return value;
+    if (!shouldProcessField(policyPath, ctx.fieldMode, ctx.fieldRules)) return value;
     try {
       return await presidioRedactString(value, ctx, vault, sessionId, hits, itemIndex, path);
     } catch {
@@ -1004,13 +1044,19 @@ async function presidioWalk(
   }
   if (Array.isArray(value)) {
     const out: unknown[] = [];
-    for (let i = 0; i < value.length; i++) out.push(await presidioWalk(value[i], ctx, vault, sessionId, hits, itemIndex, `${path}[${i}]`));
+    for (let i = 0; i < value.length; i++) {
+      out.push(await presidioWalk(value[i], ctx, vault, sessionId, hits, itemIndex, `${path}[${i}]`, `${policyPath}[${i}]`));
+    }
     return out;
   }
   if (value !== null && typeof value === 'object') {
+    const origins = ctx.keyOrigins?.get(value);
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = await presidioWalk(v, ctx, vault, sessionId, hits, itemIndex, path ? `${path}.${k}` : k);
+      const original = origins?.get(k) ?? k;
+      const child = path ? `${path}.${k}` : k;
+      const childPolicy = policyPath ? `${policyPath}.${original}` : original;
+      out[k] = await presidioWalk(v, ctx, vault, sessionId, hits, itemIndex, child, childPolicy);
     }
     return out;
   }
@@ -1030,7 +1076,7 @@ export async function enhanceWithPresidio(
   itemIndex: number,
 ): Promise<Record<string, unknown>> {
   if (!ctx.presidioUrl) return data;
-  return (await presidioWalk(data, ctx, vault, sessionId, hits, itemIndex, '')) as Record<string, unknown>;
+  return (await presidioWalk(data, ctx, vault, sessionId, hits, itemIndex, '', '')) as Record<string, unknown>;
 }
 
 /**

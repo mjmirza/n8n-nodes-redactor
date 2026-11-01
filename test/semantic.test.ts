@@ -328,7 +328,7 @@ describe('Semantic detection: Full round-trip with real-world data', () => {
     expect(restored.name).toBe('Amelia Ramirez');
     expect(restored.department).toBe('Finance');
     expect(restored.position).toBe('Senior Analyst');
-    expect(restored.salary).toBe('85000'); // restored as string (currency-safe)
+    expect(restored.salary).toBe(85000); // numbers restore as numbers since 4.1.1
     expect(restored.company).toBe('Exacta GmbH');
   });
 });

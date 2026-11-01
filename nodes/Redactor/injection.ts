@@ -262,6 +262,13 @@ const INJECTION_PATTERNS: InjectionPattern[] = [
 ];
 
 /** Zero-width and invisible Unicode characters used for evasion */
+/** Every static detector description, so diagnostics can be reduced to these and nothing else. */
+export const INJECTION_DESCRIPTIONS: readonly string[] = [
+  ...INJECTION_PATTERNS.map((p) => p.description),
+  'Invisible Unicode characters detected',
+  'Base64-encoded injection payload detected',
+];
+
 const ZERO_WIDTH_RE = /(?:\u200B|\u200C|\u200D|\uFEFF|\u00AD|\u2060|\u2061|\u2062|\u2063|\u2064|\u2066|\u2067|\u2068|\u2069|\u206A|\u206B|\u206C|\u206D|\u206E|\u206F)/g;
 
 /** Detect Base64-encoded strings that might contain injection payloads */

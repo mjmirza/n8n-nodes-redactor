@@ -15,6 +15,14 @@ export interface IVault {
   listSessions(): Array<{ sessionId: string; entryCount: number; createdAt: string; ttl: number }>;
   save(sessionId: string): void;
   cleanup(): number; // returns number of expired sessions removed
+  // Erasure removes every record, expired or unreadable included, never only the live ones.
+  purgeAll(): PurgeResult;
+  purgeSession(sessionId: string): { found: boolean; entries: number | null };
+}
+
+export interface PurgeResult {
+  sessions: number;
+  entries: number;
 }
 
 function isExpired(createdAt: string, ttl: number, now = Date.now()): boolean {
@@ -107,6 +115,23 @@ export class MemoryVault implements IVault {
 
   deleteSession(sessionId: string): void {
     this.drop(this.key(sessionId));
+  }
+
+  // Called through IVault from the Purge operation, so it is not dead code.
+  // fallow-ignore-next-line unused-class-member
+  purgeAll(): PurgeResult {
+    const keys = this.ownKeys();
+    const entries = keys.reduce((n, k) => n + Object.keys(memoryStore.get(k)?.entries ?? {}).length, 0);
+    keys.forEach((k) => this.drop(k));
+    return { sessions: keys.length, entries };
+  }
+
+  // Called through IVault from the Purge operation, so it is not dead code.
+  // fallow-ignore-next-line unused-class-member
+  purgeSession(sessionId: string): { found: boolean; entries: number | null } {
+    const session = memoryStore.get(this.key(sessionId));
+    this.deleteSession(sessionId);
+    return { found: !!session, entries: session ? Object.keys(session.entries).length : null };
   }
 
   listSessions(): Array<{ sessionId: string; entryCount: number; createdAt: string; ttl: number }> {
@@ -251,6 +276,29 @@ export class WorkflowVault implements IVault {
     this.cache.delete(sessionId);
     const k = this.key(sessionId);
     if (k in this.sessions) delete this.writableSessions()[k];
+  }
+
+  // Called through IVault from the Purge operation, so it is not dead code.
+  // fallow-ignore-next-line unused-class-member
+  purgeAll(): PurgeResult {
+    const stored = Object.values(this.sessions);
+    const entries = stored.reduce((n, rec) => {
+      const session = rec && typeof rec === 'object' ? this.decode(rec) : null;
+      return n + (session ? Object.keys(session.entries).length : 0);
+    }, 0);
+    this.cache.clear();
+    if (stored.length) this.store[STORE_KEY] = {};
+    return { sessions: stored.length, entries };
+  }
+
+  /** Deletes by stored key, so expired or unreadable records go too. Called through IVault. */
+  // fallow-ignore-next-line unused-class-member
+  purgeSession(sessionId: string): { found: boolean; entries: number | null } {
+    const stored = this.sessions[this.key(sessionId)];
+    const live = this.cache.get(sessionId) ?? (stored && typeof stored === 'object' ? this.decode(stored) : null);
+    const found = !!stored || this.cache.has(sessionId);
+    this.deleteSession(sessionId);
+    return { found, entries: live && live.sessionId === sessionId ? Object.keys(live.entries).length : null };
   }
 
   listSessions(): Array<{ sessionId: string; entryCount: number; createdAt: string; ttl: number }> {
