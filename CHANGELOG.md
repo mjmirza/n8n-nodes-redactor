@@ -4,7 +4,24 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
-Planned: random scoped tokens, and numbers restored as numbers.
+Planned: random scoped tokens.
+
+## [4.2.0] - 2026-11-01
+
+Fixes every finding from a second adversarial security review, run against 4.1.0. Each one has a regression test in `test/codex-review-41.test.ts`.
+
+### Security
+- **An attached Vault credential could fail open.** If it could not be decrypted, the node fell back to the empty legacy passphrase and stored originals in plain text. An attached credential that cannot be read, or has an empty passphrase, now stops the run before anything is stored. The legacy parameter is used only when no credential is attached.
+- **Injection diagnostics could still carry content.** A value matched by a custom pattern or deny list could appear in a diagnostic field path. Diagnostics now carry only the detector category, description, severity and score.
+- **Presidio could receive excluded fields.** When a parent key was redacted, Presidio checked field rules against the redacted path and missed the exclusion. Field rules now always use the original path.
+- **Purge left expired records behind.** Purge All and Purge Specific skipped sessions that had expired or could not be decrypted, while reporting success. Both now delete by stored record.
+
+### Fixed
+- Redact now scans numeric values, so a card number stored as a JSON number is redacted. A number that becomes a whole token restores as a number.
+- A later detector could edit a token that an earlier one produced, such as a digit pattern rewriting `[EMAIL_1]`, which lost data on Restore. Each detector now leaves earlier replacements untouched.
+- A redacted key could overwrite another key, and a generated token could equal token-shaped text already in the input. Generated tokens now skip anything token-shaped in the input, and redacted keys never take another key's name.
+- Regexes such as `^(?:(?:a|aa))+$` and `^(a?)+$` passed the safety check. Alternation and optional atoms now count inside wrapper groups.
+- A pseudonym could equal the original name. It never does now.
 
 ## [4.1.0] - 2026-11-01
 

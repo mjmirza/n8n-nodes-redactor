@@ -2,41 +2,11 @@
  * 2.0 behaviour through the real execute(): workflow-storage vault, audit records on the
  * Report output, JSON tenant profiles, and Presidio over n8n's HTTP helper.
  */
-import type { IDataObject, IExecuteFunctions, INodeExecutionData } from 'n8n-workflow';
+import type { IDataObject } from 'n8n-workflow';
 import { Redactor } from '../nodes/Redactor/Redactor.node';
 import { resetCircuitBreaker } from '../nodes/Redactor/presidio';
 
-interface RunOptions {
-  staticData?: IDataObject;
-  httpRequest?: jest.Mock;
-}
-
-function run(
-  params: Record<string, unknown>,
-  items: IDataObject[],
-  opts: RunOptions = {},
-): Promise<INodeExecutionData[][]> {
-  const input: INodeExecutionData[] = items.map((json) => ({ json }));
-  const staticData = opts.staticData ?? {};
-  const ctx = {
-    getInputData: () => input,
-    getNode: () => ({ name: 'Redactor', type: 'n8n-nodes-redactor.redactor', typeVersion: 1 }),
-    getNodeParameter: (name: string, _i: number, fallback?: unknown) => {
-      if (name in params) return params[name];
-      if (fallback !== undefined) return fallback;
-      throw new Error(`Could not get parameter: ${name}`);
-    },
-    getWorkflowStaticData: jest.fn((type: string) => {
-      if (type !== 'global') throw new Error(`unexpected static data scope ${type}`);
-      return staticData;
-    }),
-    helpers: { httpRequest: opts.httpRequest ?? jest.fn() },
-  } as unknown as IExecuteFunctions;
-  return new Redactor().execute.call(ctx);
-}
-
-/** n8n saves static data as JSON after a production run. */
-const persist = (data: IDataObject): IDataObject => JSON.parse(JSON.stringify(data));
+import { run, persist } from './harness';
 
 describe('execute v2: workflow storage vault', () => {
   it('defaults to workflow storage and restores in a later execution', async () => {

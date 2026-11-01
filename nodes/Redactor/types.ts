@@ -68,6 +68,8 @@ export interface VaultEntry {
   patternLabel: string;
   category: PiiCategory;
   createdAt: string;
+  // Set when the original was a JSON number, so Restore returns a number.
+  numeric?: boolean;
 }
 
 export interface VaultSession {
@@ -115,4 +117,8 @@ export interface RedactionContext {
   presidioLanguage?: string;
   /** HTTP transport for Presidio, supplied by the node */
   presidioRequest?: PresidioRequester;
+  // Token-shaped text already in the input; generated tokens never reuse it.
+  reservedTokens?: Set<string>;
+  // Output object to its key origins, so Presidio applies field rules to original paths.
+  keyOrigins?: WeakMap<object, Map<string, string>>;
 }

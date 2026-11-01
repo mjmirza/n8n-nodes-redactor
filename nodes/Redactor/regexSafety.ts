@@ -83,12 +83,17 @@ function isRisky(frame: GroupFrame | null): boolean {
   return !!frame && (frame.hasVariableQuantifier || frame.hasAlternation);
 }
 
+const NO_GROUP: GroupFrame = { hasVariableQuantifier: false, hasAlternation: false };
+const repeats = (q: Quantifier | null): boolean => q !== null && q.max > 1;
+const isVariable = (q: Quantifier | null): boolean => q !== null && q.min !== q.max;
+
 /** Applies a quantifier to the atom just read. Returns an error for nested repetition. */
 function applyQuantifier(q: Quantifier | null, closed: GroupFrame | null, top: GroupFrame): string | null {
-  const repeats = q !== null && q.max > 1;
-  if (repeats && isRisky(closed)) return NESTED;
-  const variable = repeats && q.min !== q.max;
-  top.hasVariableQuantifier = top.hasVariableQuantifier || variable || !!closed?.hasVariableQuantifier;
+  if (repeats(q) && isRisky(closed)) return NESTED;
+  // Optional atoms count as variable, and alternation survives closing a group, so wrappers cannot hide either.
+  const inner = closed ?? NO_GROUP;
+  top.hasVariableQuantifier ||= isVariable(q) || inner.hasVariableQuantifier;
+  top.hasAlternation ||= inner.hasAlternation;
   return null;
 }
 

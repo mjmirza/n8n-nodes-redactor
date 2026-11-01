@@ -49,6 +49,13 @@ Sessions written before the change keep working, because the passphrase is the s
 - Detect and Verify scan numeric values, so a card number stored as a number is reported.
 - In-Memory sessions are kept per workflow. A workflow can no longer list, restore or purge another workflow's sessions.
 
+## Behaviour changes in 4.2
+
+- An attached Redactor Vault credential that cannot be read, or has an empty passphrase, stops the run. Re-enter the passphrase in the credential, or remove the credential to use the legacy field.
+- Redact scans numbers as well as text, so a number that matches a pattern, such as a card number, is replaced. Restore returns it as a number. A semantic field such as a salary also restores as a number now, where 4.1 returned a string.
+- The regex safety check also refuses alternation or optional parts hidden inside a wrapper group, such as `^(?:(?:a|aa))+$` or `(a?)+`.
+- Purge removes expired sessions and sessions encrypted with a different passphrase too.
+
 ## Tenant profile fields
 
 All fields are optional. Unknown fields are rejected so a typo never passes silently.

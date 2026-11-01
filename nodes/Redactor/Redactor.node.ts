@@ -14,7 +14,7 @@ import {
 
 import { getPatternOptions } from './patterns';
 import { createVault } from './vault';
-import { redactValue, restoreValue, buildReport, enhanceWithPresidio } from './engine';
+import { redactValue, restoreValue, buildReport, enhanceWithPresidio, collectTokenLike } from './engine';
 import {
   CustomPattern,
   RedactionContext,
@@ -1208,6 +1208,10 @@ export class Redactor implements INodeType {
         presidioUrl: enablePresidio ? presidioUrl : undefined,
         presidioLanguage: enablePresidio ? presidioLanguage : undefined,
         presidioRequest: enablePresidio ? presidioRequester : undefined,
+        // Numbers reach the LLM as text, so Redact scans them like Detect and Verify do.
+        scanNumbers: true,
+        reservedTokens: collectTokenLike(items.map((it) => it.json)),
+        keyOrigins: new WeakMap(),
       };
 
       const allHits: RedactionHit[] = [];
@@ -1340,47 +1344,28 @@ export class Redactor implements INodeType {
         if (!purgeSessionId) {
           throw new NodeOperationError(this.getNode(), 'Session ID is required for purging a specific session.');
         }
-        const session = vault.getSession(purgeSessionId);
-        if (session) {
-          const entryCount = Object.keys(session.entries).length;
-          vault.deleteSession(purgeSessionId);
-          return [[{
-            json: {
-              purged: true,
-              sessionId: purgeSessionId,
-              entriesDeleted: entryCount,
-              message: `Session purged successfully.`,
-            } as unknown as IDataObject,
-            pairedItem: allPaired,
-          }]];
-        } else {
-          return [[{
-            json: {
-              purged: false,
-              sessionId: purgeSessionId,
-              message: `No session found with this ID.`,
-            } as unknown as IDataObject,
-            pairedItem: allPaired,
-          }]];
-        }
-      } else {
-        // Purge ALL sessions
-        const sessions = vault.listSessions();
-        let totalEntries = 0;
-        for (const s of sessions) {
-          totalEntries += s.entryCount;
-          vault.deleteSession(s.sessionId);
-        }
+        const purged = vault.purgeSession(purgeSessionId);
         return [[{
           json: {
-            purged: true,
-            sessionsPurged: sessions.length,
-            totalEntriesDeleted: totalEntries,
-            message: `All ${sessions.length} session(s) purged successfully.`,
+            purged: purged.found,
+            sessionId: purgeSessionId,
+            ...(purged.found ? { entriesDeleted: purged.entries } : {}),
+            message: purged.found ? 'Session purged successfully.' : 'No session found with this ID.',
           } as unknown as IDataObject,
           pairedItem: allPaired,
         }]];
       }
+      // Purge ALL sessions, expired and unreadable records included
+      const all = vault.purgeAll();
+      return [[{
+        json: {
+          purged: true,
+          sessionsPurged: all.sessions,
+          totalEntriesDeleted: all.entries,
+          message: `All ${all.sessions} session(s) purged successfully.`,
+        } as unknown as IDataObject,
+        pairedItem: allPaired,
+      }]];
     }
 
     return [[]];

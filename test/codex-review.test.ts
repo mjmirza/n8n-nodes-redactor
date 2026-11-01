@@ -2,7 +2,7 @@
  * Regression tests for the 4.0.0 Codex attack review, one block per finding.
  * Each test reproduces the failing scenario from the review.
  */
-import type { IDataObject, IExecuteFunctions, INodeExecutionData } from 'n8n-workflow';
+import type { IDataObject } from 'n8n-workflow';
 import { Redactor } from '../nodes/Redactor/Redactor.node';
 import { RedactorVaultApi } from '../credentials/RedactorVaultApi.credentials';
 import { MemoryVault, WorkflowVault } from '../nodes/Redactor/vault';
@@ -12,36 +12,7 @@ import { checkRegex } from '../nodes/Redactor/regexSafety';
 import { resetCircuitBreaker, PresidioRequester } from '../nodes/Redactor/presidio';
 import { RedactionContext, RedactionHit } from '../nodes/Redactor/types';
 
-interface RunOptions {
-  staticData?: IDataObject;
-  httpRequest?: jest.Mock;
-  workflowId?: string;
-  credential?: IDataObject;
-}
-
-function run(params: Record<string, unknown>, items: IDataObject[], opts: RunOptions = {}): Promise<INodeExecutionData[][]> {
-  const input: INodeExecutionData[] = items.map((json) => ({ json }));
-  const staticData = opts.staticData ?? {};
-  const ctx = {
-    getInputData: () => input,
-    getNode: () => ({ name: 'Redactor', type: 'n8n-nodes-redactor.redactor', typeVersion: 1 }),
-    getWorkflow: () => ({ id: opts.workflowId ?? 'wf-default', active: true }),
-    getCredentials: jest.fn(async () => {
-      if (!opts.credential) throw new Error('Node does not have any credentials set');
-      return opts.credential;
-    }),
-    getNodeParameter: (name: string, _i: number, fallback?: unknown) => {
-      if (name in params) return params[name];
-      if (fallback !== undefined) return fallback;
-      throw new Error(`Could not get parameter: ${name}`);
-    },
-    getWorkflowStaticData: () => staticData,
-    helpers: { httpRequest: opts.httpRequest ?? jest.fn() },
-  } as unknown as IExecuteFunctions;
-  return new Redactor().execute.call(ctx);
-}
-
-const persist = (data: IDataObject): IDataObject => JSON.parse(JSON.stringify(data));
+import { run, persist } from './harness';
 
 function ctxOf(overrides: Partial<RedactionContext> = {}): RedactionContext {
   return {

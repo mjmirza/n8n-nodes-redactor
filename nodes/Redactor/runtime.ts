@@ -1,20 +1,27 @@
 import { IExecuteFunctions, NodeOperationError } from 'n8n-workflow';
-import { getPatternOptions } from './patterns';
-import { createVault } from './vault';
-import { redactValue } from './engine';
 import { checkRegex } from './regexSafety';
-import { AllowDenyEntry, CustomPattern, RedactionContext } from './types';
-import { PromptInjectionResult } from './injection';
+import { AllowDenyEntry, CustomPattern } from './types';
+import { INJECTION_DESCRIPTIONS, PromptInjectionResult } from './injection';
 
 const VAULT_CREDENTIAL = 'redactorVaultApi';
 
 /** The credential wins. The legacy plain-text parameter is read only when no credential is attached. */
 export async function resolvePassphrase(fns: IExecuteFunctions): Promise<string> {
-  try {
-    const cred = await fns.getCredentials(VAULT_CREDENTIAL);
-    if (cred && typeof cred.passphrase === 'string' && cred.passphrase) return cred.passphrase;
-  } catch {
-    // No credential attached. Fall back to the deprecated parameter.
+  if (fns.getNode().credentials?.[VAULT_CREDENTIAL]) {
+    let cred: Record<string, unknown>;
+    try {
+      cred = (await fns.getCredentials(VAULT_CREDENTIAL)) as Record<string, unknown>;
+    } catch (error) {
+      throw new NodeOperationError(fns.getNode(), 'The Redactor Vault credential could not be read, so the vault stays locked.', {
+        description: `Nothing was stored. Re-enter the passphrase in the credential. Cause: ${(error as Error).message}`,
+      });
+    }
+    if (typeof cred.passphrase !== 'string' || cred.passphrase === '') {
+      throw new NodeOperationError(fns.getNode(), 'The Redactor Vault credential has an empty passphrase.', {
+        description: 'Nothing was stored. Set a passphrase in the credential, or remove the credential from the node.',
+      });
+    }
+    return cred.passphrase;
   }
   try {
     return (fns.getNodeParameter('vaultPassphrase', 0, '') as string) || '';
@@ -58,21 +65,14 @@ export function assertUserRegexes(
   }
 }
 
-/** Diagnostics leave the node on the Data output, so every excerpt is redacted first. */
+/** Diagnostics leave the node on the Data output, so they carry detector metadata only, never content or paths. */
 export function sanitizeInjection(result: PromptInjectionResult): PromptInjectionResult {
-  const vault = createVault('memory', undefined, undefined, 'injection-scrub');
-  const sessionId = 'scrub';
-  vault.getOrCreateSession(sessionId, 60000);
-  const ctx: RedactionContext = {
-    enabledPatterns: getPatternOptions().map((p) => p.value),
-    customPatterns: [],
-    mode: 'redact',
-    dedup: false,
-    fieldRules: [],
-    fieldMode: 'all',
-  };
-  const scrub = (text: string): string => redactValue(text, ctx, vault, sessionId, [], 0) as string;
-  const matchedPatterns = result.matchedPatterns.map((m) => ({ ...m, pattern: scrub(m.pattern), matchedText: scrub(m.matchedText) }));
-  vault.deleteSession(sessionId);
+  const matchedPatterns = result.matchedPatterns.map((m) => ({
+    category: m.category,
+    pattern: INJECTION_DESCRIPTIONS.find((d) => m.pattern === d || m.pattern.endsWith(` ${d}`)) ?? 'Prompt injection detector',
+    matchedText: '(withheld)',
+    severity: m.severity,
+    score: m.score,
+  }));
   return { ...result, matchedPatterns };
 }
