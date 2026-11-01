@@ -21,6 +21,7 @@
  *       image: mcr.microsoft.com/presidio-analyzer
  *       ports: ["5002:3000"]
  */
+import { PII_PATTERNS } from './patterns';
 
 /** HTTP transport supplied by the node (this.helpers.httpRequest). Keeps this module free of http/https. */
 export type PresidioRequester = (options: {
@@ -225,7 +226,10 @@ export function getRedactorLabel(presidioEntityType: string): string {
  * Get the PII category for a Presidio entity type.
  */
 export function getRedactorCategory(presidioEntityType: string): string {
-  return PRESIDIO_TO_CATEGORY[presidioEntityType] || 'identity';
+  // A built-in pattern with the same label decides, so both detection paths agree on the category.
+  const label = getRedactorLabel(presidioEntityType);
+  const builtIn = PII_PATTERNS.find((p) => p.label === label);
+  return builtIn?.category ?? PRESIDIO_TO_CATEGORY[presidioEntityType] ?? 'identity';
 }
 
 /**

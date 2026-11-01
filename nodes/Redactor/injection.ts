@@ -269,16 +269,21 @@ export const INJECTION_DESCRIPTIONS: readonly string[] = [
   'Base64-encoded injection payload detected',
 ];
 
-const ZERO_WIDTH_RE = /(?:\u200B|\u200C|\u200D|\uFEFF|\u00AD|\u2060|\u2061|\u2062|\u2063|\u2064|\u2066|\u2067|\u2068|\u2069|\u206A|\u206B|\u206C|\u206D|\u206E|\u206F)/g;
+const ZERO_WIDTH_RE = /(?:\u200B|\u200C|\u200D|\uFEFF|\u00AD|\u2060|\u2061|\u2062|\u2063|\u2064|\u2066|\u2067|\u2068|\u2069|\u206A|\u206B|\u206C|\u206D|\u206E|\u206F)/;
 
 /** Detect Base64-encoded strings that might contain injection payloads */
 const BASE64_SUSPICIOUS_RE = /[A-Za-z0-9+/]{40,}={0,2}/g;
 
-/** Common injection seeds for Base64 decoding check */
-const INJECTION_SEEDS = [
-  'ignore', 'override', 'system', 'prompt', 'instruction', 'jailbreak',
-  'developer mode', 'DAN', 'bypass', 'unrestricted',
-];
+/** Injection seeds for the Base64 decoding check, case-insensitive. DAN needs word edges so "danger" stays clean. */
+const INJECTION_SEED_RE = /ignore|override|system|prompt|instruction|jailbreak|developer mode|\bdan\b|bypass|unrestricted/i;
+
+/** The summary line for a result, so a combined result never carries a stale message. */
+function messageFor(action: InjectionAction, score: number, count: number): string {
+  if (count === 0) return 'No prompt injection detected.';
+  if (action === 'BLOCK') return `BLOCKED: High-confidence prompt injection detected (score: ${score}). ${count} suspicious pattern(s) found.`;
+  if (action === 'FLAG') return `FLAGGED: Potential prompt injection detected (score: ${score}). Review recommended.`;
+  return `Low-confidence match (score: ${score}). Likely safe but logged for review.`;
+}
 
 /**
  * Detect prompt injection attempts in text.
@@ -335,8 +340,7 @@ export function detectPromptInjection(text: string): PromptInjectionResult {
     for (const b64 of base64Matches.slice(0, 5)) { // Check max 5 to avoid perf issues
       try {
         const decoded = Buffer.from(b64, 'base64').toString('utf-8');
-        const decodedLower = decoded.toLowerCase();
-        if (INJECTION_SEEDS.some((seed) => decodedLower.includes(seed))) {
+        if (INJECTION_SEED_RE.test(decoded)) {
           encodedPayloadsFound = true;
           totalScore += 0.35;
           matches.push({
@@ -364,17 +368,7 @@ export function detectPromptInjection(text: string): PromptInjectionResult {
   else if (totalScore >= 0.3) action = 'FLAG';
   else if (matches.length > 0) action = 'LOG_ONLY';
 
-  // Build message
-  let message: string;
-  if (!matches.length) {
-    message = 'No prompt injection detected.';
-  } else if (action === 'BLOCK') {
-    message = `BLOCKED: High-confidence prompt injection detected (score: ${totalScore}). ${matches.length} suspicious pattern(s) found.`;
-  } else if (action === 'FLAG') {
-    message = `FLAGGED: Potential prompt injection detected (score: ${totalScore}). Review recommended.`;
-  } else {
-    message = `Low-confidence match (score: ${totalScore}). Likely safe but logged for review.`;
-  }
+  const message = messageFor(action, totalScore, matches.length);
 
   return {
     detected: matches.length > 0,
@@ -388,16 +382,32 @@ export function detectPromptInjection(text: string): PromptInjectionResult {
 }
 
 /** Every string in objects and arrays, with its path, in a stable order. */
-function collectStrings(value: unknown, path: string, into: Array<{ path: string; text: string }>): void {
+type Field = { path: string; text: string; key?: boolean };
+
+function collectStrings(value: unknown, path: string, into: Field[]): void {
   if (typeof value === 'string') {
     if (value.trim().length > 0) into.push({ path, text: value });
   } else if (Array.isArray(value)) {
     value.forEach((item, i) => collectStrings(item, `${path}[${i}]`, into));
   } else if (value !== null && typeof value === 'object') {
-    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-      collectStrings(item, path ? `${path}.${key}` : key, into);
-    }
+    collectEntries(value as Record<string, unknown>, path, into);
   }
+}
+
+/** Keys reach the model too, so each key is scanned, while its text stays out of the path and diagnostics. */
+function collectEntries(value: Record<string, unknown>, path: string, into: Field[]): void {
+  const keyPath = path ? `${path} (key)` : '(key)';
+  for (const [key, item] of Object.entries(value)) {
+    if (key.trim().length > 0) into.push({ path: keyPath, text: key, key: true });
+    collectStrings(item, path ? `${path}.${key}` : key, into);
+  }
+}
+
+
+/** Hides matched text when it came from a key, since keys can carry personal data. */
+function withheld(result: PromptInjectionResult, key?: boolean): PromptInjectionResult {
+  if (!key) return result;
+  return { ...result, matchedPatterns: result.matchedPatterns.map((m) => ({ ...m, matchedText: '(key text withheld)' })) };
 }
 
 function actionFor(score: number, detected: boolean): PromptInjectionResult['action'] {
@@ -414,10 +424,10 @@ export function scanForInjection(
   data: Record<string, unknown>,
   currentPath: string = '',
 ): PromptInjectionResult {
-  const fields: Array<{ path: string; text: string }> = [];
+  const fields: Field[] = [];
   collectStrings(data, currentPath, fields);
   const found = fields
-    .map((f) => ({ path: f.path, result: detectPromptInjection(f.text) }))
+    .map((f) => ({ path: f.path, result: withheld(detectPromptInjection(f.text), f.key) }))
     .filter((f) => f.result.detected)
     .sort((a, b) => b.result.score - a.result.score || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   if (found.length === 0) {
@@ -426,14 +436,17 @@ export function scanForInjection(
       encodedPayloadsFound: false, zeroWidthCharsFound: false, message: 'No prompt injection detected.',
     };
   }
-  const score = Math.min(1.0, found.slice(1).reduce((sum, f) => sum + f.result.score * 0.3, found[0].result.score));
+  const raw = found.slice(1).reduce((sum, f) => sum + f.result.score * 0.3, found[0].result.score);
+  const score = Math.round(Math.min(1.0, raw) * 100) / 100;
   const matchedPatterns = found.flatMap((f) => f.result.matchedPatterns.map((m) => ({ ...m, pattern: `[${f.path}] ${m.pattern}` })));
   return {
     ...found[0].result,
     detected: true,
     score,
     action: actionFor(score, true),
+    message: messageFor(actionFor(score, true), score, matchedPatterns.length),
     matchedPatterns,
+
     encodedPayloadsFound: found.some((f) => f.result.encodedPayloadsFound),
     zeroWidthCharsFound: found.some((f) => f.result.zeroWidthCharsFound),
   };

@@ -24,14 +24,37 @@ function luhnCheck(num: string): boolean {
  */
 const EMAIL_LOCAL = /[A-Za-z0-9._%+'!#$&*/=?^`{|}~-]/;
 const EMAIL_DOMAIN = /[\p{L}\p{N}.-]/u;
-const EMAIL_DOMAIN_SHAPE = /^[\p{L}\p{N}-]+(?:[.][\p{L}\p{N}-]+)*[.]\p{L}{2,}$/u;
+// A TLD is letters, or an IDNA A-label such as xn--p1ai.
+const EMAIL_DOMAIN_SHAPE = /^[\p{L}\p{N}-]+(?:[.][\p{L}\p{N}-]+)*[.](?:\p{L}{2,}|xn--[a-z0-9-]{2,59})$/iu;
+const QUOTED_LOCAL_MAX = 128;
+
+/** Index of the opening quote of a quoted local part ending at close, honouring backslash escapes. */
+function openingQuote(text: string, close: number): number {
+  for (let j = close - 1; j >= Math.max(0, close - QUOTED_LOCAL_MAX); j--) {
+    if (text[j] === '\r' || text[j] === '\n') return -1;
+    if (text[j] !== '"') continue;
+    let slashes = 0;
+    while (text[j - 1 - slashes] === '\\') slashes++;
+    if (slashes % 2 === 0) return j;
+  }
+  return -1;
+}
+
+/** End of an address literal such as [192.168.1.1] or [IPv6:2001:db8::1], or -1. */
+function addressLiteralEnd(text: string, at: number): number {
+  const close = text.indexOf(']', at + 2);
+  if (close < 0 || close - at > 64) return -1;
+  const inner = text.slice(at + 2, close);
+  const v4 = /^\d{1,3}(?:[.]\d{1,3}){3}$/.test(inner) && inner.split('.').every((n) => Number(n) <= 255);
+  const v6 = /^IPv6:/i.test(inner) && isIpv6(inner.slice(5));
+  return v4 || v6 ? close + 1 : -1;
+}
 
 /** Start of the local part before the @ at at, including a quoted local part. Returns -1 when empty. */
 function emailLocalStart(text: string, at: number): number {
   if (text[at - 1] === '"') {
-    const open = text.lastIndexOf('"', at - 2);
-    const quoted = open >= 0 ? text.slice(open + 1, at - 1) : '';
-    return quoted.length > 0 && !/[\r\n"]/.test(quoted) ? open : -1;
+    const open = openingQuote(text, at - 1);
+    return open >= 0 && open < at - 2 ? open : -1;
   }
   let start = at;
   while (start > 0 && EMAIL_LOCAL.test(text[start - 1])) start--;
@@ -40,7 +63,9 @@ function emailLocalStart(text: string, at: number): number {
 
 /** End of the domain after the @ at at, trimmed of trailing dots and hyphens. Returns -1 without a valid TLD. */
 function emailDomainEnd(text: string, at: number): number {
+  if (text[at + 1] === '[') return addressLiteralEnd(text, at);
   let end = at + 1;
+
   while (end < text.length && EMAIL_DOMAIN.test(text[end])) end++;
   while (end > at + 1 && /[.-]/.test(text[end - 1])) end--;
   return EMAIL_DOMAIN_SHAPE.test(text.slice(at + 1, end)) ? end : -1;
@@ -75,6 +100,163 @@ function ibanCheck(iban: string): boolean {
 /**
  * All built-in PII patterns — 30+ types organized by category.
  */
+type Span = { start: number; end: number };
+
+/** Index of the first value in sorted that is at least min, by binary search, or -1. */
+function firstAtLeast(sorted: number[], min: number): number {
+  let lo = 0;
+  let hi = sorted.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (sorted[mid] < min) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo < sorted.length ? lo : -1;
+}
+
+/** The base64 body after a header that has no END line, stopping at the next header. */
+function bodyEnd(text: string, from: number, limit: number): number {
+  let end = from;
+  while (end < limit && /[A-Za-z0-9+/=:\s]/.test(text[end])) end++;
+  return end;
+}
+
+/** Whole armoured blocks. Each header pairs with the next END line before the next header, in linear time. */
+function scanBlocks(text: string, header: RegExp, endLine: RegExp): Span[] {
+  const spans: Span[] = [];
+  const starts = [...text.matchAll(header)].map((m) => ({ at: m.index ?? 0, len: m[0].length }));
+  const ends = [...text.matchAll(endLine)].map((m) => ({ at: m.index ?? 0, len: m[0].length }));
+  const endAt = ends.map((e) => e.at);
+  let reach = 0;
+  starts.forEach((s, i) => {
+    if (s.at < reach) return;
+    const nextStart = i + 1 < starts.length ? starts[i + 1].at : text.length;
+    const k = firstAtLeast(endAt, s.at + s.len);
+    const end = k >= 0 && endAt[k] < nextStart ? endAt[k] + ends[k].len : bodyEnd(text, s.at + s.len, nextStart);
+    spans.push({ start: s.at, end });
+    reach = end;
+  });
+  return spans;
+}
+
+const scanPemKeys = (text: string): Span[] =>
+  scanBlocks(text, /-----BEGIN (?:RSA |DSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----/g, /-----END (?:RSA |DSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----/g);
+
+const scanPgpKeys = (text: string): Span[] =>
+  scanBlocks(text, /-----BEGIN PGP PRIVATE KEY BLOCK-----/g, /-----END PGP PRIVATE KEY BLOCK-----/g);
+
+/** Emails whose domain is a .edu domain, from the same linear scanner. */
+const scanEduEmails = (text: string): Span[] =>
+  scanEmails(text).filter((s) => /[.]edu$/i.test(text.slice(s.start, s.end)));
+
+const IBAN_LENGTHS: Record<string, number> = {
+  AD: 24, AE: 23, AL: 28, AT: 20, AZ: 28, BA: 20, BE: 16, BG: 22, BH: 22, BI: 27, BR: 29, BY: 28, CH: 21, CR: 22,
+  CY: 28, CZ: 24, DE: 22, DJ: 27, DK: 18, DO: 28, EE: 20, EG: 29, ES: 24, FI: 18, FK: 18, FO: 18, FR: 27, GB: 22,
+  GE: 22, GI: 23, GL: 18, GR: 27, GT: 28, HR: 21, HU: 28, IE: 22, IL: 23, IQ: 23, IS: 26, IT: 27, JO: 30, KW: 30,
+  KZ: 20, LB: 28, LC: 32, LI: 21, LT: 20, LU: 20, LV: 21, LY: 25, MC: 27, MD: 24, ME: 22, MK: 19, MN: 20, MR: 27,
+  MT: 31, MU: 30, NI: 28, NL: 18, NO: 15, OM: 23, PK: 24, PL: 28, PS: 29, PT: 25, QA: 29, RO: 24, RS: 22, RU: 33,
+  SA: 24, SC: 31, SD: 18, SE: 24, SI: 19, SK: 24, SM: 27, SO: 23, ST: 25, SV: 28, TL: 23, TN: 24, TR: 26, UA: 29,
+  VA: 22, VG: 24, XK: 20, YE: 30,
+};
+
+const ALNUM = /[A-Za-z0-9]/;
+
+/** Whether a space at this point separates two groups of four. */
+const groupGap = (text: string, at: number, compact: number): boolean =>
+  text[at] === ' ' && compact % 4 === 0 && ALNUM.test(text[at + 1] ?? '');
+
+/** End of an IBAN of exactly this many characters starting here, or -1. */
+function ibanEnd(text: string, start: number, length: number): number {
+  let compact = 0;
+  let end = start;
+  while (end < text.length && compact < length) {
+    if (/[A-Z0-9]/.test(text[end])) compact++;
+    else if (!groupGap(text, end, compact)) break;
+    end++;
+  }
+  return compact === length && !ALNUM.test(text[end] ?? '') ? end : -1;
+}
+
+/** IBANs by the country's registered length, compact or in groups of four, so 15 and 16 character IBANs are found. */
+function scanIbans(text: string): Span[] {
+  const spans: Span[] = [];
+  for (const m of text.matchAll(/(?<![A-Za-z0-9])([A-Z]{2})\d{2}/g)) {
+    const length = IBAN_LENGTHS[m[1]];
+    const start = m.index ?? 0;
+    const end = length ? ibanEnd(text, start, length) : -1;
+    if (end > 0) spans.push({ start, end });
+  }
+  return spans;
+}
+
+type DigitGroup = { start: number; digits: string };
+
+/** Index of the last group in the longest Luhn-valid 13 to 19 digit card starting at group i, or -1. */
+function longestCard(groups: DigitGroup[], i: number): number {
+  let best = -1;
+  let digits = '';
+  for (let j = i; j < groups.length && digits.length + groups[j].digits.length <= 19; j++) {
+    digits += groups[j].digits;
+    if (digits.length >= 13 && luhnCheck(digits)) best = j;
+  }
+  return best;
+}
+
+/** Cards within one run of digit groups. */
+function cardsInRun(groups: DigitGroup[], spans: Span[]): void {
+  let i = 0;
+  while (i < groups.length) {
+    const best = longestCard(groups, i);
+    if (best >= 0) spans.push({ start: groups[i].start, end: groups[best].start + groups[best].digits.length });
+    i = best >= 0 ? best + 1 : i + 1;
+  }
+}
+
+/** Digit groups split by single spaces or hyphens. The longest Luhn-valid 13 to 19 digit prefix of a run wins. */
+function scanCards(text: string): Span[] {
+  const spans: Span[] = [];
+  for (const run of text.matchAll(/(?<![0-9A-Za-z_])\d+(?:[\s-]\d+)*(?![0-9A-Za-z_])/g)) {
+    const base = run.index ?? 0;
+    cardsInRun([...run[0].matchAll(/\d+/g)].map((g) => ({ start: base + (g.index ?? 0), digits: g[0] })), spans);
+  }
+  return spans;
+}
+
+/** Hex and dot runs that contain a colon, checked by the RFC 4291 grammar, including compressed and IPv4-tail forms. */
+function isIpv6(candidate: string): boolean {
+  const halves = candidate.split('::');
+  if (halves.length > 2) return false;
+  const parts = (h: string) => (h === '' ? [] : h.split(':'));
+  const head = parts(halves[0]);
+  const tail = halves.length === 2 ? parts(halves[1]) : [];
+  const all = [...head, ...tail];
+  const last = all[all.length - 1] ?? '';
+  const v4 = /^\d{1,3}(?:[.]\d{1,3}){3}$/.test(last) && last.split('.').every((n) => Number(n) <= 255);
+  const groups = all.length + (v4 ? 1 : 0);
+  if (!all.slice(0, v4 ? -1 : undefined).every((g) => /^[0-9A-Fa-f]{1,4}$/.test(g))) return false;
+  return halves.length === 2 ? groups <= 7 : groups === 8;
+}
+
+/** Drops trailing punctuation that belongs to the sentence, keeping a final "::". */
+function trimIpv6(s: string): string {
+  let out = s;
+  while (out.endsWith('.') || (out.endsWith(':') && !out.endsWith('::'))) out = out.slice(0, -1);
+  return out;
+}
+
+const looksLikeIpv6 = (s: string): boolean => s.split(':').length >= 3 && /[0-9A-Fa-f]/.test(s) && isIpv6(s);
+
+function scanIpv6(text: string): Span[] {
+  const spans: Span[] = [];
+  for (const m of text.matchAll(/(?<![0-9A-Za-z:.])[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*/g)) {
+    const s = trimIpv6(m[0]);
+    const start = m.index ?? 0;
+    if (looksLikeIpv6(s)) spans.push({ start, end: start + s.length });
+  }
+  return spans;
+}
+
+
 export const PII_PATTERNS: PiiPattern[] = [
   // ═══════════════════════════════════════════
   // CONTACT
@@ -99,7 +281,7 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'phoneUK',
     label: 'PHONE_UK',
     category: 'contact',
-    regex: /\b(?:0|\+44)\s?\d{2,4}\s?\d{3,4}\s?\d{3,4}\b/g,
+    regex: /(?<![\w+])(?:0|\+44)\s?\d{2,4}\s?\d{3,4}\s?\d{3,4}\b/g,
     description: 'UK phone numbers',
   },
   {
@@ -127,14 +309,14 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'phoneFR',
     label: 'PHONE_FR',
     category: 'contact',
-    regex: /\b(?:0|\+33)\s?\d[\s.]\d{2}[\s.]\d{2}[\s.]\d{2}[\s.]\d{2}\b/g,
+    regex: /(?<![\w+])(?:0|\+33)\s?\d[\s.]\d{2}[\s.]\d{2}[\s.]\d{2}[\s.]\d{2}\b/g,
     description: 'French phone numbers (06 12 34 56 78)',
   },
   {
     name: 'phoneNL',
     label: 'PHONE_NL',
     category: 'contact',
-    regex: /\b(?:0|\+31)\s?\d{1,3}[\s-]\d{3,4}[\s-]\d{2,4}\b/g,
+    regex: /(?<![\w+])(?:0|\+31)\s?\d{1,3}[\s-]\d{3,4}[\s-]\d{2,4}\b/g,
     description: 'Dutch phone numbers',
   },
 
@@ -146,7 +328,8 @@ export const PII_PATTERNS: PiiPattern[] = [
     label: 'PERSON',
     category: 'identity',
     regex:
-      /\b(?:Mr\.?|Mrs\.?|Ms\.?|Miss|Dr\.?|Prof\.?|Sr\.?|Jr\.?|Herr|Frau|Monsieur|Madame|Señor|Señora)\s+[A-Z][a-zA-ZÀ-ÿ]+(?:\s+[A-Z][a-zA-ZÀ-ÿ]+){0,3}\b/g,
+      /(?<![\p{L}\p{N}])(?:Mr\.?|Mrs\.?|Ms\.?|Miss|Dr\.?|Prof\.?|Sr\.?|Jr\.?|Herr|Frau|Monsieur|Madame|Señor|Señora)\s+\p{Lu}\p{Ll}*(?:\p{Lu}\p{Ll}+)*(?:['’-]\p{Lu}?\p{Ll}+(?:\p{Lu}\p{Ll}+)*)*(?:\s+\p{Lu}\p{Ll}*(?:\p{Lu}\p{Ll}+)*(?:['’-]\p{Lu}?\p{Ll}+(?:\p{Lu}\p{Ll}+)*)*){0,3}(?![\p{L}\p{N}])/gu,
+
     description: 'Person names with title prefixes (Mr., Mrs., Dr., etc.)',
   },
 
@@ -342,6 +525,7 @@ export const PII_PATTERNS: PiiPattern[] = [
     label: 'CREDIT_CARD',
     category: 'financial',
     regex: /\b(?:\d[\s-]?){12,18}\d\b/g,
+    scan: scanCards,
     validate: (match: string) => luhnCheck(match),
     description: 'Credit/debit card numbers, 13 to 19 digits (Luhn validated)',
   },
@@ -350,6 +534,7 @@ export const PII_PATTERNS: PiiPattern[] = [
     label: 'IBAN',
     category: 'financial',
     regex: /\b[A-Z]{2}\d{2}[\s]?[\dA-Z]{4}[\s]?(?:[\dA-Z]{4}[\s]?){2,7}[\dA-Z]{1,4}\b/g,
+    scan: scanIbans,
     validate: (match: string) => ibanCheck(match),
     description: 'International Bank Account Numbers (IBAN checksum validated)',
   },
@@ -392,7 +577,9 @@ export const PII_PATTERNS: PiiPattern[] = [
     category: 'network',
     regex:
       /\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b|\b(?:[0-9a-fA-F]{1,4}:){1,7}:\b|\b(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}\b/g,
-    description: 'IPv6 addresses',
+    scan: scanIpv6,
+    description: 'IPv6 addresses, full, compressed (RFC 5952) and with an IPv4 tail',
+
   },
   {
     name: 'macAddress',
@@ -504,7 +691,7 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'addressDE',
     label: 'ADDRESS_DE',
     category: 'location',
-    regex: /(?:[A-ZÀ-ÿa-zà-ÿ]+(?:straße|strasse|str\.|weg|gasse|platz|allee|ring|damm|ufer|chaussee))\s+\d{1,5}[a-z]?(?:\s*[,/]\s*\d{5}\s+[A-ZÀ-ÿ][a-zà-ÿ]+(?:\s+[a-zà-ÿ]+\.?\s+[A-ZÀ-ÿ][a-zà-ÿ]+)?)?/gi,
+    regex: /(?<![A-ZÀ-ÿa-zà-ÿ])(?:[A-ZÀ-ÿa-zà-ÿ]{1,60}(?:straße|strasse|str\.|weg|gasse|platz|allee|ring|damm|ufer|chaussee))\s+\d{1,5}[a-z]?(?:\s*[,/]\s*\d{5}\s+[A-ZÀ-ÿ][a-zà-ÿ]+(?:\s+[a-zà-ÿ]+\.?\s+[A-ZÀ-ÿ][a-zà-ÿ]+)?)?/gi,
     description: 'German street addresses (Musterstraße 12, 80331 München)',
   },
   {
@@ -835,7 +1022,7 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'ldapDN',
     label: 'LDAP_DN',
     category: 'enterprise',
-    regex: /(?:CN|OU|DC|O|C|L|ST)=[^,]+(?:,\s*(?:CN|OU|DC|O|C|L|ST)=[^,]+){1,}/gi,
+    regex: /(?<![A-Za-z])(?:CN|OU|DC|O|C|L|ST)=[^,]{1,256}(?:,\s*(?:CN|OU|DC|O|C|L|ST)=[^,]{1,256}){1,32}/gi,
     description: 'LDAP Distinguished Names (CN=...,OU=...,DC=...)',
   },
   {
@@ -863,7 +1050,7 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'connStringKV',
     label: 'CONN_STRING',
     category: 'enterprise',
-    regex: /(?:Server|Data Source|Host)=[^;]+;[^;]*(?:;[^;]*){0,10}(?:Password|Pwd)=[^;]+/gi,
+    regex: /(?<![A-Za-z])(?:Server|Data Source|Host)=[^;]{1,512};[^;]{0,512}(?:;[^;]{0,512}){0,10}(?:Password|Pwd)=[^;]{1,512}/gi,
     description: 'Connection strings with credentials (ADO.NET / key=value style)',
   },
   {
@@ -927,6 +1114,8 @@ export const PII_PATTERNS: PiiPattern[] = [
     label: 'PRIVATE_KEY',
     category: 'enterprise',
     regex: /-----BEGIN (RSA |DSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----(?:[\s\S]*?-----END \1?PRIVATE KEY-----|[A-Za-z0-9+/=\s]*)/g,
+    anchor: '-----BEGIN',
+    scan: scanPemKeys,
     description: 'PEM private keys, the whole block through the END line',
   },
   {
@@ -1061,35 +1250,35 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'phoneES',
     label: 'PHONE_ES',
     category: 'contact',
-    regex: /\b(?:\+?34[\s\-.]?)?\d{3}[\s\-.]\d{3}[\s\-.]\d{3}\b/g,
+    regex: /(?<![\w+])(?:\+?34[\s\-.]?)?\d{3}[\s\-.]\d{3}[\s\-.]\d{3}\b/g,
     description: 'Spanish phone numbers',
   },
   {
     name: 'phoneAU',
     label: 'PHONE_AU',
     category: 'contact',
-    regex: /\b(?:\+?61[\s\-.]?)?0?\d[\s\-.]\d{4}[\s\-.]\d{4}\b/g,
+    regex: /(?<![\w+])(?:\+?61[\s\-.]?)?0?\d[\s\-.]\d{4}[\s\-.]\d{4}\b/g,
     description: 'Australian phone numbers',
   },
   {
     name: 'phoneIN',
     label: 'PHONE_IN',
     category: 'contact',
-    regex: /\b(?:\+?91[\s\-.]?)?[6-9]\d{4}[\s\-.]\d{5}\b/g,
+    regex: /(?<![\w+])(?:\+?91[\s\-.]?)?[6-9]\d{4}[\s\-.]\d{5}\b/g,
     description: 'Indian phone numbers',
   },
   {
     name: 'phoneJP',
     label: 'PHONE_JP',
     category: 'contact',
-    regex: /\b(?:\+?81[\s\-.]?)?0?\d{1,4}[\s\-.]\d{1,4}[\s\-.]\d{4}\b/g,
+    regex: /(?<![\w+])(?:\+?81[\s\-.]?)?0?\d{1,4}[\s\-.]\d{1,4}[\s\-.]\d{4}\b/g,
     description: 'Japanese phone numbers',
   },
   {
     name: 'phoneBR',
     label: 'PHONE_BR',
     category: 'contact',
-    regex: /\b(?:\+?55[\s\-.]?)?\(?\d{2}\)?[\s\-.]?\d{4,5}[\s\-.]\d{4}\b/g,
+    regex: /(?<![\w+])(?:\+?55[\s\-.]?)?\(?\d{2}\)?[\s\-.]?\d{4,5}[\s\-.]\d{4}\b/g,
     description: 'Brazilian phone numbers',
   },
   {
@@ -1103,35 +1292,35 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'phoneCN',
     label: 'PHONE_CN',
     category: 'contact',
-    regex: /\b(?:\+?86[\s\-.]?)?1[3-9]\d{9}\b/g,
+    regex: /(?<![\w+])(?:\+?86[\s\-.]?)?1[3-9]\d{9}\b/g,
     description: 'Chinese mobile phone numbers',
   },
   {
     name: 'phoneKR',
     label: 'PHONE_KR',
     category: 'contact',
-    regex: /\b(?:\+?82[\s\-.]?)?0?\d{1,2}[\s\-.]\d{3,4}[\s\-.]\d{4}\b/g,
+    regex: /(?<![\w+])(?:\+?82[\s\-.]?)?0?\d{1,2}[\s\-.]\d{3,4}[\s\-.]\d{4}\b/g,
     description: 'South Korean phone numbers',
   },
   {
     name: 'phoneRU',
     label: 'PHONE_RU',
     category: 'contact',
-    regex: /\b(?:\+?7[\s\-.]?)?\d{3}[\s\-.]\d{3}[\s\-.]\d{2}[\s\-.]\d{2}\b/g,
+    regex: /(?<![\w+])(?:\+?7[\s\-.]?)?\d{3}[\s\-.]\d{3}[\s\-.]\d{2}[\s\-.]\d{2}\b/g,
     description: 'Russian phone numbers',
   },
   {
     name: 'phoneMX',
     label: 'PHONE_MX',
     category: 'contact',
-    regex: /\b(?:\+?52[\s\-.]?)?\d{2,3}[\s\-.]\d{3,4}[\s\-.]\d{4}\b/g,
+    regex: /(?<![\w+])(?:\+?52[\s\-.]?)?\d{2,3}[\s\-.]\d{3,4}[\s\-.]\d{4}\b/g,
     description: 'Mexican phone numbers',
   },
   {
     name: 'phoneZA',
     label: 'PHONE_ZA',
     category: 'contact',
-    regex: /\b(?:\+?27[\s\-.]?)?0?\d{2}[\s\-.]\d{3}[\s\-.]\d{4}\b/g,
+    regex: /(?<![\w+])(?:\+?27[\s\-.]?)?0?\d{2}[\s\-.]\d{3}[\s\-.]\d{4}\b/g,
     description: 'South African phone numbers',
   },
 
@@ -1586,6 +1775,8 @@ export const PII_PATTERNS: PiiPattern[] = [
     label: 'PGP_KEY',
     category: 'enterprise',
     regex: /-----BEGIN PGP PRIVATE KEY BLOCK-----(?:[\s\S]*?-----END PGP PRIVATE KEY BLOCK-----|[A-Za-z0-9+/=:\s]*)/g,
+    anchor: '-----BEGIN',
+    scan: scanPgpKeys,
     description: 'PGP private key blocks, the whole block through the END line',
   },
   {
@@ -1685,6 +1876,8 @@ export const PII_PATTERNS: PiiPattern[] = [
     label: 'EDU_EMAIL',
     category: 'contact',
     regex: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.edu/g,
+    anchor: '@',
+    scan: scanEduEmails,
     description: 'Educational email addresses (.edu)',
   },
 

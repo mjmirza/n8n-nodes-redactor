@@ -101,6 +101,19 @@ Every version, the detection and correctness fixes:
 - The ROPA retention text and `auditLogRetentionDays` (now `null`) state only what the node enforces.
 - Presidio also analyzes keys that contain spaces or punctuation. Single-word keys are not sent, see [DESIGN-DECISIONS.md](DESIGN-DECISIONS.md).
 
+## Moving to 6.1
+
+Node version 2 only:
+
+- Verify also checks free text for person names, so a run with a leaked name now reports `FAIL`. Version 1 keeps the earlier behaviour.
+
+Every version:
+
+- More text is redacted. Short IBANs, cards followed by another number, `+33`, `+44` and `+31` phones, compressed IPv6, punycode and address-literal emails, and names with apostrophes, hyphens, `Mc` or accents. Check downstream steps that expected these values in clear text.
+- Prompt injection checks also read keys, so a workflow that only had injection text in a key can now be flagged or blocked.
+- Presidio entities take the category of the built-in pattern with the same label, so a VAT code is counted as financial.
+- The ROPA record reports the TTL of an existing session rather than the one requested.
+
 ## Tenant profile fields
 
 All fields are optional. Unknown fields are rejected so a typo never passes silently.

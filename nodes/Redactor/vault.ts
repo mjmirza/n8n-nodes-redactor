@@ -100,17 +100,26 @@ export class MemoryVault implements IVault {
     if (!session) return;
     assertNoConflict(session, entry);
     session.entries[entry.token] = entry;
-    if (!reverseIndex.has(key)) reverseIndex.set(key, new Map());
-    reverseIndex.get(key)!.set(entry.original, entry);
+    const index = this.index(key, session);
+    const first = index.get(entry.original);
+    if (!first || first.token === entry.token) index.set(entry.original, entry);
   }
 
   findByOriginal(sessionId: string, original: string): VaultEntry | undefined {
     const key = this.key(sessionId);
-    const entry = reverseIndex.get(key)?.get(original);
-    if (entry) return entry;
     const session = memoryStore.get(key);
-    if (!session) return undefined;
-    return Object.values(session.entries).find((e) => e.original === original);
+    return session ? this.index(key, session).get(original) : undefined;
+  }
+
+  /** The first entry per original. Built once per session and kept current, so a miss never scans every entry. */
+  private index(key: string, session: VaultSession): Map<string, VaultEntry> {
+    let index = reverseIndex.get(key);
+    if (!index) {
+      index = new Map();
+      for (const e of Object.values(session.entries)) if (!index.has(e.original)) index.set(e.original, e);
+      reverseIndex.set(key, index);
+    }
+    return index;
   }
 
   deleteSession(sessionId: string): void {

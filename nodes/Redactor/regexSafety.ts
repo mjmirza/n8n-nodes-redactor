@@ -17,6 +17,8 @@ interface GroupFrame {
   hasAlternation: boolean;
   // Characters the variable repetitions since the last disjoint required atom can absorb.
   run: Charset | null;
+  // Characters the groups of alternatives since the last disjoint required atom can match.
+  altRun: Charset | null;
   chars: Charset;
   zeroWidth: boolean;
   // Whether the current branch, and every earlier branch, must consume at least one character.
@@ -28,7 +30,8 @@ interface GroupFrame {
 }
 
 const newFrame = (zeroWidth = false, inLook = zeroWidth): GroupFrame => ({
-  hasVariableQuantifier: false, hasAlternation: false, run: null, chars: emptySet(), zeroWidth,
+  hasVariableQuantifier: false, hasAlternation: false, run: null, altRun: null, chars: emptySet(), zeroWidth,
+
   branchConsumes: false, allConsume: true, nullable: false, inLook,
 });
 
@@ -85,6 +88,7 @@ function alternation(stack: GroupFrame[], i: number): Step {
   const top = stack[stack.length - 1];
   top.hasAlternation = true;
   top.run = null;
+  top.altRun = null;
   endBranch(top);
   return { atomEnd: i, closed: null, next: i + 1 };
 }
@@ -135,6 +139,8 @@ function applyQuantifier(q: Quantifier | null, closed: GroupFrame | null, top: G
 
 const SEQUENTIAL = 'two repetitions in a row can match the same characters (catastrophic backtracking)';
 
+const CHAINED = 'two groups of alternatives in a row can match the same characters (catastrophic backtracking)';
+
 /** Refuses a variable repetition that can absorb what an earlier one in the same sequence can. */
 function applySequence(chars: Charset | null, variable: boolean, required: boolean, top: GroupFrame): string | null {
   if (chars === null) return null;
@@ -144,6 +150,20 @@ function applySequence(chars: Charset | null, variable: boolean, required: boole
     if (shared) return SEQUENTIAL;
     top.run = top.run ? union(top.run, chars) : chars;
   } else if (required && !shared) top.run = null;
+  return null;
+}
+
+/**
+ * Refuses a group of alternatives that follows another one it overlaps, such as (?:a|aa)(?:a|aa).
+ * Each such group doubles the ways to split the text, so a chain of them grows exponentially.
+ */
+function applyBranching(chars: Charset | null, branching: boolean, required: boolean, top: GroupFrame): string | null {
+  if (chars === null) return null;
+  const shared = top.altRun !== null && overlaps(top.altRun, chars);
+  if (branching) {
+    if (shared) return CHAINED;
+    top.altRun = top.altRun ? union(top.altRun, chars) : chars;
+  } else if (required && !shared) top.altRun = null;
   return null;
 }
 
@@ -169,8 +189,15 @@ function stepProblem(src: string, i: number, step: Step, q: Quantifier | null, t
   const chars = stepChars(src, i, step);
   const required = consumes(q, chars, step.closed);
   if (required) top.branchConsumes = true;
-  return applySequence(chars, isVariable(q) || !!step.closed?.hasVariableQuantifier, required, top);
+  return applyBranching(chars, isBranching(step.closed), required, top) ?? applySequence(chars, variesInLength(q, step.closed), required, top);
 }
+
+/** A closed group that offers alternatives and consumes text. */
+const isBranching = (closed: GroupFrame | null | undefined): boolean => !!closed?.hasAlternation && !closed.zeroWidth;
+
+/** The step can match a varying number of characters. */
+const variesInLength = (q: Quantifier | null, closed: GroupFrame | null | undefined): boolean =>
+  isVariable(q) || !!closed?.hasVariableQuantifier;
 
 /** Returns why the pattern was refused, or null when it is safe to run. */
 function structuralProblem(src: string): string | null {
