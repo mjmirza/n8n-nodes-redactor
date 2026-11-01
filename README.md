@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/mjmirza/n8n-nodes-redactor/master/.github/assets/logo.png" alt="Redactor" width="96" />
+  <img src="https://raw.githubusercontent.com/mjmirza/n8n-nodes-redactor/main/.github/assets/logo.png" alt="Redactor" width="96" />
 </p>
 
 <h1 align="center">n8n-nodes-redactor</h1>
@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/n8n-nodes-redactor"><img src="https://img.shields.io/npm/v/n8n-nodes-redactor?label=npm" alt="npm version" /></a>
   <a href="https://www.npmjs.com/package/n8n-nodes-redactor"><img src="https://img.shields.io/npm/dm/n8n-nodes-redactor?label=downloads" alt="npm downloads" /></a>
-  <a href="https://github.com/mjmirza/n8n-nodes-redactor/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/mjmirza/n8n-nodes-redactor/ci.yml?branch=master&label=CI" alt="CI status" /></a>
+  <a href="https://github.com/mjmirza/n8n-nodes-redactor/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/mjmirza/n8n-nodes-redactor/ci.yml?branch=main&label=CI" alt="CI status" /></a>
   <a href="https://www.npmjs.com/package/n8n-nodes-redactor#provenance"><img src="https://img.shields.io/badge/npm-provenance%20signed-brightgreen" alt="npm provenance" /></a>
   <a href="#license"><img src="https://img.shields.io/npm/l/n8n-nodes-redactor" alt="MIT License" /></a>
   <img src="https://img.shields.io/badge/PII%20patterns-218-blue" alt="218 PII patterns" />
@@ -54,7 +54,7 @@ After Restore, your workflow gets the real values back.
 | Self-hosted n8n 1.x and 2.x | Supported |
 | n8n verified community nodes | Eligible from 4.0.0. Passes n8n's verification scanner with no findings |
 
-Version 4.0.0 uses no local disk. The vault lives in workflow storage and audit records go to the Report output. Upgrading from 1.x? Read [docs/MIGRATION.md](https://github.com/mjmirza/n8n-nodes-redactor/blob/master/docs/MIGRATION.md). The 1.x line stays installable with `npm install n8n-nodes-redactor@v1-legacy`.
+Version 4.0.0 uses no local disk. The vault lives in workflow storage and audit records go to the Report output. Upgrading from 1.x? Read [docs/MIGRATION.md](https://github.com/mjmirza/n8n-nodes-redactor/blob/main/docs/MIGRATION.md). The 1.x line stays installable with `npm install n8n-nodes-redactor@v1-legacy`.
 
 ## Operations
 
@@ -121,8 +121,8 @@ Set Verify Output on the Verify node to Items, Stop on FAIL. Verify then passes 
 | Audit report | A second output with hits by category and pattern |
 | Audit log | Turn on Audit Log to get an `audit` record (counts, labels, timing, never values) on the Report output. Send it to any database, sheet or SIEM node |
 | ROPA record | Turn on Include Audit Report, then Include GDPR Art.30 ROPA Record, and fill in the controller details |
-| Presidio | Optional Microsoft Presidio container for names and organisations in free text. See [docs/PRESIDIO_SETUP.md](https://github.com/mjmirza/n8n-nodes-redactor/blob/master/docs/PRESIDIO_SETUP.md). When Presidio cannot scan a text the run stops, unless If Presidio Fails is set to continue with patterns only |
-| Per-tenant profiles | Turn on Use Tenant Profile and paste JSON. Validated on every run. Fields are listed in [docs/MIGRATION.md](https://github.com/mjmirza/n8n-nodes-redactor/blob/master/docs/MIGRATION.md#tenant-profile-fields) |
+| Presidio | Optional Microsoft Presidio container for names and organisations in free text. See [docs/PRESIDIO_SETUP.md](https://github.com/mjmirza/n8n-nodes-redactor/blob/main/docs/PRESIDIO_SETUP.md). When Presidio cannot scan a text the run stops, unless If Presidio Fails is set to continue with patterns only |
+| Per-tenant profiles | Turn on Use Tenant Profile and paste JSON. Validated on every run. Fields are listed in [docs/MIGRATION.md](https://github.com/mjmirza/n8n-nodes-redactor/blob/main/docs/MIGRATION.md#tenant-profile-fields) |
 
 This node reduces what reaches a model. It is not legal advice and does not on its own make a workflow GDPR or HIPAA compliant.
 

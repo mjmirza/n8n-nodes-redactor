@@ -9,6 +9,8 @@ Planned: random scoped tokens.
 ## [7.0.1] - 2026-11-01
 
 ### Fixed
+- Prose containing key=value pairs no longer hides later connection strings, so usernames and complete passwords are redacted and detected by Verify.
+- Prior-token filtering now scans input by token length instead of building a suffix array, keeping large excluded fields linear while protecting earlier token literals.
 - Connection-string keywords accept Unicode whitespace without crossing line boundaries, so usernames and complete passwords are covered by Redact and detected by Verify.
 - Connection strings are scanned with both ADO.NET and ODBC rules. Literal or unmatched braces no longer hide later password segments, and complete ODBC braced passwords remain covered, including doubled closing braces. Both scans and their combined spans take linear time.
 - Connection-string host, username and password keys are recognized in any order, including connections embedded in free-text notes.
@@ -16,6 +18,9 @@ Planned: random scoped tokens.
 - Database and broker URLs include AMQP and AMQPS schemes and retain apostrophes inside credentials and query secrets, so complete credential values are covered.
 - Redact, Restore and Purge share Session ID normalization. Numeric Session IDs can purge workflow mappings without value-bearing type errors, and missing IDs produce a generic validation error.
 - Every Redact run built one pattern from all tokens its session had ever stored, so a long-lived session made each run slower, about thirty times slower at 15,000 tokens. Only earlier tokens that occur in the run's input are now matched.
+
+### Changed
+- The repository's default branch is now `main`. README links, the logo and the CI badge point to it.
 
 ## [7.0.0] - 2026-11-01
 

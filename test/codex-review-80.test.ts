@@ -1,9 +1,41 @@
-/** Regression coverage for all three findings in re-review 80. */
+/** Regression coverage for the findings in re-review 80. */
 import type { IDataObject } from 'n8n-workflow';
 import { getPatternsByNames } from '../nodes/Redactor/patterns';
 import { cpuNow, fast, persist, redactNote, run, verifyStatus } from './harness';
 
 const connScan = getPatternsByNames(['connStringKV'])[0].scan!;
+
+describe('re-review 80-6: prose key=value pairs do not hide a later connection string', () => {
+  it('covers the username and full password after User=guest.', async () => {
+    const note = 'User=guest. Connection: Server=db;Uid=alice;Pwd=alpha bravo;';
+    const output = await redactNote(note, 'r80prose');
+    for (const credential of ['alice', 'alpha', 'bravo']) expect(output).not.toContain(credential);
+    expect(await verifyStatus(note)).toBe('FAIL');
+    expect(await verifyStatus(output)).toBe('PASS');
+  });
+});
+
+describe('re-review 80-7: prior-token filtering is linear in input length', () => {
+  it('keeps an excluded 4,000,000-character note near the CPU cost of a fresh session', async () => {
+    const settings = {
+      operation: 'redact', vaultStorage: 'memory', redactionMode: 'token', fieldMode: 'allowlist',
+      fieldRules: { rules: [{ field: 'selected' }] },
+    };
+    await run({ operation: 'redact', vaultStorage: 'memory', sessionId: 'r80long-reused' }, [{ note: 'a@example.com' }]);
+    const input = { note: 'x'.repeat(4_000_000) };
+    const time = async (sessionId: string) => {
+      const started = cpuNow();
+      const [out] = await run({ ...settings, sessionId }, [input]);
+      const elapsed = cpuNow() - started;
+      expect(out[0].json.note).toBe(input.note);
+      return elapsed;
+    };
+    await time('r80long-warm');
+    const baseline = await time('r80long-fresh');
+    const reused = await time('r80long-reused');
+    expect(reused).toBeLessThan(5 * Math.max(baseline, 20));
+  });
+});
 
 describe('re-review 80-4: connection-string credentials in arbitrary segment order', () => {
   it.each([

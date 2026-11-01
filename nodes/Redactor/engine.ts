@@ -360,7 +360,7 @@ function shapeAdd(shape: TokenShape, token: string): void {
   shape.maxLen = Math.max(shape.maxLen, token.length);
 }
 
-function tokenShape(entries: Record<string, VaultEntry>): TokenShape {
+function tokenShape(entries: Record<string, unknown>): TokenShape {
   let shape = tokenShapes.get(entries);
   if (!shape) {
     shape = { byFirst: new Map(), prefixes: new Set(), maxLen: 0 };
@@ -1473,19 +1473,30 @@ function lockChild(ctx: RedactionContext, container: object, key: string, comput
 }
 
 /**
- * Matches every token this session already maps, so input text equal to one can be protected. With present, only
- * tokens the input contains enter the pattern, so a long-lived session does not make every run scan its whole history.
+ * Scan once per distinct token length, checking only lengths with the current first character. The session's
+ * cached shape grows with addMapping, so neither a suffix array nor a pattern over the whole history is needed.
  */
-function priorTokenMatcher(
-  entries: Record<string, unknown> | undefined, present: (token: string) => boolean = () => true,
-): RegExp | undefined {
-  const tokens = Object.keys(entries ?? {}).filter((t) => t.length > 0 && present(t)).sort((a, b) => b.length - a.length);
-  return tokens.length > 0 ? new RegExp(tokens.map(escapeRe).join('|'), 'g') : undefined;
+function priorTokensPresent(input: string, entries: Record<string, unknown>): string[] {
+  const shape = tokenShape(entries);
+  if (shape.byFirst.size === 0) return [];
+  const found = new Set<string>();
+  for (let at = 0; at < input.length; at++) {
+    const lengths = shape.byFirst.get(input.charCodeAt(at));
+    if (!lengths) continue;
+    for (const length of lengths) {
+      if (at + length > input.length) break;
+      const token = input.slice(at, at + length);
+      if (Object.prototype.hasOwnProperty.call(entries, token)) found.add(token);
+    }
+  }
+  return [...found].sort((a, b) => b.length - a.length);
 }
 
 /** The session's prior tokens that occur somewhere in this run's input. */
 export function priorTokensInInput(ctx: RedactionContext, entries: Record<string, unknown> | undefined): RegExp | undefined {
-  return priorTokenMatcher(entries, (token) => inputContains(ctx, token));
+  if (!entries || !ctx.inputText) return undefined;
+  const tokens = priorTokensPresent(ctx.inputText, entries);
+  return tokens.length > 0 ? new RegExp(tokens.map(escapeRe).join('|'), 'g') : undefined;
 }
 
 /** Input text equal to an earlier mapping gets its own mapping, so Restore returns it unchanged. */

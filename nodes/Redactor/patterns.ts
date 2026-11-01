@@ -567,18 +567,20 @@ const CONN_HOST_KEY = 'Server|Data Source|Host';
 const CONN_PASSWORD_KEY = 'Password|Pwd';
 const CONN_SENSITIVE_KEY = `${CONN_PASSWORD_KEY}|User ID|Uid|User|Access Token|Token|Client Secret|Secret|API Key`;
 const CONN_KEY = `(?:${CONN_HOST_KEY}|${CONN_SENSITIVE_KEY})`;
-const connKey = new RegExp(`^${CONN_SPACE}*(${CONN_KEY})${CONN_SPACE}*=`, 'i');
 const connHostKey = new RegExp(`^(?:${CONN_HOST_KEY})$`, 'i');
 const connPasswordKey = new RegExp(`^(?:${CONN_PASSWORD_KEY})$`, 'i');
 
-/** Quoted values honour doubled delimiters. Only the ODBC pass treats a closed leading brace as a delimiter. */
-function connValueEnd(text: string, from: number, limit: number, braceEnd: number): number {
+/** Skip keyword whitespace without crossing the line being scanned. */
+function connValueStart(text: string, from: number): number {
   let at = from;
-  while (at < limit && connSpace.test(text[at])) at++;
-  if (/["']/.test(text[at] ?? '') || (text[at] === '{' && at < braceEnd)) at = quotedValueEnd(text, at, limit);
-  while (at < limit && text[at] !== ';') at++;
+  while (at < text.length && connSpace.test(text[at])) at++;
   return at;
 }
+
+/** Only the ODBC pass treats a closed leading brace as a delimiter. */
+const connQuoteAt = (text: string, at: number, braceEnd: number): boolean =>
+  /["']/.test(text[at] ?? '') || (text[at] === '{' && at < braceEnd);
+const connHasValue = (text: string, at: number): boolean => at < text.length && text[at] !== ';';
 
 /** The index after the closing delimiter, reading a doubled closing delimiter as a literal one. */
 function quotedValueEnd(text: string, at: number, limit: number): number {
@@ -590,13 +592,6 @@ function quotedValueEnd(text: string, at: number, limit: number): number {
     at++;
   }
   return at;
-}
-
-/** Find a segment delimiter without interpreting semicolons inside a quoted value as separators. */
-function connSegmentEnd(text: string, from: number, limit: number, braceEnd: number): number {
-  let at = from;
-  while (at < limit && text[at] !== '=' && text[at] !== ';') at++;
-  return text[at] === '=' ? connValueEnd(text, at + 1, limit, braceEnd) : at;
 }
 
 interface ConnChain {
@@ -618,20 +613,32 @@ function lastBraceClose(text: string, from: number, limit: number): number {
   return -1;
 }
 
-/** Read each segment once, retaining credentials on either side of the host and password. */
+/** Record a recognised key and report whether its segment contains a credential. */
+function recordConnKey(chain: ConnChain, key: string): boolean {
+  if (connPasswordKey.test(key)) chain.password = true;
+  if (!connHostKey.test(key)) return true;
+  chain.host = true;
+  return false;
+}
+
+/** Read each line once, recognising keys inside prose but never inside quoted values, including unknown properties. */
 function connChain(text: string, from: number, limit: number, braceEnd: number): ConnChain {
   const chain: ConnChain = { start: from, end: from, host: false, password: false };
-  let at = from;
-  while (at < limit) {
-    const end = connSegmentEnd(text, at, limit, braceEnd);
-    const key = connKey.exec(text.slice(at, end));
-    if (key && at + key[0].length < end) {
-      if (connHostKey.test(key[1])) chain.host = true;
-      else chain.end = end;
-      if (connPasswordKey.test(key[1])) chain.password = true;
+  const line = text.slice(from, limit);
+  const elements = new RegExp(`(?<![A-Za-z])(${CONN_KEY})${CONN_SPACE}*=|[=;]`, 'gi');
+  let sensitive = false;
+  let match: RegExpExecArray | null;
+  while ((match = elements.exec(line)) !== null) {
+    if (match[0] === ';') {
+      if (sensitive) chain.end = from + match.index;
+      sensitive = false;
+      continue;
     }
-    at = end + 1;
+    const at = connValueStart(line, elements.lastIndex);
+    if (match[1] && connHasValue(line, at)) sensitive = recordConnKey(chain, match[1]) || sensitive;
+    if (connQuoteAt(line, at, braceEnd - from)) elements.lastIndex = quotedValueEnd(line, at, line.length);
   }
+  if (sensitive) chain.end = limit;
   return chain;
 }
 

@@ -40,6 +40,9 @@ const casedKey = (keys: string[]) => fc.tuple(
   fc.constantFrom(...keys), fc.array(fc.boolean(), { minLength: 32, maxLength: 32 }),
 ).map(([key, upper]) => [...key].map((ch, i) => upper[i] ? ch.toUpperCase() : ch.toLowerCase()).join(''));
 const layout = fc.record({ before: whitespace, keyEnd: whitespace, valueStart: whitespace, after: whitespace });
+const notePrefix = fc.array(fc.constantFrom(
+  'Deployment note: ', 'User=guest. ', 'Host=x, ', 'note: a=b ', 'Connection: ',
+), { minLength: 1, maxLength: 4 }).map((parts) => parts.join(''));
 
 function encodeKv(raw: string, grammar: string, quote: string): string {
   if (grammar === 'odbc') return `{${raw.replace(/}/g, '}}')}}`;
@@ -49,6 +52,7 @@ function encodeKv(raw: string, grammar: string, quote: string): string {
 }
 
 const connection = fc.record({
+  notePrefix,
   grammar: fc.constantFrom('ado', 'odbc', 'url'),
   username: value('acct'), password: value('p4ss'), secret: value('s3cr'),
   serverKey: casedKey(['Server', 'Data Source', 'Host']),
@@ -76,7 +80,7 @@ const connection = fc.record({
   }
   // Escaped and encoded forms are matched through the unescaped and decoded views of the output, so only the raw
   // values are listed, and every one of their four-character windows holds a marker.
-  return { note: `Deployment note: ${text}; ready.`, sensitive: [username, password, secret] };
+  return { note: `${sample.notePrefix}${text}; ready.`, sensitive: [username, password, secret] };
 });
 
 it('redacts every credential fragment and fails version 2 Verify for 10,000 generated connection strings', async () => {
