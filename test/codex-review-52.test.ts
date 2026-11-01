@@ -2,37 +2,21 @@
  * Regression tests for the 5.2.0 Codex re-review, one block per finding.
  */
 import type { IDataObject } from 'n8n-workflow';
-import { MemoryVault } from '../nodes/Redactor/vault';
 import { redactValue, restoreValue, enhanceWithPresidio } from '../nodes/Redactor/engine';
 import { scanForInjection } from '../nodes/Redactor/injection';
 import { parseTenantProfile } from '../nodes/Redactor/profiles';
 import { resetCircuitBreaker } from '../nodes/Redactor/presidio';
 import type { RedactionContext, RedactionHit } from '../nodes/Redactor/types';
 
-import { run, persist } from './harness';
+import { run, persist, fast, engineSetup, cpuNow } from './harness';
 
-function setup(overrides: Partial<RedactionContext>): { vault: MemoryVault; ctx: RedactionContext; hits: RedactionHit[] } {
-  const vault = new MemoryVault();
-  vault.getOrCreateSession('s', 0);
-  const ctx: RedactionContext = {
-    enabledPatterns: [], customPatterns: [], mode: 'token', dedup: true, fieldRules: [], fieldMode: 'all',
-    skipSemantic: true, scanNumbers: true, lockedSpans: new WeakMap(), keyLocks: new WeakMap(), keyOrigins: new WeakMap(),
-    ...overrides,
-  };
-  return { vault, ctx, hits: [] };
-}
+const setup = engineSetup;
 
 function roundTrip(input: IDataObject, overrides: Partial<RedactionContext>): { out: IDataObject; back: unknown; hits: RedactionHit[] } {
   const { vault, ctx, hits } = setup(overrides);
   const out = redactValue(input, ctx, vault, 's', hits, 0) as IDataObject;
   return { out, back: restoreValue(out, vault, 's'), hits };
 }
-
-const fast = (fn: () => void, ms: number) => {
-  const started = Date.now();
-  fn();
-  expect(Date.now() - started).toBeLessThan(ms);
-};
 
 describe('re-review 52-1: an overlapped detection never leaves its tail exposed', () => {
   it('covers the rest of an email after a deny entry claims its start', () => {
@@ -118,9 +102,9 @@ describe('re-review 52-10, 13, 14: linear time', () => {
 
   it('maps 8,000 distinct emails quickly', async () => {
     const note = Array.from({ length: 8000 }, (_, i) => `user${i}@example.com`).join(';');
-    const started = Date.now();
+    const started = cpuNow();
     await run({ operation: 'redact', sessionId: 'many' }, [{ note }]);
-    expect(Date.now() - started).toBeLessThan(4000);
+    expect(cpuNow() - started).toBeLessThan(4000);
   });
 
   it('redacts 16,000 distinct names quickly', () => {

@@ -3,6 +3,27 @@ import { PiiPattern } from './types';
 /**
  * Luhn algorithm — validates credit card numbers, IBANs (partial), etc.
  */
+const BASE64_DIGITS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+/** Whether base64 text decodes to bytes that include a colon, the user:password separator. */
+function base64HasColon(text: string): boolean {
+  const body = text.replace(/=+$/, '');
+  if (body.length % 4 === 1) return false;
+  let bits = 0;
+  let count = 0;
+  for (const ch of body) {
+    const value = BASE64_DIGITS.indexOf(ch);
+    if (value < 0) return false;
+    bits = ((bits << 6) | value) & 0xffff;
+    count += 6;
+    if (count >= 8) {
+      count -= 8;
+      if (((bits >> count) & 0xff) === 0x3a) return true;
+    }
+  }
+  return false;
+}
+
 function luhnCheck(num: string): boolean {
   const digits = num.replace(/\D/g, '');
   let sum = 0;
@@ -22,10 +43,11 @@ function luhnCheck(num: string): boolean {
 /**
  * IBAN checksum validation (ISO 13616)
  */
-const EMAIL_LOCAL = /[A-Za-z0-9._%+'!#$&*/=?^`{|}~-]/;
-const EMAIL_DOMAIN = /[\p{L}\p{N}.-]/u;
+// SMTPUTF8 local parts may hold any letter, digit or combining mark, as in josé or 用户.
+const EMAIL_LOCAL = /^[\p{L}\p{N}\p{M}._%+'!#$&*/=?^`{|}~-]$/u;
+const EMAIL_DOMAIN = /[\p{L}\p{N}\p{M}.-]/u;
 // A TLD is letters, or an IDNA A-label such as xn--p1ai.
-const EMAIL_DOMAIN_SHAPE = /^[\p{L}\p{N}-]+(?:[.][\p{L}\p{N}-]+)*[.](?:\p{L}{2,}|xn--[a-z0-9-]{2,59})$/iu;
+const EMAIL_DOMAIN_SHAPE = /^[\p{L}\p{N}\p{M}-]+(?:[.][\p{L}\p{N}\p{M}-]+)*[.](?:\p{L}[\p{L}\p{M}]+|xn--[a-z0-9-]{2,59})$/iu;
 const QUOTED_LOCAL_MAX = 128;
 
 /** Index of the opening quote of a quoted local part ending at close, honouring backslash escapes. */
@@ -40,14 +62,40 @@ function openingQuote(text: string, close: number): number {
   return -1;
 }
 
+/** The next ] at or after a position. The scan asks with rising positions, so each ] is searched for once. */
+type CloseFinder = (from: number) => number;
+
+function closeFinder(text: string): CloseFinder {
+  let found = -2;
+  return (from) => {
+    if (found !== -1 && found < from) found = text.indexOf(']', from);
+    return found;
+  };
+}
+
 /** End of an address literal such as [192.168.1.1] or [IPv6:2001:db8::1], or -1. */
-function addressLiteralEnd(text: string, at: number): number {
-  const close = text.indexOf(']', at + 2);
+function addressLiteralEnd(text: string, at: number, nextClose: CloseFinder): number {
+  const close = nextClose(at + 2);
   if (close < 0 || close - at > 64) return -1;
   const inner = text.slice(at + 2, close);
   const v4 = /^\d{1,3}(?:[.]\d{1,3}){3}$/.test(inner) && inner.split('.').every((n) => Number(n) <= 255);
   const v6 = /^IPv6:/i.test(inner) && isIpv6(inner.slice(5));
   return v4 || v6 ? close + 1 : -1;
+}
+
+/** Whether the two code units before end form one astral character. */
+/** Whether a surrogate pair starts at index at. */
+function surrogatePairAt(text: string, at: number): boolean {
+  const high = text.charCodeAt(at);
+  const low = text.charCodeAt(at + 1);
+  return high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff;
+}
+
+function surrogatePairBefore(text: string, end: number): boolean {
+  if (end < 2) return false;
+  const low = text.charCodeAt(end - 1);
+  const high = text.charCodeAt(end - 2);
+  return low >= 0xdc00 && low <= 0xdfff && high >= 0xd800 && high <= 0xdbff;
 }
 
 /** Start of the local part before the @ at at, including a quoted local part. Returns -1 when empty. */
@@ -57,16 +105,24 @@ function emailLocalStart(text: string, at: number): number {
     return open >= 0 && open < at - 2 ? open : -1;
   }
   let start = at;
-  while (start > 0 && EMAIL_LOCAL.test(text[start - 1])) start--;
+  while (start > 0) {
+    const width = surrogatePairBefore(text, start) ? 2 : 1;
+    if (!EMAIL_LOCAL.test(text.slice(start - width, start))) break;
+    start -= width;
+  }
   return start < at ? start : -1;
 }
 
 /** End of the domain after the @ at at, trimmed of trailing dots and hyphens. Returns -1 without a valid TLD. */
-function emailDomainEnd(text: string, at: number): number {
-  if (text[at + 1] === '[') return addressLiteralEnd(text, at);
+function emailDomainEnd(text: string, at: number, nextClose: CloseFinder): number {
+  if (text[at + 1] === '[') return addressLiteralEnd(text, at, nextClose);
   let end = at + 1;
 
-  while (end < text.length && EMAIL_DOMAIN.test(text[end])) end++;
+  while (end < text.length) {
+    const width = surrogatePairAt(text, end) ? 2 : 1;
+    if (!EMAIL_DOMAIN.test(text.slice(end, end + width))) break;
+    end += width;
+  }
   while (end > at + 1 && /[.-]/.test(text[end - 1])) end--;
   return EMAIL_DOMAIN_SHAPE.test(text.slice(at + 1, end)) ? end : -1;
 }
@@ -74,9 +130,10 @@ function emailDomainEnd(text: string, at: number): number {
 /** Finds addresses around each @ in one linear pass, so a long run of letters never backtracks. */
 function scanEmails(text: string): Array<{ start: number; end: number }> {
   const spans: Array<{ start: number; end: number }> = [];
+  const nextClose = closeFinder(text);
   for (let at = text.indexOf('@'); at >= 0; at = text.indexOf('@', at + 1)) {
     const start = emailLocalStart(text, at);
-    const end = start < 0 ? -1 : emailDomainEnd(text, at);
+    const end = start < 0 ? -1 : emailDomainEnd(text, at, nextClose);
     if (end > 0) spans.push({ start, end });
   }
   return spans;
@@ -160,10 +217,12 @@ const IBAN_LENGTHS: Record<string, number> = {
 };
 
 const ALNUM = /[A-Za-z0-9]/;
+// One space of any width within a line, such as a nonbreaking space. The checksum removes the same characters.
+const GROUP_SPACE = /^[^\S\r\n]$/;
 
 /** Whether a space at this point separates two groups of four. */
 const groupGap = (text: string, at: number, compact: number): boolean =>
-  text[at] === ' ' && compact % 4 === 0 && ALNUM.test(text[at + 1] ?? '');
+  GROUP_SPACE.test(text[at] ?? '') && compact % 4 === 0 && ALNUM.test(text[at + 1] ?? '');
 
 /** End of an IBAN of exactly this many characters starting here, or -1. */
 function ibanEnd(text: string, start: number, length: number): number {
@@ -202,13 +261,22 @@ function longestCard(groups: DigitGroup[], i: number): number {
   return best;
 }
 
-/** Cards within one run of digit groups. */
+/**
+ * Cards within one run of digit groups. Every group start is tried, so a valid card that overlaps an earlier
+ * candidate, as in 6 4111 1111 1111 1111, is covered too. Each start looks at most 19 digits ahead.
+ */
 function cardsInRun(groups: DigitGroup[], spans: Span[]): void {
-  let i = 0;
-  while (i < groups.length) {
+  let reach = -1;
+  for (let i = 0; i < groups.length; i++) {
+    // A candidate overlapping an earlier one must start like a payment card, with a major industry digit 2 to 6,
+    // so the digits after a complete card never extend it.
+    if (groups[i].start < reach && !/^[2-6]/.test(groups[i].digits)) continue;
     const best = longestCard(groups, i);
-    if (best >= 0) spans.push({ start: groups[i].start, end: groups[best].start + groups[best].digits.length });
-    i = best >= 0 ? best + 1 : i + 1;
+    if (best < 0) continue;
+    const end = groups[best].start + groups[best].digits.length;
+    if (end <= reach) continue;
+    spans.push({ start: groups[i].start, end });
+    reach = end;
   }
 }
 
@@ -244,11 +312,13 @@ function trimIpv6(s: string): string {
   return out;
 }
 
-const looksLikeIpv6 = (s: string): boolean => s.split(':').length >= 3 && /[0-9A-Fa-f]/.test(s) && isIpv6(s);
+// The unspecified address :: has no digits, so the grammar alone decides.
+const looksLikeIpv6 = (s: string): boolean => s.split(':').length >= 3 && isIpv6(s);
 
 function scanIpv6(text: string): Span[] {
   const spans: Span[] = [];
-  for (const m of text.matchAll(/(?<![0-9A-Za-z:.])[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*/g)) {
+  // A colon before the address may be a label, as in IP:2001:db8::1, so only letters, digits and dots block a start.
+  for (const m of text.matchAll(/(?<![0-9A-Za-z.])[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*/g)) {
     const s = trimIpv6(m[0]);
     const start = m.index ?? 0;
     if (looksLikeIpv6(s)) spans.push({ start, end: start + s.length });
@@ -256,6 +326,346 @@ function scanIpv6(text: string): Span[] {
   return spans;
 }
 
+
+const WORD_CHAR = /[A-Za-z0-9_]/;
+
+/** Whether a \b sits before position at, where text[at] is a word character. */
+const wordStart = (text: string, at: number): boolean => at === 0 || !WORD_CHAR.test(text[at - 1]);
+
+/**
+ * Finds a label before each dot-anchored tail, walking back over its own run only. Linear: every run is read at most
+ * twice, and a failed label restarts the tail search at the next dot.
+ */
+function scanBackLabels(
+  text: string,
+  tail: RegExp,
+  labelChar: RegExp,
+  startsAt: (text: string, at: number) => boolean,
+  minLabel: number,
+): Span[] {
+  const spans: Span[] = [];
+  const re = new RegExp(tail.source, tail.flags.includes('g') ? tail.flags : `${tail.flags}g`);
+  let floor = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const dot = m.index;
+    let run = dot;
+    while (run > floor && labelChar.test(text[run - 1])) run--;
+    let start = -1;
+    for (let at = run; at + minLabel <= dot; at++) {
+      if (startsAt(text, at)) {
+        start = at;
+        break;
+      }
+    }
+    if (start < 0) {
+      re.lastIndex = dot + 1;
+      continue;
+    }
+    const end = dot + m[0].length;
+    spans.push({ start, end });
+    floor = end;
+  }
+  return spans;
+}
+
+/** Internal hostnames such as db-1.internal, with the same matches as the regex but no backtracking over long labels. */
+function scanInternalHosts(text: string): Span[] {
+  return scanBackLabels(
+    text,
+    /\.(?:internal|local|corp|intranet|lan|private|home\.arpa)(?:\.[a-z]+)*\b/gi,
+    /[A-Za-z0-9-]/,
+    (t, at) => /[A-Za-z]/.test(t[at]) && wordStart(t, at),
+    2,
+  );
+}
+
+/** A JWT header or claims segment must decode to a JSON object, including legal leading whitespace. */
+function jwtObject(segment: string): Record<string, unknown> | null {
+  try {
+    const value: unknown = JSON.parse(Buffer.from(segment, 'base64url').toString('utf8'));
+    return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+interface JwtSegment {
+  start: number;
+  end: number;
+  object?: Record<string, unknown> | null;
+}
+
+/** Decodes a segment once, and only when it sits in a dot chain long enough to be a token. */
+function segmentObject(text: string, seg: JwtSegment): Record<string, unknown> | null {
+  if (seg.object === undefined) seg.object = jwtObject(text.slice(seg.start, seg.end));
+  return seg.object;
+}
+
+const jsonSpace = (byte: number): boolean => byte === 32 || byte === 9 || byte === 10 || byte === 13;
+
+/** Position before a quote's preceding backslash run, so reverse lexing visits each byte only once. */
+function beforeQuote(bytes: Buffer, at: number): number {
+  let before = at - 1;
+  while (bytes[before] === 92) before--;
+  return before;
+}
+
+const JSON_DEPTH: Record<number, number> = { 125: 1, 93: 1, 123: -1, 91: -1 };
+
+/** Locate the outer object ending a decoded run, ignoring braces inside JSON strings. Parsing validates it later. */
+function jsonObjectSuffix(bytes: Buffer): number {
+  let end = bytes.length - 1;
+  while (jsonSpace(bytes[end])) end--;
+  if (bytes[end] !== 125) return -1;
+  let depth = 0;
+  let quoted = false;
+  for (let at = end; at >= 0; at--) {
+    if (bytes[at] === 34) {
+      const before = beforeQuote(bytes, at);
+      if ((at - before) % 2 === 1) quoted = !quoted;
+      at = before + 1;
+      continue;
+    }
+    if (quoted) continue;
+    depth += JSON_DEPTH[bytes[at]] ?? 0;
+    if (depth === 0) return at;
+  }
+  return -1;
+}
+
+/** Only quartet boundaries map to whole decoded bytes. Leading JSON whitespace may precede the opening brace. */
+function headerBoundary(text: string, base: number, bytes: Buffer, objectStart: number): number {
+  let leading = objectStart;
+  while (leading > 0 && jsonSpace(bytes[leading - 1])) leading--;
+  for (let byte = Math.ceil(leading / 3) * 3; byte <= objectStart; byte += 3) {
+    const at = base + byte / 3 * 4;
+    if (text[at - 1] === '-') return at;
+  }
+  return -1;
+}
+
+/** Four alignments cover every hyphen boundary, with a constant number of linear decodes rather than one per suffix. */
+function prefixedJwtHeader(text: string, segment: JwtSegment): JwtSegment | null {
+  if (!text.slice(segment.start, segment.end).includes('-')) return null;
+  for (let phase = 0; phase < 4; phase++) {
+    const base = segment.start + phase;
+    const bytes = Buffer.from(text.slice(base, segment.end), 'base64url');
+    const objectStart = jsonObjectSuffix(bytes);
+    if (objectStart < 0) continue;
+    const start = headerBoundary(text, base, bytes, objectStart);
+    if (start < 0) continue;
+    const object = jwtObject(text.slice(start, segment.end));
+    if (typeof object?.alg === 'string') return { start, end: segment.end, object };
+  }
+  return null;
+}
+
+function jwtPairSpan(text: string, chain: JwtSegment[], end: number, unsecured: boolean): Span | null {
+  const first = chain[0];
+  const header = typeof segmentObject(text, first)?.alg === 'string' ? first : prefixedJwtHeader(text, first);
+  if (!header || !segmentObject(text, chain[1])) return null;
+  if (unsecured && header.object?.alg !== 'none') return null;
+  return { start: header.start, end };
+}
+
+const hasEmptySignature = (text: string, end: number): boolean =>
+  text[end] === '.' && !/[A-Za-z0-9_-]/.test(text[end + 1] ?? '');
+
+function jwtChainSpan(text: string, chain: JwtSegment[]): Span | null {
+  if (chain.length < 2) return null;
+  const last = chain[chain.length - 1];
+  if (chain.length === 3) {
+    const signed = jwtPairSpan(text, chain, last.end, false);
+    if (signed) return signed;
+  }
+  if (!hasEmptySignature(text, last.end)) return null;
+  return jwtPairSpan(text, chain.slice(-2), last.end + 1, true);
+}
+
+/** Dot-joined Base64URL runs with JSON headers and claims, including unsecured JWTs with an empty signature. */
+function scanJwts(text: string): Span[] {
+  const spans: Span[] = [];
+  const segments = /[A-Za-z0-9_-]+/g;
+  const chain: JwtSegment[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = segments.exec(text)) !== null) {
+    const previous = chain[chain.length - 1];
+    if (previous && (m.index !== previous.end + 1 || text[previous.end] !== '.')) chain.length = 0;
+    chain.push({ start: m.index, end: segments.lastIndex });
+    const span = jwtChainSpan(text, chain);
+    if (span) {
+      spans.push(span);
+      chain.length = 0;
+    } else if (chain.length === 3) chain.shift();
+  }
+  return spans;
+}
+
+const LDAP_ATTRS = ['CN', 'OU', 'DC', 'ST', 'O', 'C', 'L'];
+
+/** Length of an attribute name and its = at position at, or -1. */
+function ldapAttrAt(text: string, at: number): number {
+  for (const attr of LDAP_ATTRS) {
+    if (text.substr(at, attr.length).toUpperCase() === attr && text[at + attr.length] === '=') return attr.length + 1;
+  }
+  return -1;
+}
+
+/** End of an attribute value: the next unescaped comma, or a line break. A backslash escapes the next character (RFC 4514). */
+function ldapValueEnd(text: string, from: number): number {
+  let end = from;
+  while (end < text.length && text[end] !== ',' && text[end] !== '\n' && text[end] !== '\r') {
+    end += text[end] === '\\' && end + 1 < text.length && text[end + 1] !== '\n' && text[end + 1] !== '\r' ? 2 : 1;
+  }
+  return end;
+}
+
+/** Follows ", attr=value" pairs after a first value ending at end. Counts the first value too. */
+function ldapChain(text: string, firstEnd: number): { end: number; count: number } {
+  let end = firstEnd;
+  let count = 1;
+  while (text[end] === ',') {
+    let at = end + 1;
+    while (at < text.length && /\s/.test(text[at])) at++;
+    const attr = ldapAttrAt(text, at);
+    if (attr < 0) break;
+    const next = ldapValueEnd(text, at + attr);
+    if (next === at + attr) break;
+    end = next;
+    count++;
+  }
+  return { end, count };
+}
+
+/** Distinguished names of two or more attributes, of any length, in one pass. */
+function scanLdapDns(text: string): Span[] {
+  const spans: Span[] = [];
+  const starts = /(?<![A-Za-z])(?:CN|OU|DC|ST|O|C|L)=/gi;
+  let m: RegExpExecArray | null;
+  while ((m = starts.exec(text)) !== null) {
+    const valueStart = m.index + m[0].length;
+    const firstEnd = ldapValueEnd(text, valueStart);
+    const { end, count } = firstEnd > valueStart ? ldapChain(text, firstEnd) : { end: firstEnd, count: 0 };
+    if (count >= 2) {
+      spans.push({ start: m.index, end });
+      starts.lastIndex = end;
+    } else {
+      // A later start inside this value would end at the same delimiter and fail the same way.
+      starts.lastIndex = Math.max(starts.lastIndex, firstEnd);
+    }
+  }
+  return spans;
+}
+
+const isLineBreak = (ch: string | undefined): boolean => ch === '\n' || ch === '\r';
+
+/** Quoted and ODBC braced values honour doubled closing delimiters. */
+function connValueEnd(text: string, from: number, limit: number): number {
+  let at = from;
+  while (at < limit && /\s/.test(text[at])) at++;
+  if (/["'{]/.test(text[at] ?? '')) at = quotedValueEnd(text, at, limit);
+  while (at < limit && text[at] !== ';') at++;
+  return at;
+}
+
+/** The index after the closing delimiter, reading a doubled closing delimiter as a literal one. */
+function quotedValueEnd(text: string, at: number, limit: number): number {
+  const opener = text[at++];
+  const quote = opener === '{' ? '}' : opener;
+  while (at < limit) {
+    if (text[at++] !== quote) continue;
+    if (text[at] !== quote) return at;
+    at++;
+  }
+  return at;
+}
+
+/** Find a segment delimiter without interpreting semicolons inside a quoted value as separators. */
+function connSegmentEnd(text: string, from: number, limit: number): number {
+  let at = from;
+  while (at < limit && text[at] !== '=' && text[at] !== ';') at++;
+  return text[at] === '=' ? connValueEnd(text, at + 1, limit) : at;
+}
+
+/** The line around at, read once: its end and its last password segment. */
+function connLine(text: string, at: number): { end: number; password: { semi: number; end: number } | null; semi: number } {
+  let lineStart = at;
+  while (lineStart > 0 && !isLineBreak(text[lineStart - 1])) lineStart--;
+  let end = at;
+  while (end < text.length && !isLineBreak(text[end])) end++;
+  return { end, password: lastPasswordSegment(text, lineStart, end), semi: -2 };
+}
+
+/** The first ; at or after from on the line, or -1. Searched once and reused, so starts before it never rescan. */
+function nextSemi(text: string, line: { end: number; semi: number }, from: number): number {
+  if (line.semi !== -1 && line.semi < from) {
+    line.semi = connValueEnd(text, from, line.end);
+    if (line.semi === line.end) line.semi = -1;
+  }
+  return line.semi;
+}
+
+/** The last segment with a trimmed Password or Pwd key and a value: the ; before it, and its end. */
+function lastPasswordSegment(text: string, lineStart: number, lineEnd: number): { semi: number; end: number } | null {
+  let found: { semi: number; end: number } | null = null;
+  let segStart = lineStart;
+  while (segStart <= lineEnd) {
+    const segEnd = connSegmentEnd(text, segStart, lineEnd);
+    const segment = text.slice(segStart, segEnd);
+    const key = /^[ \t]*(?:Password|Pwd)[ \t]*=/i.exec(segment);
+    if (key && key[0].length < segment.length) found = { semi: segStart - 1, end: segEnd };
+    segStart = segEnd + 1;
+  }
+  return found;
+}
+
+/**
+ * Key=value connection strings with credentials, on one line, from Server=, Data Source= or Host= through the last
+ * Password= or Pwd= value, with no length limit. Each line is read once.
+ */
+function scanConnStrings(text: string): Span[] {
+  const spans: Span[] = [];
+  const starts = /(?<![A-Za-z])(?:Server|Data Source|Host)[ \t]*=/gi;
+  let line: { end: number; password: { semi: number; end: number } | null; semi: number } = { end: -1, password: null, semi: -2 };
+  let m: RegExpExecArray | null;
+  while ((m = starts.exec(text)) !== null) {
+    const start = m.index;
+    const valueStart = start + m[0].length;
+    if (start > line.end) line = connLine(text, start);
+    const semi = nextSemi(text, line, valueStart);
+    if (semi <= valueStart || !line.password || line.password.semi < semi) continue;
+    spans.push({ start, end: line.password.end });
+    starts.lastIndex = line.password.end;
+  }
+  return spans;
+}
+
+// A labelled name word: any letters and marks, with inner apostrophes or hyphens, as in O'Connor or Smith-Jones.
+// The label is matched case-insensitively, so the word does not tell upper from lower case and nothing competes.
+const CTX_NAME_WORD = String.raw`\p{L}[\p{L}\p{M}]*(?:['’-]\p{L}[\p{L}\p{M}]*)*`;
+const FULL_NAME_LABELS = String.raw`full\s*name|first\s*name|last\s*name|surname|family\s*name|given\s*name|Vorname|Nachname|Familienname|nom\s*de\s*famille|prenom|nombre|apellido`;
+// A title-case or all-capitals name word, with inner capitals, apostrophes or hyphens.
+const TITLED_WORD = String.raw`(?:\p{Lu}{2,}(?:['’-]\p{Lu}+)*|\p{Lu}[\p{Ll}\p{M}]*(?:\p{Lu}[\p{Ll}\p{M}]+)*(?:['’-]\p{Lu}?[\p{Ll}\p{M}]+(?:\p{Lu}[\p{Ll}\p{M}]+)*)*)`;
+
+/** Makes the letters of a regex source match either case, leaving escapes such as \s alone. */
+function ci(source: string): string {
+  let out = '';
+  for (let i = 0; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === '\x5c') {
+      out += ch + (source[i + 1] ?? '');
+      i++;
+      continue;
+    }
+    const upper = ch.toUpperCase();
+    const lower = ch.toLowerCase();
+    out += upper !== lower ? `[${upper}${lower}]` : ch;
+  }
+  return out;
+}
+
+const MAIDEN_LABELS = String.raw`mother['’]?s?\s*maiden\s*name|Geburtsname|nom\s+de\s+jeune\s+fille`;
 
 export const PII_PATTERNS: PiiPattern[] = [
   // ═══════════════════════════════════════════
@@ -276,6 +686,14 @@ export const PII_PATTERNS: PiiPattern[] = [
     category: 'contact',
     regex: /(?:\+\d{1,3}[\s\-.])?(?:\(\d{2,4}\)|\d{2,4})[\s\-.]\d{3,4}[\s\-.]\d{3,8}/g,
     description: 'Phone numbers (international formats)',
+  },
+  {
+    name: 'phoneE164',
+    label: 'PHONE',
+    category: 'contact',
+    // A compact international number with no separators, as in +436641234567 (E.164: up to 15 digits).
+    regex: /(?<![\w+])\+[1-9]\d{7,14}(?!\d)/g,
+    description: 'Phone numbers in compact international form (+436641234567)',
   },
   {
     name: 'phoneUK',
@@ -327,8 +745,11 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'personName',
     label: 'PERSON',
     category: 'identity',
-    regex:
-      /(?<![\p{L}\p{N}])(?:Mr\.?|Mrs\.?|Ms\.?|Miss|Dr\.?|Prof\.?|Sr\.?|Jr\.?|Herr|Frau|Monsieur|Madame|Señor|Señora)\s+\p{Lu}\p{Ll}*(?:\p{Lu}\p{Ll}+)*(?:['’-]\p{Lu}?\p{Ll}+(?:\p{Lu}\p{Ll}+)*)*(?:\s+\p{Lu}\p{Ll}*(?:\p{Lu}\p{Ll}+)*(?:['’-]\p{Lu}?\p{Ll}+(?:\p{Lu}\p{Ll}+)*)*){0,3}(?![\p{L}\p{N}])/gu,
+    // Every name word after the title, of any number, in title case or all capitals as in Mr. JOHN SMITH.
+    regex: new RegExp(
+      String.raw`(?<![\p{L}\p{N}])(?:Mr\.?|Mrs\.?|Ms\.?|Miss|Dr\.?|Prof\.?|Sr\.?|Jr\.?|Herr|Frau|Monsieur|Madame|Señor|Señora)\s+${TITLED_WORD}(?:\s+${TITLED_WORD})*(?![\p{L}\p{N}])`,
+      'gu',
+    ),
 
     description: 'Person names with title prefixes (Mr., Mrs., Dr., etc.)',
   },
@@ -368,8 +789,9 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'nationalIdDE',
     label: 'NATIONAL_ID_DE',
     category: 'identity',
-    regex: /\b[CFGHJKLMNPRTVWXYZ0-9]{9}\d\b/g,
-    description: 'German ID card number (10 chars)',
+    // The serial number has nine characters, starting with a letter since 2010, and may be followed by its check digit.
+    regex: /\b(?:[CFGHJKLMNPRTVWXYZ][CFGHJKLMNPRTVWXYZ0-9]{8}\d?|[CFGHJKLMNPRTVWXYZ0-9]{9}\d)\b/g,
+    description: 'German ID card serial number (9 characters, or 10 with the check digit)',
   },
   {
     name: 'nhsNumber',
@@ -774,8 +1196,9 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'bitcoinAddress',
     label: 'BTC_ADDRESS',
     category: 'crypto',
-    regex: /\b(?:bc1|[13])[a-zA-HJ-NP-Z0-9]{25,39}\b/g,
-    description: 'Bitcoin addresses (Legacy + Bech32)',
+    // Bech32 and Bech32m addresses run to 90 characters and may be all upper case (BIP 173, BIP 350).
+    regex: /\b(?:[13][a-zA-HJ-NP-Z0-9]{25,39}|bc1[ac-hj-np-z02-9]{11,87}|BC1[AC-HJ-NP-Z02-9]{11,87})\b/g,
+    description: 'Bitcoin addresses (Legacy, Bech32 and Taproot, either letter case)',
   },
   {
     name: 'ethereumAddress',
@@ -1009,6 +1432,7 @@ export const PII_PATTERNS: PiiPattern[] = [
     label: 'INTERNAL_HOST',
     category: 'enterprise',
     regex: /\b[a-z][a-z0-9-]+\.(?:internal|local|corp|intranet|lan|private|home\.arpa)(?:\.[a-z]+)*\b/gi,
+    scan: scanInternalHosts,
     description: 'Internal/intranet hostnames (.internal, .local, .corp, .lan)',
   },
   {
@@ -1023,6 +1447,7 @@ export const PII_PATTERNS: PiiPattern[] = [
     label: 'LDAP_DN',
     category: 'enterprise',
     regex: /(?<![A-Za-z])(?:CN|OU|DC|O|C|L|ST)=[^,]{1,256}(?:,\s*(?:CN|OU|DC|O|C|L|ST)=[^,]{1,256}){1,32}/gi,
+    scan: scanLdapDns,
     description: 'LDAP Distinguished Names (CN=...,OU=...,DC=...)',
   },
   {
@@ -1051,6 +1476,7 @@ export const PII_PATTERNS: PiiPattern[] = [
     label: 'CONN_STRING',
     category: 'enterprise',
     regex: /(?<![A-Za-z])(?:Server|Data Source|Host)=[^;]{1,512};[^;]{0,512}(?:;[^;]{0,512}){0,10}(?:Password|Pwd)=[^;]{1,512}/gi,
+    scan: scanConnStrings,
     description: 'Connection strings with credentials (ADO.NET / key=value style)',
   },
   {
@@ -1078,35 +1504,38 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'openaiKey',
     label: 'OPENAI_KEY',
     category: 'enterprise',
-    regex: /\bsk-[A-Za-z0-9]{20,}\b/g,
-    description: 'OpenAI API keys',
+    // Project, service-account and admin keys carry hyphens and underscores, as in sk-proj-...
+    regex: /\bsk-[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])/g,
+    description: 'OpenAI API keys, including sk-proj-, sk-svcacct- and sk-admin- keys',
   },
   {
     name: 'githubToken',
     label: 'GITHUB_TOKEN',
     category: 'enterprise',
-    regex: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,}\b/g,
-    description: 'GitHub personal access tokens',
+    regex: /\b(?:(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,}|github_pat_[A-Za-z0-9_]{22,})\b/g,
+    description: 'GitHub tokens, including fine-grained github_pat_ tokens',
   },
   {
     name: 'slackToken',
     label: 'SLACK_TOKEN',
     category: 'enterprise',
-    regex: /\bxox[boaprs]-[A-Za-z0-9-]+/g,
-    description: 'Slack API tokens',
+    regex: /\b(?:xox[boaprse]-|xoxe[.]xox[bp]-|xoxe[.]xapp-|xapp-)[A-Za-z0-9-]+/g,
+    description: 'Slack API tokens, including app-level (xapp-) and refresh (xoxe.) tokens',
   },
   {
     name: 'bearerToken',
     label: 'BEARER_TOKEN',
     category: 'enterprise',
-    regex: /Bearer\s+[A-Za-z0-9\-._~+/]+=*/g,
-    description: 'Bearer authentication tokens',
+    // Auth schemes are case-insensitive (RFC 9110). Eight characters at least, so prose such as "bearer of" is left alone.
+    regex: /\bBearer\s+[A-Za-z0-9\-._~+/]{8,}=*/gi,
+    description: 'Bearer authentication tokens, in any letter case',
   },
   {
     name: 'jwtToken',
     label: 'JWT',
     category: 'enterprise',
     regex: /\beyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+/g,
+    scan: scanJwts,
     description: 'JSON Web Tokens (JWT)',
   },
   {
@@ -1129,8 +1558,11 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'genericSecret',
     label: 'SECRET',
     category: 'enterprise',
-    regex: /(?:password|passwd|pwd|secret|token|credential|auth_key|api_key|apikey|api_secret|api_token|access_token|secret_key|private_key|encryption_key)\s*[=:]\s*['"]?[^\s'"]{8,}['"]?/gi,
-    description: 'Secrets in config (password=, api_key=, secret=, token=, etc.)',
+    // A quoted value is taken whole, spaces included. A password may be short, as in password=admin. Other keys need
+    // eight characters unquoted, so prose such as "token: the" is left alone.
+    // Keys may be quoted, as in JSON. Quoted values honour backslash escapes, so an escaped quote stays inside.
+    regex: /(?:["']?(?:password|passwd|pwd|secret)["']?\s*[=:]\s*(?:"(?:[^"\x5c\r\n]|\x5c.)*"|'(?:[^'\x5c\r\n]|\x5c.)*'|[^\s'"]+)|["']?(?:token|credential|auth_key|api_key|apikey|api_secret|api_token|access_token|secret_key|private_key|encryption_key)["']?\s*[=:]\s*(?:"(?:[^"\x5c\r\n]|\x5c.)*"|'(?:[^'\x5c\r\n]|\x5c.)*'|[^\s'"]{8,}))/gi,
+    description: 'Secrets in config (password=, api_key=, secret=, token=, etc.), quoted values whole',
   },
   {
     name: 'azureKey',
@@ -1443,7 +1875,7 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'mothersMaidenName',
     label: 'MAIDEN_NAME',
     category: 'identity',
-    regex: /(?:mother'?s?\s*maiden\s*name|Geburtsname|nom\s+de\s+jeune\s+fille)[:\s]+[A-ZÀ-ÿ][a-zà-ÿ]+/gi,
+    regex: new RegExp(String.raw`(?:${MAIDEN_LABELS})[:\s]+${CTX_NAME_WORD}`, 'giu'),
     description: 'Mother\'s maiden name (security question, labeled)',
   },
   {
@@ -1492,7 +1924,12 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'fullNameCtx',
     label: 'FULL_NAME',
     category: 'identity',
-    regex: /(?:full\s*name|first\s*name|last\s*name|surname|family\s*name|given\s*name|Vorname|Nachname|Familienname|nom\s*de\s*famille|prenom|nombre|apellido)[:\s]+[A-ZÀ-ÿ][a-zà-ÿ]+(?:\s+[A-ZÀ-ÿ][a-zà-ÿ]+){0,3}/gi,
+    // Up to three more words in any case, then any number of capitalised words, so a long name is covered whole
+    // while a lower-case sentence after a short name is not.
+    regex: new RegExp(
+      String.raw`(?:${ci(FULL_NAME_LABELS)})[:\s]+${CTX_NAME_WORD}(?:\s+${CTX_NAME_WORD}){0,3}(?:\s+\p{Lu}[\p{L}\p{M}]*(?:['’-]\p{L}[\p{L}\p{M}]*)*)*`,
+      'gu',
+    ),
     description: 'Full name, first name, last name (labeled, multi-language)',
   },
   {
@@ -1619,7 +2056,7 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'bloodTypeCtx',
     label: 'BLOOD_TYPE',
     category: 'medical',
-    regex: /(?:blood\s*type|blood\s*group)[:\s]*(?:A|B|AB|O)[+-]?/gi,
+    regex: /(?:blood\s*type|blood\s*group)[:\s]*(?:AB|A|B|O)[+-]?(?![A-Za-z0-9])/gi,
     description: 'Blood type (contextual)',
   },
   {
@@ -1753,8 +2190,17 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'httpBasicAuth',
     label: 'HTTP_BASIC_AUTH',
     category: 'enterprise',
-    regex: /Authorization:\s*Basic\s+[A-Za-z0-9+/=]+/g,
-    description: 'HTTP Basic Authentication headers',
+    regex: /(?<=\bAuthorization["']?\s*[:=]\s*["']?)Basic\s+[A-Za-z0-9+/=]+/gi,
+    description: 'HTTP Basic Authentication headers, in any letter case',
+  },
+  {
+    name: 'httpBasicCredential',
+    label: 'HTTP_BASIC_AUTH',
+    category: 'enterprise',
+    // A whole value such as a header object's "Basic dXNlcjpwYXNz", kept only when it decodes to user:password.
+    regex: /^\s*Basic\s+[A-Za-z0-9+/]{4,}={0,2}(?=\s*$)/gi,
+    validate: (match: string) => base64HasColon(match.trim().replace(/^Basic\s+/i, '')),
+    description: 'HTTP Basic credentials stored as a header value',
   },
   {
     name: 'apiKeyInUrl',
@@ -1783,8 +2229,8 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'envSecrets',
     label: 'ENV_SECRET',
     category: 'enterprise',
-    regex: /\b(?:DATABASE_URL|DB_PASSWORD|DB_PASS|REDIS_URL|MONGO_URI|SECRET_KEY|ENCRYPTION_KEY|MASTER_KEY|SMTP_PASSWORD|MAIL_PASSWORD)=[^\s]+/g,
-    description: 'Environment variable secrets (DATABASE_URL, DB_PASSWORD, etc.)',
+    regex: /\b(?:DATABASE_URL|DB_PASSWORD|DB_PASS|REDIS_URL|MONGO_URI|SECRET_KEY|ENCRYPTION_KEY|MASTER_KEY|SMTP_PASSWORD|MAIL_PASSWORD)[ \t]*=[ \t]*(?:'[^']*'|"(?:[^"\\]|\\[^])*"|[^\s]+)/g,
+    description: 'Environment variable secrets (DATABASE_URL, DB_PASSWORD, etc.), quoted values taken whole',
   },
   {
     name: 'googleAnalyticsId',

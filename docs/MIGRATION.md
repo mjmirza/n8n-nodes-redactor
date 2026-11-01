@@ -114,6 +114,66 @@ Every version:
 - Presidio entities take the category of the built-in pattern with the same label, so a VAT code is counted as financial.
 - The ROPA record reports the TTL of an existing session rather than the one requested.
 
+## Moving to 7.0
+
+7.0 is a major release because saved workflows of every node version can produce different output. Nothing needs to be reconfigured, but check downstream steps that read redacted values.
+
+- Connection-string detection consumes complete ODBC brace-enclosed values, including semicolons and doubled closing braces, so password suffixes cannot survive Redact or pass Verify.
+- Connection-string keys accept spaces and tabs around equals signs, and quoted passwords with doubled quotes are consumed whole.
+- JWT headers are detected after hyphen boundaries with a constant number of linear scans, so URL prefixes cannot hide encoded personal data from Redact or Verify.
+- Unsecured JWTs whose decoded header specifies alg none are detected with their trailing empty signature. Other algorithms still require a nonempty signature.
+- Session IDs are converted to strings once when read, so numeric expressions use the same identifier for storage, restoration and opaque report and audit references without value-bearing hash errors.
+- The final pseudonym restoration check compares objects independently of property order while preserving array order and value types, so integer-like pseudonym keys no longer falsely stop valid output.
+- Pseudonym repair reserves token-shaped text from every generated output before allocating repair tokens and checks restoration against the final vault, including after workflow storage is reloaded.
+- Connection-string detection consumes quoted values with embedded semicolons and doubled enclosing quotes, so no password suffix survives Redact or passes Verify.
+- JWT detection scans Base64URL segments and validates decoded JSON objects instead of requiring fixed prefixes, so legal whitespace before claims is covered by Redact and Verify.
+- Presidio responses with negative, empty, reversed or out-of-range spans count as scan failures. Bounds use the submitted text's code-point length. The default stops output, and explicit continuation reports unscanned texts and PARTIAL audit status.
+- Direct PII Types selections must be arrays of known pattern names, and unknown Detection Scope values stop the run instead of silently disabling detection.
+- If Presidio Fails accepts only stop or continue. Invalid expression results stop the run before scanning.
+- Allow list and deny list regex errors identify the list and its one-based row index without exposing entry contents, including input-length failures.
+- Audit records and full redaction reports use a deterministic opaque session reference instead of the raw Session ID. Session errors omit the identifier, including missing, expired and unreadable sessions.
+- The comparison guide describes audit records on Report and explains that downstream storage controls persistence, rotation and retention. Audit Log alone retains no audit trail.
+- CI now runs on pushes to every branch, as well as pull requests, while keeping GitHub Actions pinned by SHA.
+
+- More text is redacted: five-word names, decomposed accents, names with particles such as `van` or `de`, labelled names with apostrophes, hyphens or inner capitals, a valid card after a stray digit, Unicode email local parts, IBANs grouped with nonbreaking spaces, IPv6 after a colon label, the address `::`, full `AB` blood types, connection-string passwords of any length on one line, and LDAP DNs of any length. A connection-string password and an LDAP value now end at a line break.
+- An element of an array is judged with the keys next to the array, so `id: ["ACME-SECRET-ID"]` beside a name is redacted like `id: "ACME-SECRET-ID"`.
+- A boolean under a sensitive key, such as `disability: true`, is replaced with a token and counted in Classify and ROPA. Restore returns the boolean.
+- In Pseudonymize mode, a value whose pseudonym would run together with the text beside it gets a bracketed token such as `[SALARY_3]` instead, so Restore returns the exact original.
+- Overlapping Presidio entities are covered as a whole. Touching parts of the same type become one replacement, and parts of different types keep their own.
+- Presidio is asked for scores from the configured confidence threshold, where 6.x always asked for 0.4 and up. A threshold of 0, the default, still asks for 0.4.
+- Restore and Detect keep binary attachments. Redact removes them unless Binary Attachments is set to Keep Unscanned, because the node does not scan file content. Verify reports `FAIL` and counts `unscannedAttachments` when an item carries an attachment.
+- In Pseudonymize mode, a string or key that would not restore exactly, because a mapping made for another field spells text next to it, is replaced whole by a `[TEXT_n]` token.
+- A Prompt Injection or Presidio setting whose expression fails stops the run with that error.
+- A run-wide setting given by an expression, such as Session ID or Tenant Profile, must give the same value for every item. When items disagree the run stops. Split mixed batches first, for example with Loop Over Items, so each run sees one tenant.
+- More credentials and identifiers are redacted: OpenAI project, service-account and admin keys, GitHub fine-grained tokens, and nine-character German ID card serial numbers.
+- Verify has a new Verify Output option. The default, Report, is unchanged. Items, Stop on FAIL returns the checked items and stops the run on `FAIL`.
+- Bearer tokens and Basic authentication headers match in any letter case, and Basic authentication is part of the recommended patterns. A bearer token needs at least eight characters.
+- Secrets such as `password=...` are matched with quoted values taken whole, spaces included, and passwords of any length.
+- An unknown word inside a name run that holds a known name, as in `Alice Beth Claire Xochitl Quispe`, is redacted with the rest of the name.
+- A Redact run whose session expires before it finishes stops with an error instead of returning tokens.
+- More names are redacted: every word after a title such as `Mr.` or `Dr.`, all-capitals names such as `JOHN SMITH`, and long labelled full names. A labelled name still stops at a lower-case word after its first four words.
+- Compact international phone numbers such as `+436641234567` are redacted by the new `phoneE164` pattern, which is part of the recommended set.
+- Secrets under quoted keys, as in `{"password":"..."}`, are redacted.
+- On Detect, a failed Include Audit Report or Audit Log expression stops the run instead of dropping the report.
+- A tenant profile with a `NaN` confidence threshold is refused.
+- A built-in pattern match that overlaps an earlier replacement no longer causes a rescan from the next character. Its free parts are still redacted.
+- A Redaction Mode expression must give one of the listed modes. An unknown value stops the run instead of passing data through.
+- Basic credentials are redacted wherever they appear: as a header value, under an `authorization` or `proxy_authorization` key, and inside serialized JSON. The Basic header pattern replaces only the `Basic ...` part, so `Authorization: Basic abc` becomes `Authorization: [HTTP_BASIC_AUTH_0]` where 6.x replaced the whole line.
+- Any value under an `authorization` key, including a bearer token, is redacted as a credential.
+- Quoted environment values such as `DB_PASS='azure zebra'` are replaced whole, quotes included, where 6.x stopped at the first space.
+- A tenant profile that sets `fieldMode` without `fieldRules` applies that mode to the node's own field rules.
+- A negative Session TTL stops the run. Use 0 to keep the session until it is purged.
+- With Presidio on, a text Presidio could not scan stops the run by default, because 6.x passed it through as if scanned. Set the new If Presidio Fails option to Continue With Patterns Only to keep the 6.x behaviour; the report then counts the unscanned texts in `presidioUnscannedTexts`.
+- A blank Allow List row is ignored. In 6.x it allowed every value through.
+- Restore stops when two keys would restore to the same name, instead of keeping only one of their values.
+- With Deduplicate on, repeated numbers and booleans under sensitive keys share one token, as repeated text always did. A number never shares a token with the same digits as text.
+- Email pseudonyms use only domains reserved for documentation, such as `example.com` and `shop.test`.
+- After a pseudonym repair, report hits name the repaired key and its token, so each hit points at a field in the output.
+- With Presidio on, an empty or invalid Presidio URL stops the run, and an unusable Presidio answer counts as an unscanned text.
+- A Confidence Threshold outside 0 to 1 stops the run.
+- Slack `xapp-` and `xoxe.` tokens are redacted.
+- An audit record is `PARTIAL` with `presidioUnscannedTexts` when Presidio skipped any text.
+
 ## Tenant profile fields
 
 All fields are optional. Unknown fields are rejected so a typo never passes silently.

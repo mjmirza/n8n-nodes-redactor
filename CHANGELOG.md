@@ -6,6 +6,89 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 Planned: random scoped tokens.
 
+## [7.0.0] - 2026-11-01
+
+Fixes every finding from a ninth adversarial review, run against 6.1.0. Each one has a regression test in `test/codex-review-61.test.ts` that fails on 6.1.0. This is a major release because saved workflows can produce different output: more values are redacted, booleans under sensitive keys are replaced, and some pseudonyms become bracketed tokens. `docs/MIGRATION.md` lists every change. The review rounds on the 7.0.0 branch that followed are listed, each finding with its pinning test, in [docs/RESOLVED-FINDINGS.md](docs/RESOLVED-FINDINGS.md).
+
+### Security
+- **Restore could return the wrong value for pseudonyms.** Text next to a pseudonym could spell another stored pseudonym, so `1EMP309 EMP608` restored as `EMP608 EMP608`. Such a replacement now gets a bracketed token, which neighbouring text cannot extend.
+- **Overlapping Presidio entities left part of a name in clear text.** Every part of every detected entity is now covered. Touching parts of the same type merge into one replacement.
+- **Wildcard field rules, three built-in detectors and one injection rule took quadratic or worse time.** Field rules are matched without regexes. Email address literals, internal hostnames and JWTs are found by linear scanners, and the horizontal-rule injection rule no longer backtracks over spaces.
+- **Presidio entity types named after built-in object properties, such as `constructor`, were silently dropped.** Label and category lookups use own properties only.
+- **Array elements lost the context of their key,** so `id: ["ACME-SECRET-ID"]` next to a name was not redacted. Elements are now judged like a single value under the same key.
+- **Booleans under sensitive keys, such as `disability: true`, were never redacted.** They are replaced, classified, and restored as booleans.
+- **Formats were missed or cut short.** Five-word names, decomposed accents, names with `van`, `de` and similar particles, labelled names with apostrophes, hyphens or inner capitals, a valid card after a stray digit, Unicode email local parts, IBANs grouped with nonbreaking spaces, IPv6 after a colon label, the unspecified address `::`, `AB` blood types, connection-string passwords past 512 characters and LDAP DNs past 33 attributes are now found whole.
+
+### Fixed
+- Connection-string detection consumes complete ODBC brace-enclosed values, including semicolons and doubled closing braces, so password suffixes cannot survive Redact or pass Verify.
+- Connection-string keys accept spaces and tabs around equals signs, and quoted passwords with doubled quotes are consumed whole.
+- JWT headers are detected after hyphen boundaries with a constant number of linear scans, so URL prefixes cannot hide encoded personal data from Redact or Verify.
+- Unsecured JWTs whose decoded header specifies alg none are detected with their trailing empty signature. Other algorithms still require a nonempty signature.
+- Session IDs are converted to strings once when read, so numeric expressions use the same identifier for storage, restoration and opaque report and audit references without value-bearing hash errors.
+- The final pseudonym restoration check compares objects independently of property order while preserving array order and value types, so integer-like pseudonym keys no longer falsely stop valid output.
+- Pseudonym repair reserves token-shaped text from every generated output before allocating repair tokens and checks restoration against the final vault, including after workflow storage is reloaded.
+- Connection-string detection consumes quoted values with embedded semicolons and doubled enclosing quotes, so no password suffix survives Redact or passes Verify.
+- JWT detection scans Base64URL segments and validates decoded JSON objects instead of requiring fixed prefixes, so legal whitespace before claims is covered by Redact and Verify.
+- Presidio responses with negative, empty, reversed or out-of-range spans count as scan failures. Bounds use the submitted text's code-point length. The default stops output, and explicit continuation reports unscanned texts and PARTIAL audit status.
+- Direct PII Types selections must be arrays of known pattern names, and unknown Detection Scope values stop the run instead of silently disabling detection.
+- If Presidio Fails accepts only stop or continue. Invalid expression results stop the run before scanning.
+- Allow list and deny list regex errors identify the list and its one-based row index without exposing entry contents, including input-length failures.
+- Audit records and full redaction reports use a deterministic opaque session reference instead of the raw Session ID. Session errors omit the identifier, including missing, expired and unreadable sessions.
+- The comparison guide describes audit records on Report and explains that downstream storage controls persistence, rotation and retention. Audit Log alone retains no audit trail.
+- CI now runs on pushes to every branch, as well as pull requests, while keeping GitHub Actions pinned by SHA.
+- Restore and Detect dropped binary attachments. They now keep `item.binary`. Redact gains a Binary Attachments option: Remove, the default, drops them because their content is not scanned, and Keep Unscanned passes them through. Verify fails when an item carries an attachment, and reports `unscannedAttachments`.
+- In Pseudonymize mode, a mapping made for a later field could spell text next to a pseudonym in an earlier field, so Restore returned the other field's value. Every output string and key is now restored before the run ends, and one that would not restore exactly is replaced whole by a bracketed `[TEXT_n]` token.
+- A Presidio setting whose expression failed silently turned Presidio off. The error now stops the run.
+- A boolean and the string `true` could share one pseudonym, so Restore returned both with one type. Each boolean gets its own mapping.
+- The run kept a copy of the input in memory after it finished, for the pseudonym collision search. The search index now lives only as long as the run.
+- Report and audit counters for an entity type named like a built-in object property, such as `constructor`, were malformed. They are now plain counts.
+- The README chain placed Verify between the LLM and Restore, where its report replaced the model reply. Verify gains a Verify Output option: Items, Stop on FAIL passes the checked items on and stops the run on `FAIL`, so it can sit between Redact and the LLM and gate what the model receives.
+- The restorability check introduced in this release paired properties by position, so a redacted integer-like key such as `"1"` swapped values. Properties now pair by their original key.
+- Session ID, Tenant Profile and every other run-wide setting were read from the first item only, so a mixed-tenant batch ran with the first tenant's settings. A setting given by an expression is now read for every item, and the run stops when items disagree.
+- OpenAI `sk-proj-`, `sk-svcacct-` and `sk-admin-` keys, GitHub fine-grained `github_pat_` tokens, and nine-character German ID card serial numbers were missed. They are detected now.
+- The Presidio setup guide published the analyzer port on every host interface. It now binds to `127.0.0.1`.
+- The example workflows used node version 1, so an imported Verify missed names. Every Redactor node in the examples uses version 2.
+- `bearer` and `authorization: basic` in lower case were missed. Auth schemes now match in any letter case, as RFC 9110 requires. Basic authentication headers join the recommended patterns.
+- Passwords were missed when short, as in `password=admin`, and cut at the first space when quoted. Quoted values are now taken whole and passwords of any length are found.
+- The legacy vault passphrase was read for the first item only. It now follows the same one-value-per-run check as the other settings.
+- An LDAP DN with an escaped comma, as in `CN=Doe\, John`, left the name exposed. Escaped characters now stay inside the value.
+- A five-word name ending in words the dictionary does not know left them exposed. Every part of a name run that holds a known name is covered.
+- Taproot and upper-case Bech32 Bitcoin addresses were missed. They are detected now.
+- A session whose TTL ran out during Redact returned tokens that could never be restored. The run now stops with an error instead.
+- The README placed Detect in the production chain, where its summary item reached Verify. Detect is now described as a dry run.
+- Secrets under a quoted key, as in JSON `{"password":"..."}`, were missed, and an escaped quote ended a quoted value early. Quoted keys are matched and escapes stay inside the value.
+- Names after a title stopped after four words and skipped all-capitals names such as `Mr. JOHN SMITH`. Every name word after a title is covered, all-capitals runs are looked up in the name dictionary, and a labelled full name takes any number of capitalised words.
+- Compact international phone numbers such as `+436641234567` were missed. A new `phoneE164` pattern finds them and is part of the recommended set, bringing the total to 217 patterns.
+- A text holding hundreds of thousands of names overflowed the call stack. Name spans are collected one at a time.
+- Detect swallowed a failed Include Audit Report or Audit Log expression, and silently dropped the report. Both now stop the run.
+- A Prompt Injection setting whose expression failed silently turned scanning off. The error now stops the run before the vault is saved.
+- Presidio was asked for scores of 0.4 and up even when the threshold was lower. The configured threshold is sent.
+- Pseudonym generation, URL redaction next to deny-list matches, and Presidio key traversal took quadratic time. Each is now linear.
+- A tenant profile accepted a `NaN` confidence threshold. It is refused.
+- A Redaction Mode expression that gave an unknown value, such as `TOKEN`, left the data unchanged and put it in the report. The run now stops with an error that lists the valid modes.
+- Basic credentials stored as a header value, as in `{"headers":{"Authorization":"Basic ..."}}`, or inside serialized JSON were not redacted, and Verify passed them. A new `httpBasicCredential` pattern and `authorization` as a credential key catch both, bringing the total to 218 patterns. The Basic header pattern now replaces only the credential, so `Authorization:` and the JSON around it stay intact.
+- The Presidio circuit breaker was shared by every execution, so failures in one run turned Presidio off for another. Each execution now has its own breaker.
+- The Presidio setup notice in the node still published port 5002 on every network interface. It binds to `127.0.0.1`, like the setup guide.
+- Quoted environment secrets such as `DB_PASS='azure zebra'` were redacted only up to the first space, and Verify passed the rest. Quoted values, including ones that span lines, are taken whole.
+- Email addresses with a domain in an Indic script or with decomposed accents, such as `alice@उदाहरण.भारत`, were missed by Redact and Verify. Domains may hold combining marks and characters outside the basic plane.
+- A tenant profile that changed only the field mode kept the node's rules in their old mode, so a denylist turned allowlist excluded every field. The node's rules now follow the profile's mode.
+- Restore checked the session once and then looked it up again per item, so a session expiring mid-batch returned some items with unresolved tokens and no error. The whole batch is restored from the session it checked.
+- A negative Session TTL kept the vault forever. It is refused.
+- A blank Allow List row, which the UI adds empty, allowed every value through. Blank rows are ignored.
+- A Presidio outage passed unscanned text through as if scanned. The run now stops by default; a new If Presidio Fails option can continue with patterns only and counts the unscanned texts in the report.
+- Restore merged two keys that restored to the same name and kept one value. It now stops with an error.
+- The default confidence threshold of 0 asked Presidio for every score, so saved workflows replaced low-confidence detections. A threshold of 0 asks for 0.4, as in 6.x.
+- Deduplicate gave repeated numbers and booleans different tokens. Each now shares one token with equal values of the same type.
+- Email pseudonyms used real domains such as `test.io`. Only documentation domains are used.
+- Report hits named a key and token that no longer existed after a pseudonym repair. They follow the repair.
+- Slack app-level tokens (`xapp-`) and refresh tokens (`xoxe.`) were not redacted. They are.
+- An empty or invalid Presidio URL turned NLP detection off silently. It now stops the run.
+- A Presidio answer with malformed entities, such as `[null]` or an entity without a score, counted as a clean scan. It counts as unscanned, so the run stops by default.
+- A Confidence Threshold outside 0 to 1, such as 2, silently turned detection off. It is refused.
+- A Restore key collision put the restored key, which is personal data, into the error message. The message no longer names the key.
+- With Audit Log on and the fallback chosen, a Presidio outage was reported as `SUCCESS`. The audit record is `PARTIAL` and counts the unscanned texts, and the report counts them even without Include Audit Report.
+- The README and Presidio setup guide still promised a silent fallback. They describe the stop default and the option.
+
 ## [6.1.0] - 2026-11-01
 
 Fixes every finding from an eighth adversarial review, run against 6.0.0. Each one has a regression test in `test/codex-review-60.test.ts` that fails on 6.0.0. The one output change that could surprise a saved workflow, Verify checking names, applies to node version 2 only.

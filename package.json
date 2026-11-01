@@ -1,7 +1,7 @@
 {
   "name": "n8n-nodes-redactor",
-  "version": "6.1.0",
-  "description": "Redact, mask and anonymize PII before it reaches an LLM, then restore it. 216 patterns for emails, phones, addresses, IBAN, cards, names, SSN, passport and tax IDs. Reversible encrypted vault, GDPR Art.30 ROPA record, prompt-injection check. Runs on n8n Cloud and self-hosted n8n 2.x.",
+  "version": "7.0.0",
+  "description": "Redact, mask and anonymize PII before it reaches an LLM, then restore it. 218 patterns for emails, phones, addresses, IBAN, cards, names, SSN, passport and tax IDs. Reversible encrypted vault, GDPR Art.30 ROPA record, prompt-injection check. Runs on n8n Cloud and self-hosted n8n 2.x.",
   "keywords": [
     "n8n-community-node-package",
     "n8n",

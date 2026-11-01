@@ -12,7 +12,7 @@ import { checkRegex } from '../nodes/Redactor/regexSafety';
 import { resetCircuitBreaker, PresidioRequester } from '../nodes/Redactor/presidio';
 import { RedactionContext, RedactionHit } from '../nodes/Redactor/types';
 
-import { run, persist } from './harness';
+import { run, persist, cpuNow } from './harness';
 
 function ctxOf(overrides: Partial<RedactionContext> = {}): RedactionContext {
   return {
@@ -179,16 +179,22 @@ describe('finding 7: a different passphrase never overwrites an encrypted sessio
 describe('finding 8: read-only operations never rewrite workflow static data', () => {
   it('stats and restore without delete leave the store untouched', async () => {
     const store: IDataObject = {};
-    await run({ operation: 'redact', sessionId: 'expired', sessionTtl: 0.0001 }, [{ email: 'gone@example.com' }], { staticData: store });
+    // A one-minute session is aged past its TTL with a clock offset, never a real wait a slow run could exceed.
+    await run({ operation: 'redact', sessionId: 'expired', sessionTtl: 1 }, [{ email: 'gone@example.com' }], { staticData: store });
     const [out] = await run({ operation: 'redact', sessionId: 'ro' }, [{ email: 'ro@example.com' }], { staticData: store });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const snapshot = persist(store);
-    const statsStore = persist(store);
-    await run({ operation: 'stats' }, [{}], { staticData: statsStore });
-    expect(statsStore).toEqual(snapshot);
-    const restoreStore = persist(store);
-    await run({ operation: 'restore', sessionId: 'ro', deleteAfterRestore: false }, [out[0].json], { staticData: restoreStore });
-    expect(restoreStore).toEqual(snapshot);
+    const realNow = Date.now.bind(Date);
+    const clock = jest.spyOn(Date, 'now').mockImplementation(() => realNow() + 2 * 60 * 1000);
+    try {
+      const snapshot = persist(store);
+      const statsStore = persist(store);
+      await run({ operation: 'stats' }, [{}], { staticData: statsStore });
+      expect(statsStore).toEqual(snapshot);
+      const restoreStore = persist(store);
+      await run({ operation: 'restore', sessionId: 'ro', deleteAfterRestore: false }, [out[0].json], { staticData: restoreStore });
+      expect(restoreStore).toEqual(snapshot);
+    } finally {
+      clock.mockRestore();
+    }
   });
 });
 
@@ -283,9 +289,9 @@ describe('finding 13: one regex check for profiles and runtime', () => {
   it('a nested quantifier never stalls the engine', () => {
     const vault = new MemoryVault();
     vault.getOrCreateSession('stall', 0);
-    const start = Date.now();
+    const start = cpuNow();
     redactValue({ t: 'a'.repeat(40) + '!' }, ctxOf({ enabledPatterns: [], customPatterns: [{ label: 'E', regex: '^(a+)+$' }] }), vault, 'stall', [], 0);
-    expect(Date.now() - start).toBeLessThan(1000);
+    expect(cpuNow() - start).toBeLessThan(1000);
   });
 });
 

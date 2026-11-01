@@ -15,13 +15,13 @@
   <a href="https://github.com/mjmirza/n8n-nodes-redactor/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/mjmirza/n8n-nodes-redactor/ci.yml?branch=master&label=CI" alt="CI status" /></a>
   <a href="https://www.npmjs.com/package/n8n-nodes-redactor#provenance"><img src="https://img.shields.io/badge/npm-provenance%20signed-brightgreen" alt="npm provenance" /></a>
   <a href="#license"><img src="https://img.shields.io/npm/l/n8n-nodes-redactor" alt="MIT License" /></a>
-  <img src="https://img.shields.io/badge/PII%20patterns-216-blue" alt="216 PII patterns" />
+  <img src="https://img.shields.io/badge/PII%20patterns-218-blue" alt="218 PII patterns" />
   <img src="https://img.shields.io/badge/n8n-Cloud%20%2B%20self--hosted-FF6D5A" alt="n8n Cloud and self-hosted" />
 </p>
 
 ## What you get
 
-- **Personal data never reaches the model.** Emails, phone numbers, IBANs, card numbers, national IDs and 200 more kinds of data are swapped for safe tokens before the LLM call.
+- **Personal data is kept from the model.** Emails, phone numbers, IBANs, card numbers, national IDs and 200 more kinds of data are swapped for safe tokens before the LLM call. Pattern detection cannot know every name, so add Presidio for free-text names, and keep Verify in the chain to catch what slips through.
 - **The answer still makes sense.** After the model replies, the node puts the real values back, so your output reads naturally.
 - **Fewer false alarms.** Card numbers are Luhn checked, IBANs checksum verified, NHS numbers mod 11 validated, so random digits are left alone.
 - **Proof for your records.** An optional audit report, and a GDPR Article 30 processing record built from each run.
@@ -71,8 +71,12 @@ Version 4.0.0 uses no local disk. The vault lives in workflow storage and audit 
 The recommended production chain looks like this.
 
 ```
-Data source > Detect > Redact > LLM > Verify > Restore > Output > Purge
+Data source > Redact > Verify > LLM > Restore > Output > Purge
 ```
+
+Detect is for a dry run before you set up redaction. It adds a summary item to its output by default, so keep it out of this chain, or turn on Include Audit Report, which moves the summary to a second output.
+
+Set Verify Output on the Verify node to Items, Stop on FAIL. Verify then passes the redacted items on unchanged when nothing leaks, and stops the run before the LLM when something does, so the model never receives data that failed the check. With the default Report output, Verify returns one report instead of the items, so it cannot sit in this chain. Verify also fails when an item carries a binary attachment, because attachments are not scanned. Redact removes attachments by default. Set Binary Attachments to Keep Unscanned only when the files hold no personal data.
 
 ## Redaction modes
 
@@ -88,7 +92,7 @@ Data source > Detect > Redact > LLM > Verify > Restore > Output > Purge
 
 ## What it detects
 
-216 patterns across 11 categories.
+218 patterns across 11 categories.
 
 | Category | Examples |
 |---|---|
@@ -117,7 +121,7 @@ Data source > Detect > Redact > LLM > Verify > Restore > Output > Purge
 | Audit report | A second output with hits by category and pattern |
 | Audit log | Turn on Audit Log to get an `audit` record (counts, labels, timing, never values) on the Report output. Send it to any database, sheet or SIEM node |
 | ROPA record | Turn on Include Audit Report, then Include GDPR Art.30 ROPA Record, and fill in the controller details |
-| Presidio | Optional Microsoft Presidio container for names and organisations in free text. See [docs/PRESIDIO_SETUP.md](https://github.com/mjmirza/n8n-nodes-redactor/blob/master/docs/PRESIDIO_SETUP.md). Falls back to built-in patterns when unreachable |
+| Presidio | Optional Microsoft Presidio container for names and organisations in free text. See [docs/PRESIDIO_SETUP.md](https://github.com/mjmirza/n8n-nodes-redactor/blob/master/docs/PRESIDIO_SETUP.md). When Presidio cannot scan a text the run stops, unless If Presidio Fails is set to continue with patterns only |
 | Per-tenant profiles | Turn on Use Tenant Profile and paste JSON. Validated on every run. Fields are listed in [docs/MIGRATION.md](https://github.com/mjmirza/n8n-nodes-redactor/blob/master/docs/MIGRATION.md#tenant-profile-fields) |
 
 This node reduces what reaches a model. It is not legal advice and does not on its own make a workflow GDPR or HIPAA compliant.

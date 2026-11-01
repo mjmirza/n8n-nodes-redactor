@@ -14,7 +14,9 @@ import {
 
 import { getPatternOptions } from './patterns';
 import { createVault } from './vault';
-import { redactValue, restoreValue, buildReport, enhanceWithPresidio, collectTokenLike, collectInputText, priorTokenMatcher } from './engine';
+import {
+  redactValue, restoreFromSession, buildReport, enhanceWithPresidio, collectTokenLike, collectInputText, priorTokenMatcher, ensureRestorable,
+} from './engine';
 import {
   CustomPattern,
   RedactionContext,
@@ -25,10 +27,10 @@ import {
 import { classifyData } from './classification';
 import { scanForInjection } from './injection';
 import { buildAuditEntry } from './audit';
-import { resetCircuitBreaker, PresidioRequester } from './presidio';
-import { parseTenantProfile } from './profiles';
+import { markUnscanned, presidioUnscanned, PresidioRequester } from './presidio';
+import { MODES, parseTenantProfile } from './profiles';
 import { generateRopaRecord } from './ropa';
-import { assertUserRegexes, resolvePassphrase, sanitizeInjection, workflowNamespace } from './runtime';
+import { assertUserRegexes, resolvePassphrase, runSetting, sanitizeInjection, selectedPatterns, workflowNamespace } from './runtime';
 
 /**
  * Curated high-precision pattern set. These patterns have low false-positive
@@ -37,7 +39,7 @@ import { assertUserRegexes, resolvePassphrase, sanitizeInjection, workflowNamesp
  */
 const RECOMMENDED_PATTERNS = [
   // Contact
-  'email', 'phone', 'phoneDE', 'phoneUK', 'phoneAT', 'phoneCH', 'phoneFR',
+  'email', 'phone', 'phoneE164', 'phoneDE', 'phoneUK', 'phoneAT', 'phoneCH', 'phoneFR',
   'phoneNL', 'phoneES', 'phoneIT', 'phoneAU', 'phoneIN', 'phoneBR',
   // Identity - high precision
   'personName', 'ssn', 'itinUS', 'sinCA', 'ninoUK', 'passportUS', 'passportEU',
@@ -66,7 +68,7 @@ const RECOMMENDED_PATTERNS = [
   'internalHostname', 'uncPath', 'ldapDN', 'adUsername',
   'dbConnectionString', 'connStringKV',
   'awsAccessKey', 'gcpApiKey', 'stripeKey', 'openaiKey', 'githubToken',
-  'slackToken', 'bearerToken', 'jwtToken', 'pemPrivateKey', 'sshPublicKey',
+  'slackToken', 'bearerToken', 'httpBasicAuth', 'httpBasicCredential', 'jwtToken', 'pemPrivateKey', 'sshPublicKey',
   'genericSecret', 'azureKey', 'slackWebhook',
   'sendgridKey', 'twilioKey', 'anthropicKey', 'gitlabToken',
   'x509Certificate', 'pgpPrivateKey', 'envSecrets',
@@ -77,6 +79,19 @@ const RECOMMENDED_PATTERNS = [
   // Biometric
   'uuid', 'imei', 'iccid',
 ];
+
+function verifyMessage(leaks: number, attachments: number): string {
+  if (leaks === 0 && attachments === 0) return 'No PII detected in values. Data appears properly redacted.';
+  const parts: string[] = [];
+  if (leaks > 0) parts.push(`Found ${leaks} potential PII leak(s). Values contain detectable sensitive data.`);
+  if (attachments > 0) parts.push(`${attachments} binary attachment(s) were not scanned and may contain PII.`);
+  return parts.join(' ');
+}
+
+/** Keeps the item's binary attachments on the output item. */
+function withBinary(out: INodeExecutionData, source: INodeExecutionData): INodeExecutionData {
+  return source.binary ? { ...out, binary: source.binary } : out;
+}
 
 /** Version 1 keeps sensitivity levels under hitsByCategory. Version 2 counts PII categories there. */
 function versionRopaSummary(ropa: IDataObject, byLevel: Record<string, number>, typeVersion: number): void {
@@ -620,6 +635,54 @@ export class Redactor implements INodeType {
         default: false,
         description: 'Whether to scan input for prompt injection attempts (jailbreaks, instruction overrides, delimiter escapes, encoded payloads) before it reaches an LLM. Detected injections are flagged in the output.',
       },
+      {
+        displayName: 'Verify Output',
+        name: 'verifyOutput',
+        type: 'options',
+        displayOptions: {
+          show: {
+            operation: ['verify'],
+          },
+        },
+        options: [
+          {
+            name: 'Report',
+            value: 'report',
+            description: 'Return one report with PASS or FAIL',
+          },
+          {
+            name: 'Items, Stop on FAIL',
+            value: 'gate',
+            description: 'Pass the checked items on unchanged when they pass, and stop the run when they fail. Place it before the LLM.',
+          },
+        ],
+        default: 'report',
+        description: 'What Verify returns',
+      },
+      {
+        displayName: 'Binary Attachments',
+        name: 'binaryAttachments',
+        type: 'options',
+        displayOptions: {
+          show: {
+            operation: ['redact'],
+          },
+        },
+        options: [
+          {
+            name: 'Remove',
+            value: 'remove',
+            description: 'Drop attachments from the output, so no unscanned data reaches the next node',
+          },
+          {
+            name: 'Keep Unscanned',
+            value: 'keep',
+            description: 'Pass attachments through unchanged. Their content is not scanned or redacted.',
+          },
+        ],
+        default: 'remove',
+        description: 'What to do with binary attachments. The node redacts JSON only, so a file can still hold personal data.',
+      },
 
       // ═══════════════════════════════════════
       // AUDIT LOG
@@ -650,7 +713,7 @@ export class Redactor implements INodeType {
           },
         },
         default: false,
-        description: 'Whether to add NLP-based detection using Microsoft Presidio. Catches person names, locations, and organizations in free text that regex cannot detect. Requires a Presidio Docker container running locally. Setup: docker run -d -p 5002:3000 mcr.microsoft.com/presidio-analyzer',
+        description: 'Whether to add NLP-based detection using Microsoft Presidio. Catches person names, locations, and organizations in free text that regex cannot detect. Requires a Presidio Docker container running locally. Setup: docker run -d -p 127.0.0.1:5002:3000 mcr.microsoft.com/presidio-analyzer',
       },
       {
         displayName: 'Presidio URL',
@@ -665,6 +728,31 @@ export class Redactor implements INodeType {
         default: 'http://localhost:5002',
         placeholder: 'http://localhost:5002',
         description: 'URL of the Presidio Analyzer service. Default: http://localhost:5002. If using docker-compose, use the service name: http://presidio:3000',
+      },
+      {
+        displayName: 'If Presidio Fails',
+        name: 'presidioOnFailure',
+        type: 'options',
+        displayOptions: {
+          show: {
+            operation: ['redact'],
+            enablePresidio: [true],
+          },
+        },
+        options: [
+          {
+            name: 'Stop the Run',
+            value: 'stop',
+            description: 'Output nothing when any text could not be scanned by Presidio',
+          },
+          {
+            name: 'Continue With Patterns Only',
+            value: 'continue',
+            description: 'Output the pattern-only result and count the unscanned texts in the report',
+          },
+        ],
+        default: 'stop',
+        description: 'What to do when Presidio cannot be reached or returns an error for a text',
       },
       {
         displayName: 'Presidio Language',
@@ -906,15 +994,12 @@ export class Redactor implements INodeType {
     const items = this.getInputData();
     // Aggregate outputs (summaries, reports) link back to every input item.
     const allPaired = items.map((_, i) => ({ item: i }));
-    const operation = this.getNodeParameter('operation', 0) as string;
+    const operation = runSetting(this, 'operation') as string;
     const startTime = Date.now();
-
-    // Reset Presidio circuit breaker at start of each execution
-    resetCircuitBreaker();
 
     // ─── DETECT / VERIFY (zero-config, scans everything) ──
     if (operation === 'detect' || operation === 'verify') {
-      // Detect and Verify always scan ALL 216 patterns.
+      // Detect and Verify always scan ALL 218 patterns.
       // No parameters needed. Simple, reliable, no "Could not get parameter".
       const enabledPatterns = getPatternOptions().map((p) => p.value);
       const customPatterns: CustomPattern[] = [];
@@ -949,7 +1034,7 @@ export class Redactor implements INodeType {
 
       if (operation === 'detect') {
         // Always return original data + detection summary as last item
-        const returnData: INodeExecutionData[] = items.map((item, i) => ({ json: item.json, pairedItem: { item: i } }));
+        const returnData: INodeExecutionData[] = items.map((item, i) => withBinary({ json: item.json, pairedItem: { item: i } }, item));
         const report = buildReport(tempSessionId, allHits);
 
         // Summary always appended so user sees results
@@ -963,10 +1048,10 @@ export class Redactor implements INodeType {
           timestamp: report.timestamp,
         };
 
-        let includeReport = false;
-        try { includeReport = this.getNodeParameter('includeReport', 0, false) as boolean; } catch { /* parameter hidden for this operation */ }
-        let auditLog = false;
-        try { auditLog = this.getNodeParameter('auditLog', 0, false) as boolean; } catch { /* parameter hidden for this operation */ }
+        // Both settings default to off. A failed expression or items that disagree stop the run, so a requested
+        // report or audit entry is never dropped silently.
+        const includeReport = runSetting(this, 'includeReport', false) as boolean;
+        const auditLog = runSetting(this, 'auditLog', false) as boolean;
 
         if (includeReport || auditLog) {
           const reportJson: IDataObject = includeReport
@@ -987,18 +1072,26 @@ export class Redactor implements INodeType {
         return [returnData];
       }
 
-      // Verify
-      const passed = allHits.length === 0;
+      // Verify. Attachments cannot be scanned, so an item that carries one cannot pass.
+      const unscannedAttachments = items.reduce((n, item) => n + Object.keys(item.binary ?? {}).length, 0);
+      const passed = allHits.length === 0 && unscannedAttachments === 0;
       const verifyReport = buildReport(tempSessionId, allHits);
+      if (runSetting(this, 'verifyOutput', 'report') === 'gate') {
+        if (!passed) {
+          throw new NodeOperationError(this.getNode(), verifyMessage(allHits.length, unscannedAttachments), {
+            description: 'Verify stopped the run before the data reached the next node. Fix the redaction settings and run again.',
+          });
+        }
+        return [items.map((item, i) => ({ ...item, pairedItem: { item: i } }))];
+      }
       return [[{
         json: {
           verified: passed,
           status: passed ? 'PASS' : 'FAIL',
           leaksFound: allHits.length,
+          unscannedAttachments,
           itemsScanned: items.length,
-          message: passed
-            ? 'No PII detected in values. Data appears properly redacted.'
-            : `Found ${allHits.length} potential PII leak(s). Values contain detectable sensitive data.`,
+          message: verifyMessage(allHits.length, unscannedAttachments),
           hitsByCategory: verifyReport.hitsByCategory,
           hitsByPattern: verifyReport.hitsByPattern,
           leaks: allHits.map((h) => ({
@@ -1049,7 +1142,7 @@ export class Redactor implements INodeType {
     }
 
     // All other operations (redact, restore, stats, purge, classify) use vault
-    const vaultStorage = this.getNodeParameter('vaultStorage', 0, 'workflow') as VaultStorage;
+    const vaultStorage = runSetting(this, 'vaultStorage', 'workflow') as VaultStorage;
     const vaultPassphrase = vaultStorage === 'memory' ? '' : await resolvePassphrase(this);
     // Global static data so the Redact and Restore nodes of one workflow share sessions.
     const vault = createVault(
@@ -1087,7 +1180,7 @@ export class Redactor implements INodeType {
     // Only Redact and Restore are bound to a session. Purge and Stats are not.
     let sessionId = '';
     if (operation === 'redact' || operation === 'restore') {
-      sessionId = this.getNodeParameter('sessionId', 0) as string;
+      sessionId = String(runSetting(this, 'sessionId') ?? '');
       if (!sessionId) {
         throw new NodeOperationError(this.getNode(), 'Session ID is required');
       }
@@ -1095,27 +1188,24 @@ export class Redactor implements INodeType {
 
     // ─── REDACT ──────────────────────────────
     if (operation === 'redact') {
-      let mode = this.getNodeParameter('redactionMode', 0, 'token') as RedactionMode;
-      const detectionScope = this.getNodeParameter('detectionScope', 0, 'recommended') as string;
-      let enabledPatterns: string[];
-      if (detectionScope === 'all') {
-        enabledPatterns = getPatternOptions().map((p) => p.value);
-      } else if (detectionScope === 'recommended') {
-        enabledPatterns = RECOMMENDED_PATTERNS;
-      } else {
-        enabledPatterns = this.getNodeParameter('piiTypes', 0) as string[];
+      let mode = runSetting(this, 'redactionMode', 'token') as RedactionMode;
+      if (!MODES.includes(mode)) {
+        throw new NodeOperationError(this.getNode(), `Unknown redaction mode "${String(mode)}"`, {
+          description: `Use one of: ${MODES.join(', ')}.`,
+        });
       }
-      let dedup = this.getNodeParameter('dedup', 0, true) as boolean;
-      let fieldMode = this.getNodeParameter('fieldMode', 0, 'all') as 'all' | 'allowlist' | 'denylist';
-      let sessionTtl = this.getNodeParameter('sessionTtl', 0, 60) as number;
-      const includeReport = this.getNodeParameter('includeReport', 0, false) as boolean;
+      let enabledPatterns = selectedPatterns(this, getPatternOptions().map((p) => p.value), RECOMMENDED_PATTERNS);
+      let dedup = runSetting(this, 'dedup', true) as boolean;
+      let fieldMode = runSetting(this, 'fieldMode', 'all') as 'all' | 'allowlist' | 'denylist';
+      let sessionTtl = runSetting(this, 'sessionTtl', 60) as number;
+      const includeReport = runSetting(this, 'includeReport', false) as boolean;
 
-      const customPatternsRaw = this.getNodeParameter('customPatterns', 0, {}) as {
+      const customPatternsRaw = runSetting(this, 'customPatterns', {}) as {
         patterns?: CustomPattern[];
       };
       let customPatterns = customPatternsRaw.patterns ?? [];
 
-      const fieldRulesRaw = this.getNodeParameter('fieldRules', 0, {}) as {
+      const fieldRulesRaw = runSetting(this, 'fieldRules', {}) as {
         rules?: Array<{ field: string }>;
       };
       let fieldRules = (fieldRulesRaw.rules ?? []).map((r) => ({
@@ -1136,21 +1226,29 @@ export class Redactor implements INodeType {
         });
         return { statusCode: response.statusCode as number, body: response.body as unknown };
       };
-      let enablePresidio = false;
+      const binaryAttachments = runSetting(this, 'binaryAttachments', 'remove') as string;
+      // Absent settings fall back to their defaults. An expression that fails stops the run, so a broken setting
+      // never turns NLP detection off silently.
+      const enablePresidio = runSetting(this, 'enablePresidio', false) as boolean;
       let presidioUrl = '';
       let presidioLanguage = 'en';
-      try {
-        enablePresidio = this.getNodeParameter('enablePresidio', 0, false) as boolean;
-        if (enablePresidio) {
-          presidioUrl = this.getNodeParameter('presidioUrl', 0, 'http://localhost:5002') as string;
-          presidioLanguage = this.getNodeParameter('presidioLanguage', 0, 'en') as string;
+      let presidioOnFailure = 'stop';
+      if (enablePresidio) {
+        presidioUrl = runSetting(this, 'presidioUrl', 'http://localhost:5002') as string;
+        presidioLanguage = runSetting(this, 'presidioLanguage', 'en') as string;
+        presidioOnFailure = runSetting(this, 'presidioOnFailure', 'stop') as string;
+        if (presidioOnFailure !== 'stop' && presidioOnFailure !== 'continue') {
+          throw new NodeOperationError(this.getNode(), 'If Presidio Fails must be stop or continue');
         }
-      } catch {
-        // Presidio parameters not available
+        if (!/^https?:[/][/][^/\s]/i.test(String(presidioUrl).trim())) {
+          throw new NodeOperationError(this.getNode(), 'Presidio URL must be an http or https address', {
+            description: 'Set Presidio URL, for example http://localhost:5002, or turn off Enhanced NLP Detection.',
+          });
+        }
       }
 
       // Parse allow list
-      const allowListRaw = this.getNodeParameter('allowList', 0, {}) as {
+      const allowListRaw = runSetting(this, 'allowList', {}) as {
         entries?: Array<{ value: string; type: string }>;
       };
       let allowList = (allowListRaw.entries ?? []).map((e) => ({
@@ -1159,7 +1257,7 @@ export class Redactor implements INodeType {
       }));
 
       // Parse deny list
-      const denyListRaw = this.getNodeParameter('denyList', 0, {}) as {
+      const denyListRaw = runSetting(this, 'denyList', {}) as {
         entries?: Array<{ value: string; type: string }>;
       };
       let denyList = (denyListRaw.entries ?? []).map((e) => ({
@@ -1168,14 +1266,14 @@ export class Redactor implements INodeType {
       }));
 
       // Confidence threshold
-      let confidenceThreshold = this.getNodeParameter('confidenceThreshold', 0, 0) as number;
+      let confidenceThreshold = runSetting(this, 'confidenceThreshold', 0) as number;
       // The Report output exists only when the node itself turns it on (see outputs).
-      const hasReportOutput = includeReport || (this.getNodeParameter('auditLog', 0, false) as boolean);
-      let auditLog = this.getNodeParameter('auditLog', 0, false) as boolean;
+      const hasReportOutput = includeReport || (runSetting(this, 'auditLog', false) as boolean);
+      let auditLog = runSetting(this, 'auditLog', false) as boolean;
 
       // Tenant profile overrides the node settings it names
-      const useTenantProfile = this.getNodeParameter('useTenantProfile', 0, false) as boolean;
-      const profileRaw = useTenantProfile ? (this.getNodeParameter('tenantProfile', 0, '') as unknown) : '';
+      const useTenantProfile = runSetting(this, 'useTenantProfile', false) as boolean;
+      const profileRaw = useTenantProfile ? (runSetting(this, 'tenantProfile', '') as unknown) : '';
       if (profileRaw !== '' && profileRaw !== undefined && profileRaw !== null) {
         let profile;
         try {
@@ -1196,6 +1294,23 @@ export class Redactor implements INodeType {
         if (profile.denyList) denyList = profile.denyList;
         if (profile.retentionMinutes !== undefined) sessionTtl = profile.retentionMinutes;
         if (profile.auditLog !== undefined) auditLog = profile.auditLog;
+        // A profile that changes only the field mode re-targets the node's own rules.
+        if (profile.fieldMode && !profile.fieldRules) {
+          fieldRules = fieldRules.map((rule) => ({
+            field: rule.field,
+            mode: fieldMode === 'allowlist' ? ('include' as const) : ('exclude' as const),
+          }));
+        }
+      }
+
+      if (typeof confidenceThreshold !== 'number' || !Number.isFinite(confidenceThreshold) || confidenceThreshold < 0 || confidenceThreshold > 1) {
+        throw new NodeOperationError(this.getNode(), `Confidence Threshold must be a number from 0 to 1, got ${String(confidenceThreshold)}`);
+      }
+
+      if (typeof sessionTtl !== 'number' || !Number.isFinite(sessionTtl) || sessionTtl < 0) {
+        throw new NodeOperationError(this.getNode(), `Session TTL must be 0 or more minutes, got ${String(sessionTtl)}`, {
+          description: 'Use 0 to keep the session until it is purged.',
+        });
       }
 
       assertUserRegexes(this, customPatterns, [
@@ -1230,6 +1345,7 @@ export class Redactor implements INodeType {
         reservedTokens: collectTokenLike(items.map((it) => it.json)),
         keyOrigins: new WeakMap(),
         inputText: collectInputText(items.map((it) => it.json)),
+        inputIndex: {},
         lockedSpans: new WeakMap(),
         keyLocks: new WeakMap(),
         priorTokens: priorTokenMatcher(vault.getSession(sessionId)?.entries),
@@ -1251,7 +1367,7 @@ export class Redactor implements INodeType {
         ) as IDataObject;
 
         // Enhanced NLP detection via Presidio (if enabled)
-        if (ctx.presidioUrl) {
+        if (enablePresidio) {
           try {
             redacted = await enhanceWithPresidio(
               redacted as Record<string, unknown>,
@@ -1261,13 +1377,41 @@ export class Redactor implements INodeType {
               hits,
               i,
             ) as IDataObject;
-          } catch {
-            // Presidio unavailable — continue with regex-only results
+          } catch (error) {
+            if (presidioOnFailure === 'stop') {
+              throw new NodeOperationError(this.getNode(), `Presidio scan failed: ${(error as Error).message}`, { itemIndex: i });
+            }
+            markUnscanned(presidioRequester);
           }
         }
 
-        returnData.push({ json: redacted, pairedItem: { item: i } });
+        const redactedItem: INodeExecutionData = { json: redacted, pairedItem: { item: i } };
+        returnData.push(binaryAttachments === 'keep' ? withBinary(redactedItem, items[i]) : redactedItem);
         for (const hit of hits) allHits.push(hit);
+      }
+
+      // A mapping made for a later item can spell text next to an earlier pseudonym, so every output is checked last.
+      const restorable = ensureRestorable(items.map((it) => it.json), returnData.map((r) => r.json), ctx, vault, sessionId, allHits);
+      restorable.forEach((json, i) => {
+        returnData[i].json = json as IDataObject;
+      });
+
+      // Text Presidio never scanned must not pass as scanned.
+      const unscannedTexts = enablePresidio ? presidioUnscanned(presidioRequester) : 0;
+      if (unscannedTexts > 0 && presidioOnFailure === 'stop') {
+        throw new NodeOperationError(this.getNode(), `Presidio could not scan ${unscannedTexts} text(s), so nothing was output`, {
+          description: 'Check that Presidio is running at the Presidio URL, or set If Presidio Fails to Continue With Patterns Only.',
+        });
+      }
+
+      // An absent setting means off. A setting whose expression fails stops the run before anything is saved.
+      const promptInjection = runSetting(this, 'promptInjection', false) as boolean;
+
+      // A session whose TTL ran out during the run lost the new mappings, so its tokens could never be restored.
+      if (!vault.getSession(sessionId)) {
+        throw new NodeOperationError(this.getNode(), 'Session expired during the run', {
+          description: 'Its TTL ran out before Redact finished, so nothing was output. Run again, or raise Session TTL.',
+        });
       }
 
       // Persist vault
@@ -1275,24 +1419,19 @@ export class Redactor implements INodeType {
 
       // Prompt injection detection (if enabled)
       let injectionResult = null;
-      try {
-        const promptInjection = this.getNodeParameter('promptInjection', 0, false) as boolean;
-        if (promptInjection) {
-          for (let i = 0; i < items.length; i++) {
-            const result = scanForInjection(items[i].json as Record<string, unknown>);
-            if (result.detected && (!injectionResult || result.score > injectionResult.score)) {
-              injectionResult = sanitizeInjection(result);
-            }
+      if (promptInjection) {
+        for (let i = 0; i < items.length; i++) {
+          const result = scanForInjection(items[i].json as Record<string, unknown>);
+          if (result.detected && (!injectionResult || result.score > injectionResult.score)) {
+            injectionResult = sanitizeInjection(result);
           }
         }
-      } catch {
-        // Prompt injection parameter not available
       }
 
       const auditEntry = auditLog && hasReportOutput
         ? buildAuditEntry(
             'REDACT', mode, allHits, items.length, Date.now() - startTime,
-            enabledPatterns.length, !!ctx.presidioUrl, classifyData(allHits), sessionId,
+            enabledPatterns.length, !!ctx.presidioUrl, classifyData(allHits), sessionId, unscannedTexts,
           )
         : undefined;
 
@@ -1310,8 +1449,9 @@ export class Redactor implements INodeType {
       if (hasReportOutput) {
         const report: IDataObject = includeReport ? (buildReport(sessionId, allHits) as unknown as IDataObject) : {};
         if (auditEntry) report.audit = auditEntry as unknown as IDataObject;
-        if (includeReport && (this.getNodeParameter('includeRopa', 0, false) as boolean)) {
-          const d = this.getNodeParameter('ropa', 0, {}) as IDataObject;
+        if (unscannedTexts > 0) report.presidioUnscannedTexts = unscannedTexts;
+        if (includeReport && (runSetting(this, 'includeRopa', false) as boolean)) {
+          const d = runSetting(this, 'ropa', {}) as IDataObject;
           const list = (v: unknown) => String(v ?? '').split(',').map((x) => x.trim()).filter(Boolean);
           report.ropa = generateRopaRecord(
             allHits, classifyData(allHits), items.length, enabledPatterns.length, mode,
@@ -1328,14 +1468,14 @@ export class Redactor implements INodeType {
 
     // ─── RESTORE ─────────────────────────────
     if (operation === 'restore') {
-      const deleteAfterRestore = this.getNodeParameter('deleteAfterRestore', 0, true) as boolean;
+      const deleteAfterRestore = runSetting(this, 'deleteAfterRestore', true) as boolean;
 
       const session = vault.getSession(sessionId);
 
       if (!session) {
         throw new NodeOperationError(
           this.getNode(),
-          `No vault found for session "${sessionId}" that this passphrase can open. Ensure a Redact node ran first with the same Session ID, vault storage type and passphrase.`,
+          'No vault found for this session that this passphrase can open. Ensure a Redact node ran first with the same Session ID, vault storage type and passphrase.',
           {
             description:
               'Testing step by step? Each "Execute step" gets a new execution ID, and n8n saves workflow storage only after production runs of an active workflow. Run the whole workflow, or set the same fixed Session ID (for example "test-1") on both nodes. Restore only works in the workflow that ran Redact.',
@@ -1346,8 +1486,13 @@ export class Redactor implements INodeType {
       const returnData: INodeExecutionData[] = [];
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
-        const restored = restoreValue(item.json, vault, sessionId) as IDataObject;
-        returnData.push({ json: restored, pairedItem: { item: i } });
+        let restored: IDataObject;
+        try {
+          restored = restoreFromSession(item.json, session) as IDataObject;
+        } catch (error) {
+          throw new NodeOperationError(this.getNode(), (error as Error).message, { itemIndex: i });
+        }
+        returnData.push(withBinary({ json: restored, pairedItem: { item: i } }, item));
       }
 
       if (deleteAfterRestore) {
@@ -1359,10 +1504,10 @@ export class Redactor implements INodeType {
 
     // ─── PURGE (delete vault sessions) ──
     if (operation === 'purge') {
-      const purgeScope = this.getNodeParameter('purgeScope', 0, 'all') as string;
+      const purgeScope = runSetting(this, 'purgeScope', 'all') as string;
 
       if (purgeScope === 'specific') {
-        const purgeSessionId = this.getNodeParameter('purgeSessionId', 0, '') as string;
+        const purgeSessionId = runSetting(this, 'purgeSessionId', '') as string;
         if (!purgeSessionId) {
           throw new NodeOperationError(this.getNode(), 'Session ID is required for purging a specific session.');
         }

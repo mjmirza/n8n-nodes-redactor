@@ -4,8 +4,8 @@
   "nodes": [
     { "parameters": {}, "id": "t1", "name": "Start", "type": "n8n-nodes-base.manualTrigger", "typeVersion": 1, "position": [200, 300] },
     { "parameters": { "mode": "raw", "jsonOutput": "{\"name\": \"John Smith\", \"email\": \"john@company.com\", \"ssn\": \"123-45-6789\", \"salary\": 85000, \"department\": \"Finance\", \"notes\": \"Customer credit card: 4532 0151 1283 0366\"}" }, "id": "s1", "name": "Sample Data", "type": "n8n-nodes-base.set", "typeVersion": 3.4, "position": [420, 300] },
-    { "parameters": { "operation": "classify" }, "id": "c1", "name": "Classify Sensitivity", "type": "n8n-nodes-redactor.redactor", "typeVersion": 1, "position": [640, 300] },
-    { "parameters": { "operation": "detect" }, "id": "d1", "name": "Detect PII", "type": "n8n-nodes-redactor.redactor", "typeVersion": 1, "position": [640, 500] }
+    { "parameters": { "operation": "classify" }, "id": "c1", "name": "Classify Sensitivity", "type": "n8n-nodes-redactor.redactor", "typeVersion": 2, "position": [640, 300] },
+    { "parameters": { "operation": "detect" }, "id": "d1", "name": "Detect PII", "type": "n8n-nodes-redactor.redactor", "typeVersion": 2, "position": [640, 500] }
   ],
   "connections": {
     "Start": { "main": [[{ "node": "Sample Data", "type": "main", "index": 0 }]] },

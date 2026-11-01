@@ -8,6 +8,7 @@ import {
   PiiPattern,
   RedactionContext,
   RedactionHit,
+  VaultSession,
   RedactionReport,
   VaultEntry,
   isPiiCategory,
@@ -21,10 +22,12 @@ import {
 } from './context';
 import { detectNamesInText, NAME_CONTEXT_WORDS } from './names';
 import { generatePseudonym } from './pseudonymize';
+import { countHits, sessionReference } from './audit';
 import {
   analyzeWithPresidio,
   getRedactorLabel,
   getRedactorCategory,
+  markUnscanned,
 } from './presidio';
 
 /**
@@ -33,6 +36,8 @@ import {
 function isAllowListed(value: string, allowList?: AllowDenyEntry[]): boolean {
   if (!allowList || allowList.length === 0) return false;
   return allowList.some((entry) => {
+    // A blank row, such as the empty one the UI adds, would otherwise allow every value.
+    if (typeof entry.value !== 'string' || entry.value.trim() === '') return false;
     try {
       switch (entry.type) {
         case 'exact':
@@ -118,16 +123,19 @@ function storeReversible(
   makeToken: () => string,
 ): string {
   if (ctx.dedup) {
-    const existing = vault.findByOriginal(sessionId, match);
-    if (existing && !existing.numeric) return existing.token;
+    // Reuse only a mapping of the same type, so the number 5 never shares a token with the text "5".
+    const existing = findTyped(vault, sessionId, match, ctx);
+    if (existing) return existing.token;
   }
   const token = makeToken();
-  vault.addEntry(sessionId, {
+  addMapping(vault, sessionId, {
     token,
     original: match,
     patternLabel: pattern.label,
     category: ('category' in pattern ? pattern.category : 'identity') as PiiCategory,
     createdAt: new Date().toISOString(),
+    ...(ctx.boolean ? { boolean: true } : {}),
+    ...(ctx.numeric ? { numeric: true } : {}),
   });
   return token;
 }
@@ -155,8 +163,9 @@ function applyRedaction(
     // The pseudonym is stored as the token so Restore can map it back.
     return storeReversible(match, pattern, ctx, vault, sessionId, () => uniquePseudonym(vault, sessionId, match, pattern.label, ctx));
   }
-  const irreversible = IRREVERSIBLE[ctx.mode];
-  return irreversible ? irreversible(match, pattern.label) : match;
+  const irreversible = Object.prototype.hasOwnProperty.call(IRREVERSIBLE, ctx.mode) ? IRREVERSIBLE[ctx.mode] : undefined;
+  if (!irreversible) throw new Error(`Unknown redaction mode "${String(ctx.mode)}"`);
+  return irreversible(match, pattern.label);
 }
 
 // The next index per session's entry table, so a fresh token never recounts every entry.
@@ -201,9 +210,9 @@ export function collectInputText(value: unknown): string {
   return parts.join('\u0000');
 }
 
-/** A same-original mapping is reused only when it has the same type, numeric or text. */
+/** A same-original mapping is reused only when it has the same type: number, boolean or text. */
 function reusable(taken: VaultEntry | undefined, original: string, ctx: RedactionContext): boolean {
-  return !!taken && taken.original === original && !!taken.numeric === !!ctx.numeric;
+  return !!taken && taken.original === original && !!taken.numeric === !!ctx.numeric && !!taken.boolean === !!ctx.boolean;
 }
 
 /** Retries deterministically until the pseudonym is free in this session and absent from the input. */
@@ -212,11 +221,271 @@ function uniquePseudonym(vault: IVault, sessionId: string, original: string, lab
   for (let attempt = 0; attempt < 32; attempt++) {
     const seed = attempt === 0 ? original : `${original}\u0000${attempt}`;
     const candidate = generatePseudonym(sessionId, seed, label);
-    if (candidate === original || ctx.inputText?.includes(candidate)) continue;
+    if (candidate === original || inputContains(ctx, candidate)) continue;
     const taken = entries[candidate];
     if (!taken || reusable(taken, original, ctx)) return candidate;
   }
   return freshToken(label, vault, sessionId, ctx.reservedTokens);
+}
+
+// Short input is searched directly. Longer input gets a suffix array once per run, kept on the run's context and
+// released with it, so each candidate costs O(length log n) and no copy of the input outlives the run.
+const DIRECT_SEARCH_MAX = 4096;
+
+/** Whether text occurs anywhere in the run's input. */
+function inputContains(ctx: RedactionContext, text: string): boolean {
+  const input = ctx.inputText;
+  if (!input) return false;
+  if (input.length <= DIRECT_SEARCH_MAX) return input.includes(text);
+  const holder = ctx.inputIndex ?? (ctx.inputIndex = {});
+  const sa = holder.sa ?? (holder.sa = suffixArray(input));
+  let lo = 0;
+  let hi = sa.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (compareSuffix(input, sa[mid], text) < 0) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo < sa.length && input.startsWith(text, sa[lo]);
+}
+
+/** Orders the suffix at pos against text, comparing at most text.length characters. */
+function compareSuffix(input: string, pos: number, text: string): number {
+  for (let k = 0; k < text.length; k++) {
+    if (pos + k >= input.length) return -1;
+    const d = input.charCodeAt(pos + k) - text.charCodeAt(k);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+interface SuffixSort {
+  n: number;
+  sa: Int32Array;
+  rank: Int32Array;
+  next: Int32Array;
+  order: Int32Array;
+  counts: Int32Array;
+}
+
+/** Sorts suffixes by their first character and returns the highest rank. */
+function sortByFirstChar(text: string, s: SuffixSort): number {
+  const { n, sa, rank, counts } = s;
+  for (let i = 0; i < n; i++) counts[text.charCodeAt(i) + 1]++;
+  for (let c = 1; c <= 65536; c++) counts[c] += counts[c - 1];
+  for (let i = 0; i < n; i++) sa[counts[text.charCodeAt(i)]++] = i;
+  let classes = 0;
+  for (let p = 0; p < n; p++) {
+    if (p > 0 && text.charCodeAt(sa[p]) !== text.charCodeAt(sa[p - 1])) classes++;
+    rank[sa[p]] = classes;
+  }
+  return classes;
+}
+
+/** Orders suffixes by the rank of their second half: those without one first, then the sorted ones shifted back by k. */
+function orderBySecondHalf(s: SuffixSort, k: number): void {
+  const { n, sa, order } = s;
+  let w = 0;
+  for (let i = n - k; i < n; i++) order[w++] = i;
+  for (let p = 0; p < n; p++) if (sa[p] >= k) order[w++] = sa[p] - k;
+}
+
+/** Stable counting sort of that order by the rank of the first half. */
+function sortByFirstHalf(s: SuffixSort, classes: number): void {
+  const { n, sa, rank, order, counts } = s;
+  counts.fill(0, 0, classes + 2);
+  for (let i = 0; i < n; i++) counts[rank[i] + 1]++;
+  for (let c = 1; c <= classes + 1; c++) counts[c] += counts[c - 1];
+  for (let p = 0; p < n; p++) sa[counts[rank[order[p]]]++] = order[p];
+}
+
+/** Sorts by the first 2k characters, given the order by the first k. Returns the highest new rank. */
+function doubleSortKey(s: SuffixSort, k: number, classes: number): number {
+  const { n, sa, rank, next } = s;
+  orderBySecondHalf(s, k);
+  sortByFirstHalf(s, classes);
+  const second = (i: number) => (i + k < n ? rank[i + k] : -1);
+  let ranks = 0;
+  next[sa[0]] = 0;
+  for (let p = 1; p < n; p++) {
+    if (rank[sa[p - 1]] !== rank[sa[p]] || second(sa[p - 1]) !== second(sa[p])) ranks++;
+    next[sa[p]] = ranks;
+  }
+  return ranks;
+}
+
+/** Suffix array by prefix doubling with counting sorts, O(n log n). */
+function suffixArray(text: string): Int32Array {
+  const n = text.length;
+  const s: SuffixSort = {
+    n, sa: new Int32Array(n), rank: new Int32Array(n), next: new Int32Array(n), order: new Int32Array(n),
+    counts: new Int32Array(Math.max(n, 65536) + 1),
+  };
+  let classes = sortByFirstChar(text, s);
+  for (let k = 1; classes < n - 1 && k < n; k <<= 1) {
+    classes = doubleSortKey(s, k, classes);
+    [s.rank, s.next] = [s.next, s.rank];
+  }
+  return s.sa;
+}
+
+/** Token lengths per first character for one session table, so a composition check tests only lengths that exist. */
+interface TokenShape {
+  byFirst: Map<number, number[]>;
+  // A hash and length of every proper prefix of every token. Text that is not the start of some token cannot be
+  // extended into one, so most positions cost one lookup.
+  prefixes: Set<number>;
+  maxLen: number;
+}
+
+const HASH_BASE = 131;
+const HASH_MOD = 67108859; // a prime below 2^26, so every product stays exact in a double
+const prefixKey = (hash: number, length: number): number => hash * 64 + Math.min(length, 63);
+const tokenShapes = new WeakMap<object, TokenShape>();
+
+function shapeAdd(shape: TokenShape, token: string): void {
+  if (token.length === 0) return;
+  const first = token.charCodeAt(0);
+  const lengths = shape.byFirst.get(first) ?? [];
+  if (!lengths.includes(token.length)) {
+    lengths.push(token.length);
+    lengths.sort((a, b) => a - b);
+  }
+  shape.byFirst.set(first, lengths);
+  let hash = 0;
+  for (let k = 0; k < token.length - 1; k++) {
+    hash = (hash * HASH_BASE + token.charCodeAt(k)) % HASH_MOD;
+    shape.prefixes.add(prefixKey(hash, k + 1));
+  }
+  shape.maxLen = Math.max(shape.maxLen, token.length);
+}
+
+function tokenShape(entries: Record<string, VaultEntry>): TokenShape {
+  let shape = tokenShapes.get(entries);
+  if (!shape) {
+    shape = { byFirst: new Map(), prefixes: new Set(), maxLen: 0 };
+    for (const token of Object.keys(entries)) shapeAdd(shape, token);
+    tokenShapes.set(entries, shape);
+  }
+  return shape;
+}
+
+/** Adds a mapping and keeps the session's token shape current. */
+// Per session entry table, the token of each typed original, so deduplication can tell 5 from "5".
+const typedIndex = new WeakMap<object, Map<string, string>>();
+
+function typedKey(original: string, numeric?: boolean, boolean?: boolean): string {
+  return `${numeric ? 'n' : boolean ? 'b' : 's'}\u0000${original}`;
+}
+
+function typedTable(entries: Record<string, VaultEntry>): Map<string, string> {
+  let table = typedIndex.get(entries);
+  if (!table) {
+    table = new Map();
+    for (const entry of Object.values(entries)) {
+      const key = typedKey(entry.original, entry.numeric, entry.boolean);
+      if (!table.has(key)) table.set(key, entry.token);
+    }
+    typedIndex.set(entries, table);
+  }
+  return table;
+}
+
+/** An existing mapping of the original with the same numeric or boolean type as the context. */
+function findTyped(vault: IVault, sessionId: string, original: string, ctx: RedactionContext): VaultEntry | undefined {
+  // The vault's own index answers most lookups; the typed table covers an original stored under another type.
+  const direct = vault.findByOriginal(sessionId, original);
+  if (direct && reusable(direct, original, ctx)) return direct;
+  const entries = vault.getSession(sessionId)?.entries;
+  if (!entries) return undefined;
+  const token = typedTable(entries).get(typedKey(original, ctx.numeric, ctx.boolean));
+  const entry = token !== undefined && Object.prototype.hasOwnProperty.call(entries, token) ? entries[token] : undefined;
+  return entry && reusable(entry, original, ctx) ? entry : undefined;
+}
+
+function addMapping(vault: IVault, sessionId: string, entry: VaultEntry): void {
+  vault.addEntry(sessionId, entry);
+  const entries = vault.getSession(sessionId)?.entries;
+  const typed = entries ? typedIndex.get(entries) : undefined;
+  const key = typedKey(entry.original, entry.numeric, entry.boolean);
+  if (typed && !typed.has(key)) typed.set(key, entry.token);
+  const shape = entries ? tokenShapes.get(entries) : undefined;
+  if (shape) shapeAdd(shape, entry.token);
+}
+
+/** Whether a stored token starts before at, or at at and is longer than len, and runs into the text at window[at, at + len). */
+function crossedBy(window: string, at: number, len: number, entries: Record<string, VaultEntry>, shape: TokenShape): boolean {
+  const tokenAt = (p: number): boolean => {
+    for (const l of shape.byFirst.get(window.charCodeAt(p)) ?? []) {
+      if (p + l <= at || (p === at && l <= len)) continue;
+      if (p + l > window.length) break;
+      if (Object.prototype.hasOwnProperty.call(entries, window.substr(p, l))) return true;
+    }
+    return false;
+  };
+  // Starts before at: window[p, at) must be a proper prefix of a token. Its hash grows one character to the left.
+  let hash = 0;
+  let power = 1;
+  for (let p = at - 1; p >= 0 && at - p < shape.maxLen; p--) {
+    hash = (window.charCodeAt(p) * power + hash) % HASH_MOD;
+    power = (power * HASH_BASE) % HASH_MOD;
+    if (shape.prefixes.has(prefixKey(hash, at - p)) && tokenAt(p)) return true;
+  }
+  // Starts at at: the replacement itself must be a proper prefix of a longer token.
+  let own = 0;
+  for (let k = 0; k < len; k++) own = (own * HASH_BASE + window.charCodeAt(at + k)) % HASH_MOD;
+  return shape.prefixes.has(prefixKey(own, len)) && tokenAt(at);
+}
+
+/** Text of the segments before index i, up to want characters, nearest last. */
+function textBefore(segs: Segment[], i: number, want: number): string {
+  let out = '';
+  for (let j = i - 1; j >= 0 && out.length < want; j--) out = segs[j].text + out;
+  return out.slice(Math.max(0, out.length - want));
+}
+
+function textAfter(segs: Segment[], i: number, want: number): string {
+  let out = '';
+  for (let j = i + 1; j < segs.length && out.length < want; j++) out += segs[j].text;
+  return out.slice(0, want);
+}
+
+/**
+ * Pseudonyms carry no delimiters, so text next to one can spell another stored pseudonym, and Restore would decode
+ * the wrong value. Such a replacement gets a bracketed token instead, which no neighbouring text can extend.
+ */
+function separatePseudonyms(pass: TextPass): void {
+  const { vault, sessionId } = pass;
+  const entries = vault.getSession(sessionId)?.entries;
+  if (!entries) return;
+  const shape = tokenShape(entries);
+  for (let i = pass.segs.length - 1; i >= 0; i--) {
+    const seg = pass.segs[i];
+    const entry = seg.locked && Object.prototype.hasOwnProperty.call(entries, seg.text) ? entries[seg.text] : undefined;
+    if (!entry || seg.text.length === 0) continue;
+    const before = textBefore(pass.segs, i, shape.maxLen - 1);
+    const window = before + seg.text + textAfter(pass.segs, i, shape.maxLen);
+    if (crossedBy(window, before.length, seg.text.length, entries, shape)) rebracket(pass, seg, entry);
+  }
+}
+
+/** Gives one replacement a bracketed token of its own, and points its report hit at it. */
+function rebracket(pass: TextPass, seg: Segment, entry: VaultEntry): void {
+  const { vault, sessionId, ctx } = pass;
+  const token = freshToken(entry.patternLabel || 'PSEUDONYM', vault, sessionId, ctx.reservedTokens);
+  addMapping(vault, sessionId, {
+    token, original: pass.source.slice(seg.src, seg.end), patternLabel: entry.patternLabel, category: entry.category,
+    createdAt: new Date().toISOString(),
+  });
+  const hit = lastHitFor(pass.hits, seg.text);
+  if (hit) hit.token = token;
+  seg.text = token;
+}
+
+/** The latest report hit for a token. The replacement just made is the last one recorded for it. */
+function lastHitFor(hits: RedactionHit[], token: string): RedactionHit | undefined {
+  for (let h = hits.length - 1; h >= 0; h--) if (hits[h].token === token) return hits[h];
+  return undefined;
 }
 
 /**
@@ -244,23 +513,47 @@ function shouldProcessField(
   return true;
 }
 
+type GlobToken = { kind: 'char'; ch: string } | { kind: 'star' } | { kind: 'digits' };
+
+/** Splits a field rule into tokens: a literal character, * for one or more characters other than a dot, or [*] for an array index. */
+function globTokens(pattern: string): GlobToken[] {
+  const tokens: GlobToken[] = [];
+  for (let i = 0; i < pattern.length; i++) {
+    if (pattern.startsWith('[*]', i)) {
+      tokens.push({ kind: 'char', ch: '[' }, { kind: 'digits' }, { kind: 'char', ch: ']' });
+      i += 2;
+    } else if (pattern[i] === '*') {
+      tokens.push({ kind: 'star' });
+    } else {
+      tokens.push({ kind: 'char', ch: pattern[i] });
+    }
+  }
+  return tokens;
+}
+
 /**
- * Safe wildcard matching for JSON paths.
- * Escapes all regex special chars before applying wildcard transformations.
- * Supports: "user.email", "*.email", "contacts[*].phone"
+ * Wildcard matching for JSON paths: "user.email", "*.email", "contacts[*].phone".
+ * Dynamic programming over the path, so any number of stars costs path length times pattern length, never backtracking.
  */
 function fieldPathMatches(actual: string, pattern: string): boolean {
-  // Escape ALL regex special characters first
-  let regexStr = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  // Now unescape our wildcards
-  regexStr = regexStr
-    .replace(/\\\[\\*\\]/g, '\\[\\d+\\]')  // [*] -> [\d+]
-    .replace(/\\[*]/g, '[^.]+');            // escaped * -> [^.]+
-  try {
-    return new RegExp(`^${regexStr}$`).test(actual);
-  } catch {
-    return false;
+  const tokens = globTokens(pattern);
+  // reach[j]: the path read so far can end after token j.
+  let reach = new Array<boolean>(tokens.length + 1).fill(false);
+  reach[0] = true;
+  for (let i = 0; i < actual.length; i++) {
+    const next = new Array<boolean>(tokens.length + 1).fill(false);
+    for (let j = 0; j < tokens.length; j++) next[j + 1] = globStep(tokens[j], actual[i], reach[j], reach[j + 1]);
+    reach = next;
   }
+  return reach[tokens.length];
+}
+
+/** Whether token can end on ch: before is "the path so far ended before the token", within "ended inside it". */
+function globStep(token: GlobToken, ch: string, before: boolean, within: boolean): boolean {
+  if (token.kind === 'char') return before && token.ch === ch;
+  const fits = token.kind === 'star' ? ch !== '.' : ch >= '0' && ch <= '9';
+  // A repeat takes this character to start its run, or to continue the run it already began.
+  return fits && (before || within);
 }
 
 /** Shared with profile parsing so both accept and refuse the same patterns. */
@@ -469,7 +762,7 @@ const SEMANTIC_FIELD_MAP: Array<{
   // CREDENTIALS / AUTH / SECRETS / TOKENS
   // ═══════════════════════════════════════════
   {
-    keys: /^(?:password|passwd|pwd|pass_?word|secret|secret_?key|api_?key|api_?secret|api_?token|access_?token|refresh_?token|auth_?token|bearer_?token|session_?token|session_?key|private_?key|encryption_?key|signing_?key|master_?key|client_?secret|consumer_?key|consumer_?secret|oauth_?token|credentials|passwort|kennwort|schluessel|mot_?de_?passe|contrasena|clave|senha|wachtwoord|sleutel|losenord|haslo|parol|mima|sifre)$/i,
+    keys: /^(?:password|passwd|pwd|pass_?word|secret|secret_?key|api_?key|api_?secret|api_?token|access_?token|refresh_?token|auth_?token|bearer_?token|session_?token|session_?key|private_?key|encryption_?key|signing_?key|master_?key|client_?secret|consumer_?key|consumer_?secret|oauth_?token|credentials|authorization|proxy_?authorization|passwort|kennwort|schluessel|mot_?de_?passe|contrasena|clave|senha|wachtwoord|sleutel|losenord|haslo|parol|mima|sifre)$/i,
     label: 'CREDENTIAL',
     category: 'enterprise',
   },
@@ -681,12 +974,37 @@ function numericMapping(out: string, text: string, ctx: RedactionContext, vault:
     existing.numeric = true;
     return out;
   }
+  if (ctx.dedup) {
+    const same = findTyped(vault, sessionId, text, { ...ctx, numeric: true, boolean: false });
+    if (same) return same.token;
+  }
   // A composite like [DIG_0][DIG_1] can also come from a string, so the number gets its own token.
   const token = freshToken('NUMBER', vault, sessionId, ctx.reservedTokens);
-  vault.addEntry(sessionId, {
+  addMapping(vault, sessionId, {
     token, original: text, patternLabel: 'NUMBER', category: 'other', createdAt: new Date().toISOString(), numeric: true,
   });
   return token;
+}
+
+/** A boolean under a sensitive key, such as disability, is replaced. Restore returns the boolean. */
+function redactBoolean(
+  value: boolean,
+  ctx: RedactionContext,
+  vault: IVault,
+  sessionId: string,
+  hits: RedactionHit[],
+  itemIndex: number,
+  path: string,
+  display: string,
+  siblingKeys?: string[],
+): unknown {
+  const text = String(value);
+  // A boolean mapping is typed at creation, so it is shared only with the same boolean, never with the text "true".
+  const boolCtx: RedactionContext = { ...ctx, boolean: true };
+  const out = redactSemantic(text, boolCtx, vault, sessionId, hits, itemIndex, path, display, siblingKeys);
+  if (out === null || out === text) return value;
+  ctx.lastLocked = boolCtx.lastLocked;
+  return out;
 }
 
 /** Numbers keep their type unless a semantic field or a pattern claims them. */
@@ -703,8 +1021,8 @@ function redactNumber(
 ): unknown {
   // String(-0) is "0", so negative zero is written out to survive Restore.
   const text = Object.is(value, -0) ? '-0' : String(value);
-  // Numeric mappings never share an entry with a text occurrence of the same digits.
-  const numCtx: RedactionContext = { ...ctx, dedup: false, numeric: true };
+  // Numeric mappings are shared only with the same number, never with a text occurrence of the same digits.
+  const numCtx: RedactionContext = { ...ctx, numeric: true };
   let out: string | null = null;
   if (!ctx.skipSemantic) out = redactSemantic(text, numCtx, vault, sessionId, hits, itemIndex, path, display, siblingKeys);
   if (out === null && ctx.scanNumbers) out = redactText(text, numCtx, vault, sessionId, hits, itemIndex, display);
@@ -731,7 +1049,7 @@ function distinctKey(
 ): string {
   if (ctx.mode === 'token' || ctx.mode === 'pseudonymize') {
     const token = freshToken('KEY', vault, sessionId, new Set([...(ctx.reservedTokens ?? []), ...reserved]));
-    vault.addEntry(sessionId, { token, original, patternLabel: 'KEY', category: 'other', createdAt: new Date().toISOString() });
+    addMapping(vault, sessionId, { token, original, patternLabel: 'KEY', category: 'other', createdAt: new Date().toISOString() });
     ctx.lastLocked = [[0, token.length]];
     return token;
   }
@@ -830,11 +1148,17 @@ export function redactValue(
     return redactNumber(value, ctx, vault, sessionId, hits, itemIndex, currentPath, displayPath, siblingKeys);
   }
 
+  if (typeof value === 'boolean') {
+    if (!processed || ctx.skipSemantic) return value;
+    return redactBoolean(value, ctx, vault, sessionId, hits, itemIndex, currentPath, displayPath, siblingKeys);
+  }
+
   if (Array.isArray(value)) {
+    // Elements keep the siblings of the array's key, so ["x"] under id is judged like id: "x".
     const out: unknown[] = [];
     value.forEach((v, i) => {
       out.push(lockChild(ctx, out, String(i), () =>
-        redactValue(v, ctx, vault, sessionId, hits, itemIndex, `${currentPath}[${i}]`, undefined, `${displayPath}[${i}]`)));
+        redactValue(v, ctx, vault, sessionId, hits, itemIndex, `${currentPath}[${i}]`, siblingKeys, `${displayPath}[${i}]`)));
     });
     return out;
   }
@@ -976,26 +1300,40 @@ function claimPending(pass: TextPass, pending: Pending[]): void {
   pass.segs = next;
 }
 
-/** Claims one candidate. Returns false when it touched earlier replacements and was queued instead. */
-function claimOne(pass: TextPass, cursor: SegmentCursor, pending: Pending[], start: number, end: number, decide: Decider): boolean {
+/** Claims one candidate: locked when free, queued when it touched earlier replacements, else rejected or touching. */
+function claimOne(
+  pass: TextPass, cursor: SegmentCursor, pending: Pending[], start: number, end: number, decide: Decider,
+): 'locked' | 'queued' | 'rejected' | 'touching' {
   const text = pass.source.slice(start, end);
   const free = cursor.freeAt(start, end) !== undefined;
   const decision = decide(text, start);
   if (decision && free) cursor.lock(start, end, redactMatch(pass, text, decision));
   else if (decision) pending.push({ start, end, decision });
-  return free;
+  if (!decision) return free ? 'rejected' : 'touching';
+  return free ? 'locked' : 'queued';
 }
 
-/** Matches against the whole source, so anchors and lookbehind keep their meaning, and replaces only free text. */
-function replaceFree(pass: TextPass, re: RegExp, decide: Decider): void {
+/**
+ * Matches against the whole source, so anchors and lookbehind keep their meaning, and replaces only free text.
+ * retryQueued retries one position after a queued match too, so a later match that starts inside it and runs past it
+ * is still found. User regexes need that and only scan bounded input. Built-in patterns go on after the match, which
+ * keeps them linear on any input.
+ */
+function replaceFree(pass: TextPass, re: RegExp, decide: Decider, retryQueued = false): void {
   const global = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
   const cursor = new SegmentCursor(pass.segs);
   const pending: Pending[] = [];
   let m: RegExpExecArray | null;
   while ((m = global.exec(pass.source)) !== null) {
     const start = m.index;
-    // A match touching claimed text is retried one position later, so a free match it overlapped is still found.
-    if (m[0] === '' || !claimOne(pass, cursor, pending, start, start + m[0].length, decide)) global.lastIndex = start + 1;
+    if (m[0] === '') {
+      global.lastIndex = start + 1;
+      continue;
+    }
+    // A queued match has its free parts redacted later. A rejected match that touched claimed text is retried one
+    // position later, so a shorter free match it overlapped is still found.
+    const outcome = claimOne(pass, cursor, pending, start, start + m[0].length, decide);
+    if (outcome === 'touching' || (retryQueued && outcome === 'queued')) global.lastIndex = start + 1;
   }
   pass.segs = cursor.finish();
   claimPending(pass, pending);
@@ -1040,11 +1378,11 @@ const DENY_DECISION: Decision = {
 };
 
 function denyListStage(pass: TextPass): void {
-  for (const entry of pass.ctx.denyList ?? []) {
-    if (entry.type === 'regex') assertUserRegexInput(pass.source, `Deny list regex "${entry.value}"`);
+  for (const [index, entry] of (pass.ctx.denyList ?? []).entries()) {
+    if (entry.type === 'regex') assertUserRegexInput(pass.source, `Deny list entry ${index + 1} regex`);
     try {
       const re = denyListRegex(entry);
-      if (re) replaceFree(pass, re, () => DENY_DECISION);
+      if (re) replaceFree(pass, re, () => DENY_DECISION, entry.type === 'regex');
     } catch { /* skip invalid */ }
   }
 }
@@ -1105,7 +1443,7 @@ function customStage(pass: TextPass): void {
     };
     assertUserRegexInput(pass.source, `Custom pattern "${cp.label}"`);
     try {
-      replaceFree(pass, new RegExp(cp.regex, 'g'), (match) => (isAllowListed(match, pass.ctx.allowList) ? null : decision));
+      replaceFree(pass, new RegExp(cp.regex, 'g'), (match) => (isAllowListed(match, pass.ctx.allowList) ? null : decision), true);
     } catch { /* skip invalid regex */ }
   }
 }
@@ -1148,7 +1486,7 @@ function literalStage(pass: TextPass): void {
     pattern: { label: 'LITERAL', category: 'other' },
     store: (match) => {
       const token = freshToken('LITERAL', vault, sessionId, ctx.reservedTokens);
-      vault.addEntry(sessionId, { token, original: match, patternLabel: 'LITERAL', category: 'other', createdAt: new Date().toISOString() });
+      addMapping(vault, sessionId, { token, original: match, patternLabel: 'LITERAL', category: 'other', createdAt: new Date().toISOString() });
       return token;
     },
   };
@@ -1193,6 +1531,7 @@ function redactText(
   builtInStage(pass);
   nameStage(pass);
   customStage(pass);
+  if (ctx.mode === 'pseudonymize') separatePseudonyms(pass);
   recordLocked(ctx, pass.segs);
   return pass.segs.map((s) => s.text).join('');
 }
@@ -1205,21 +1544,146 @@ function makeRestorer(entries: Record<string, { original: string }>): (text: str
   return (text) => text.replace(re, (token) => entries[token].original);
 }
 
+/** A string that is exactly one numeric or boolean mapping gets its original type back. */
+function restoreString(value: string, restore: (text: string) => string, entries: Record<string, VaultEntry>): unknown {
+  const exact = Object.prototype.hasOwnProperty.call(entries, value) ? entries[value] : undefined;
+  if (exact?.numeric && Number.isFinite(Number(exact.original))) return Number(exact.original);
+  if (exact?.boolean && (exact.original === 'true' || exact.original === 'false')) return exact.original === 'true';
+  return restore(value);
+}
+
 function restoreWith(value: unknown, restore: (text: string) => string, entries: Record<string, VaultEntry>): unknown {
-  if (typeof value === 'string') {
-    const exact = entries[value];
-    if (exact?.numeric && Number.isFinite(Number(exact.original))) return Number(exact.original);
-    return restore(value);
-  }
+  if (typeof value === 'string') return restoreString(value, restore, entries);
   if (Array.isArray(value)) return value.map((v) => restoreWith(v, restore, entries));
   if (value !== null && typeof value === 'object') {
     const obj: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      setOwn(obj, restore(k), restoreWith(v, restore, entries));
+      const key = restore(k);
+      // Two keys restoring to one name would silently drop a value, so Restore stops instead.
+      // The message never names the key, because the restored key is the original personal data.
+      if (Object.prototype.hasOwnProperty.call(obj, key)) {
+        throw new Error('Restore would merge two keys into one name. Rename one of them before restoring.');
+      }
+      setOwn(obj, key, restoreWith(v, restore, entries));
     }
     return obj;
   }
   return value;
+}
+
+/** One bracketed token for a whole original string, so no text around it can be read as another mapping. */
+function wholeToken(original: string, vault: IVault, sessionId: string, ctx: RedactionContext): string {
+  const token = freshToken('TEXT', vault, sessionId, ctx.reservedTokens);
+  addMapping(vault, sessionId, { token, original, patternLabel: 'TEXT', category: 'other', createdAt: new Date().toISOString() });
+  return token;
+}
+
+type RestoreCheck = (input: string, output: string) => string;
+
+const joinPath = (base: string, key: string): string => (base ? `${base}.${key}` : key);
+
+/** Keeps report hits pointing at the output after a key or string is replaced whole. */
+class HitFixer {
+  private readonly hits: RedactionHit[];
+
+  constructor(hits: RedactionHit[], itemIndex: number) {
+    this.hits = hits.filter((h) => h.itemIndex === itemIndex);
+  }
+
+  /** A key renamed from oldKey: hits at or below its path move, and the key's own hit names the new key. */
+  renameKey(oldPath: string, newPath: string, oldKey: string, newKey: string, value: unknown): void {
+    const valueText = typeof value === 'string' ? value : '';
+    for (const hit of this.hits) {
+      if (hit.field === oldPath) {
+        hit.field = newPath;
+        if (oldKey.includes(hit.token) && !valueText.includes(hit.token)) hit.token = newKey;
+      } else if (hit.field.startsWith(`${oldPath}.`) || hit.field.startsWith(`${oldPath}[`)) {
+        hit.field = newPath + hit.field.slice(oldPath.length);
+      }
+    }
+  }
+
+  /** A string value replaced by token: the value's hits name the token, a hit on the key keeps its own. */
+  retokenValue(path: string, key: string, token: string): void {
+    for (const hit of this.hits) {
+      if (hit.field === path && !key.includes(hit.token)) hit.token = token;
+    }
+  }
+}
+
+function restorablePair(
+  input: unknown, output: unknown, check: RestoreCheck, ctx: RedactionContext, path = '', key = '', fixer?: HitFixer,
+): unknown {
+  if (typeof input === 'string' && typeof output === 'string') {
+    const fixed = check(input, output);
+    if (fixed !== output) fixer?.retokenValue(path, key, fixed);
+    return fixed;
+  }
+  if (Array.isArray(input) && Array.isArray(output)) {
+    return output.map((o, i) => restorablePair(input[i], o, check, ctx, `${path}[${i}]`, key, fixer));
+  }
+  if (!isPlainRecord(input) || !isPlainRecord(output)) return output;
+  const origins = ctx.keyOrigins?.get(output);
+  const fixed: Record<string, unknown> = {};
+  for (const [outKey, value] of Object.entries(output)) {
+    const inKey = origins?.get(outKey) ?? outKey;
+    if (!Object.prototype.hasOwnProperty.call(input, inKey)) {
+      setOwn(fixed, outKey, value);
+      continue;
+    }
+    const newKey = check(inKey, outKey);
+    const childPath = joinPath(path, newKey);
+    if (newKey !== outKey) fixer?.renameKey(joinPath(path, outKey), childPath, outKey, newKey, value);
+    setOwn(fixed, newKey, restorablePair(input[inKey], value, check, ctx, childPath, newKey, fixer));
+  }
+  return fixed;
+}
+
+const isPlainRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/** JSON structures compare by own keys and typed values. Array positions remain significant. */
+function sameStructure(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left)) {
+    return Array.isArray(right) && left.length === right.length && left.every((value, i) => sameStructure(value, right[i]));
+  }
+  if (!isPlainRecord(left) || !isPlainRecord(right)) return false;
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length && keys.every((key) =>
+    Object.prototype.hasOwnProperty.call(right, key) && sameStructure(left[key], right[key]));
+}
+
+/**
+ * Pseudonyms carry no delimiters, and a mapping made for a later field can spell text next to a pseudonym in an
+ * earlier one. After the run, every output string and key is restored with the final vault. One that would not
+ * restore to its input is replaced whole by a bracketed token, so Restore always returns the exact input.
+ */
+export function ensureRestorable(
+  inputs: unknown[], outputs: unknown[], ctx: RedactionContext, vault: IVault, sessionId: string, hits: RedactionHit[] = [],
+): unknown[] {
+  const session = vault.getSession(sessionId);
+  if (!session || ctx.mode !== 'pseudonymize') return outputs;
+  const restore = makeRestorer(session.entries);
+  // Repair tokens must not spell token-shaped text already in any output. Collected once, only when a repair is needed.
+  let reserved = false;
+  const check = (input: string, output: string): string => {
+    if (restoreString(output, restore, session.entries) === input) return output;
+    if (!reserved) {
+      ctx.reservedTokens = collectTokenLike(outputs, ctx.reservedTokens);
+      reserved = true;
+    }
+    return wholeToken(input, vault, sessionId, ctx);
+  };
+  const fixed = outputs.map((out, i) => restorablePair(inputs[i], out, check, ctx, '', '', new HitFixer(hits, i)));
+  // Without a repair every string and key already restored exactly, so the whole-output check runs only after one.
+  if (!reserved) return fixed;
+  const finalRestore = makeRestorer(session.entries);
+  fixed.forEach((out, i) => {
+    if (!sameStructure(restoreWith(out, finalRestore, session.entries), inputs[i])) {
+      throw new Error('Pseudonym repair could not preserve restoration, so nothing was output.');
+    }
+  });
+  return fixed;
 }
 
 /**
@@ -1228,6 +1692,11 @@ function restoreWith(value: unknown, restore: (text: string) => string, entries:
 export function restoreValue(value: unknown, vault: IVault, sessionId: string): unknown {
   const session = vault.getSession(sessionId);
   if (!session) return value;
+  return restoreFromSession(value, session);
+}
+
+/** Restores with a session already fetched, so a whole batch uses one snapshot even if the session expires meanwhile. */
+export function restoreFromSession(value: unknown, session: VaultSession): unknown {
   return restoreWith(value, makeRestorer(session.entries), session.entries);
 }
 
@@ -1247,32 +1716,76 @@ function toUtf16Spans(text: string, entities: Array<{ entity_type: string; start
     .map((e) => ({ start: offsets[e.start], end: offsets[e.end], score: e.score, entityType: e.entity_type }));
 }
 
-/** Keeps the strongest span in a cluster of overlapping spans: higher score, then longer. */
-function resolveCluster(cluster: Span[]): Span[] {
-  const ranked = [...cluster].sort((a, b) => b.score - a.score || (b.end - b.start) - (a.end - a.start) || a.start - b.start);
-  const kept: Span[] = [];
-  for (const span of ranked) {
-    if (!kept.some((k) => span.start < k.end && k.start < span.end)) kept.push(span);
-  }
-  return kept;
+/** Higher score wins, then the longer span, then the earlier one. */
+function outranks(a: Span, b: Span): boolean {
+  if (a.score !== b.score) return a.score > b.score;
+  const la = a.end - a.start;
+  const lb = b.end - b.start;
+  return la !== lb ? la > lb : a.start < b.start;
 }
 
-/** Resolves overlaps cluster by cluster, so disjoint spans cost linear time. Returns spans in source order. */
-function resolveOverlaps(spans: Span[]): Span[] {
-  const sorted = [...spans].sort((a, b) => a.start - b.start);
-  const out: Span[] = [];
-  let cluster: Span[] = [];
-  let reach = -1;
-  for (const span of sorted) {
-    if (span.start >= reach && cluster.length > 0) {
-      out.push(...resolveCluster(cluster));
-      cluster = [];
+/** A max-heap of spans by rank. */
+class SpanHeap {
+  readonly items: Span[] = [];
+
+  push(span: Span): void {
+    const h = this.items;
+    h.push(span);
+    for (let i = h.length - 1; i > 0;) {
+      const parent = (i - 1) >> 1;
+      if (!outranks(h[i], h[parent])) break;
+      [h[i], h[parent]] = [h[parent], h[i]];
+      i = parent;
     }
-    cluster.push(span);
-    reach = Math.max(reach, span.end);
   }
-  out.push(...resolveCluster(cluster));
-  return out.sort((a, b) => a.start - b.start);
+
+  pop(): void {
+    const h = this.items;
+    const last = h.pop()!;
+    if (h.length === 0) return;
+    h[0] = last;
+    for (let i = 0; ;) {
+      const l = 2 * i + 1;
+      let best = i;
+      if (l < h.length && outranks(h[l], h[best])) best = l;
+      if (l + 1 < h.length && outranks(h[l + 1], h[best])) best = l + 1;
+      if (best === i) break;
+      [h[i], h[best]] = [h[best], h[i]];
+      i = best;
+    }
+  }
+}
+
+/**
+ * Covers the union of overlapping spans. Each stretch takes the strongest span covering it, and touching stretches of
+ * the same entity type merge, so no part of any detected entity stays in clear text. O(n log n). Source order.
+ */
+function resolveOverlaps(spans: Span[]): Span[] {
+  const points = [...new Set(spans.flatMap((s) => [s.start, s.end]))].sort((a, b) => a - b);
+  const byStart = [...spans].sort((a, b) => a.start - b.start);
+  const heap = new SpanHeap();
+  const out: Span[] = [];
+  let k = 0;
+  for (let p = 0; p + 1 < points.length; p++) {
+    const from = points[p];
+    const to = points[p + 1];
+    while (k < byStart.length && byStart[k].start <= from) heap.push(byStart[k++]);
+    while (heap.items.length > 0 && heap.items[0].end <= from) heap.pop();
+    const top = heap.items[0];
+    if (top) paint(out, from, to, top);
+  }
+  return out;
+}
+
+/** Adds the stretch [from, to) under span, extending the previous stretch when it touches and has the same type. */
+function paint(out: Span[], from: number, to: number, span: Span): void {
+  const prev = out[out.length - 1];
+  if (prev && prev.end === from && prev.entityType === span.entityType) {
+    prev.end = to;
+    prev.score = Math.max(prev.score, span.score);
+  } else {
+    out.push({ start: from, end: to, score: span.score, entityType: span.entityType });
+  }
 }
 
 /** The parts of each span that no regex replacement covers, so an overlapped entity still loses its free tail. */
@@ -1299,8 +1812,17 @@ function presidioSpans(
   ctx: RedactionContext,
   locked: Array<[number, number]>,
 ): Span[] {
-  const threshold = ctx.confidenceThreshold ?? 0;
+  const threshold = presidioThreshold(ctx);
   return subtractLocked(resolveOverlaps(toUtf16Spans(value, entities).filter((s) => s.score >= threshold)), locked);
+}
+
+// Without a configured threshold, the Analyzer is asked for scores of 0.4 and up, as before.
+const PRESIDIO_DEFAULT_THRESHOLD = 0.4;
+
+/** The node's default threshold, 0, means none was chosen, so Presidio keeps its 0.4 floor as in 6.x. */
+function presidioThreshold(ctx: RedactionContext): number {
+  const chosen = ctx.confidenceThreshold;
+  return chosen !== undefined && chosen > 0 ? chosen : PRESIDIO_DEFAULT_THRESHOLD;
 }
 
 async function presidioRedactString(
@@ -1315,7 +1837,8 @@ async function presidioRedactString(
 ): Promise<string> {
   if (value.trim().length === 0) return value;
   const entities = await analyzeWithPresidio(
-    ctx.presidioUrl!, value, ctx.presidioLanguage || 'en', 0.4, 10000, ctx.presidioRequest,
+    ctx.presidioUrl!, value, ctx.presidioLanguage || 'en', presidioThreshold(ctx), 10000,
+    ctx.presidioRequest,
   );
   const parts: string[] = [];
   let last = 0;
@@ -1345,6 +1868,7 @@ async function presidioKey(
   key: string,
   original: string,
   source: Record<string, unknown>,
+  sourceKeys: Set<string>,
   taken: Record<string, unknown>,
   ctx: RedactionContext,
   vault: IVault,
@@ -1362,18 +1886,48 @@ async function presidioKey(
   } catch {
     return key; // Presidio failed for this key. Regex results stand.
   }
+  if (out === key) return out;
   // Keys not written yet count too, so a renamed key never overwrites a later property.
-  const others = new Set(Object.keys(source).filter((k) => k !== key));
-  const clashes = (k: string) => k === '' || Object.prototype.hasOwnProperty.call(taken, k) || others.has(k);
-  if (out === key || !clashes(out)) return out;
+  const clashes = (k: string) => k === '' || Object.prototype.hasOwnProperty.call(taken, k) || (k !== key && sourceKeys.has(k));
+  if (!clashes(out)) return out;
+  const others = [...sourceKeys].filter((k) => k !== key);
   return distinctKey(out, original, clashes, ctx, vault, sessionId, [...others, ...Object.keys(taken)]);
 }
 
-/** Rewrites report paths under a key Presidio renamed, so no hit names the original key. */
-function renamePaths(hits: RedactionHit[], from: string, to: string): void {
-  for (const h of hits) {
-    if (h.field === from) h.field = to;
-    else if (h.field.startsWith(`${from}.`) || h.field.startsWith(`${from}[`)) h.field = to + h.field.slice(from.length);
+/**
+ * Report paths from the regex pass, sorted once, so a key Presidio renames rewrites only the hits under it.
+ * Lookups use the paths as the regex pass wrote them, so nested renames compose.
+ */
+class HitPaths {
+  private readonly rows: Array<{ path: string; hit: RedactionHit }>;
+
+  constructor(hits: RedactionHit[], itemIndex: number) {
+    this.rows = hits
+      .filter((h) => h.itemIndex === itemIndex)
+      .map((hit) => ({ path: hit.field, hit }))
+      .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  }
+
+  /** Hits at regexPath or below it now report under renamed. */
+  rename(regexPath: string, renamed: string): void {
+    this.each(regexPath, true, renamed, regexPath);
+    this.each(`${regexPath}.`, false, renamed, regexPath);
+    this.each(`${regexPath}[`, false, renamed, regexPath);
+  }
+
+  private each(prefix: string, exact: boolean, renamed: string, regexPath: string): void {
+    let lo = 0;
+    let hi = this.rows.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (this.rows[mid].path < prefix) lo = mid + 1;
+      else hi = mid;
+    }
+    for (let i = lo; i < this.rows.length; i++) {
+      const { path, hit } = this.rows[i];
+      if (exact ? path !== prefix : !path.startsWith(prefix)) break;
+      hit.field = renamed + path.slice(regexPath.length);
+    }
   }
 }
 
@@ -1387,42 +1941,67 @@ async function presidioWalk(
   path: string,
   policyPath: string,
   locked: Array<[number, number]> = [],
+  regexPath: string = path,
+  paths?: HitPaths,
 ): Promise<unknown> {
   if (typeof value === 'string') {
     if (!shouldProcessField(policyPath, ctx.fieldMode, ctx.fieldRules)) return value;
     try {
       return await presidioRedactString(value, ctx, vault, sessionId, hits, itemIndex, path, locked);
     } catch {
-      return value; // Presidio failed for this field. Regex results stand.
+      // Presidio's answer could not be applied. Regex results stand, and the text counts as unscanned.
+      if (ctx.presidioRequest) markUnscanned(ctx.presidioRequest);
+      return value;
     }
   }
   if (Array.isArray(value)) {
     const out: unknown[] = [];
     for (let i = 0; i < value.length; i++) {
       const lock = ctx.lockedSpans?.get(value)?.get(String(i));
-      out.push(await presidioWalk(value[i], ctx, vault, sessionId, hits, itemIndex, `${path}[${i}]`, `${policyPath}[${i}]`, lock));
+      out.push(await presidioWalk(
+        value[i], ctx, vault, sessionId, hits, itemIndex, `${path}[${i}]`, `${policyPath}[${i}]`, lock, `${regexPath}[${i}]`, paths,
+      ));
     }
     return out;
   }
   if (value !== null && typeof value === 'object') {
-    const origins = ctx.keyOrigins?.get(value);
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      const original = origins?.get(k) ?? k;
-      const child = path ? `${path}.${k}` : k;
-      const childPolicy = policyPath ? `${policyPath}.${original}` : original;
-      const lock = ctx.lockedSpans?.get(value)?.get(k);
-      const keyHits: RedactionHit[] = [];
-      const source = value as Record<string, unknown>;
-      const key = await presidioKey(k, original, source, out, ctx, vault, sessionId, keyHits, itemIndex, child, childPolicy);
-      const finalChild = path ? `${path}.${key}` : key;
-      if (key !== k) renamePaths(hits, child, finalChild);
-      for (const h of keyHits) hits.push({ ...h, field: finalChild });
-      setOwn(out, key, await presidioWalk(v, ctx, vault, sessionId, hits, itemIndex, finalChild, childPolicy, lock));
-    }
-    return out;
+    return presidioObject(value as Record<string, unknown>, ctx, vault, sessionId, hits, itemIndex, path, policyPath, regexPath, paths);
   }
   return value;
+}
+
+/** Scans the keys and values of one object. A renamed key carries the report paths below it. */
+async function presidioObject(
+  source: Record<string, unknown>,
+  ctx: RedactionContext,
+  vault: IVault,
+  sessionId: string,
+  hits: RedactionHit[],
+  itemIndex: number,
+  path: string,
+  policyPath: string,
+  regexPath: string,
+  paths?: HitPaths,
+): Promise<Record<string, unknown>> {
+  const origins = ctx.keyOrigins?.get(source);
+  const out: Record<string, unknown> = {};
+  const sourceKeys = new Set(Object.keys(source));
+  const finalOrigins = new Map<string, string>();
+  const join = (base: string, k: string) => (base ? `${base}.${k}` : k);
+  for (const [k, v] of Object.entries(source)) {
+    const original = origins?.get(k) ?? k;
+    const childPolicy = join(policyPath, original);
+    const keyHits: RedactionHit[] = [];
+    const key = await presidioKey(k, original, source, sourceKeys, out, ctx, vault, sessionId, keyHits, itemIndex, join(path, k), childPolicy);
+    const finalChild = join(path, key);
+    if (key !== k) paths?.rename(join(regexPath, k), finalChild);
+    for (const h of keyHits) hits.push({ ...h, field: finalChild });
+    const lock = ctx.lockedSpans?.get(source)?.get(k);
+    setOwn(out, key, await presidioWalk(v, ctx, vault, sessionId, hits, itemIndex, finalChild, childPolicy, lock, join(regexPath, k), paths));
+    finalOrigins.set(key, original);
+  }
+  ctx.keyOrigins?.set(out, finalOrigins);
+  return out;
 }
 
 /**
@@ -1438,7 +2017,8 @@ export async function enhanceWithPresidio(
   itemIndex: number,
 ): Promise<Record<string, unknown>> {
   if (!ctx.presidioUrl) return data;
-  return (await presidioWalk(data, ctx, vault, sessionId, hits, itemIndex, '', '')) as Record<string, unknown>;
+  const paths = new HitPaths(hits, itemIndex);
+  return (await presidioWalk(data, ctx, vault, sessionId, hits, itemIndex, '', '', [], '', paths)) as Record<string, unknown>;
 }
 
 /**
@@ -1446,16 +2026,11 @@ export async function enhanceWithPresidio(
  * SECURITY: Original PII values are NEVER included in the report.
  */
 export function buildReport(sessionId: string, hits: RedactionHit[]): RedactionReport {
-  const hitsByCategory: Record<string, number> = {};
-  const hitsByPattern: Record<string, number> = {};
-
-  for (const hit of hits) {
-    hitsByCategory[hit.category] = (hitsByCategory[hit.category] || 0) + 1;
-    hitsByPattern[hit.patternLabel] = (hitsByPattern[hit.patternLabel] || 0) + 1;
-  }
+  const hitsByCategory = countHits(hits, 'category');
+  const hitsByPattern = countHits(hits, 'patternLabel');
 
   return {
-    sessionId,
+    sessionId: sessionReference(sessionId),
     timestamp: new Date().toISOString(),
     totalHits: hits.length,
     hitsByCategory,

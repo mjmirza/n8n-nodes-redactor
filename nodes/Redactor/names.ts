@@ -1636,17 +1636,30 @@ for (const surname of ['Solangi','Ghaffar','Shaikh','Syed','Qureshi','Mirza','Ab
   LAST_NAMES.add(surname);
 }
 
-// One name word. Unicode letters, inner capitals such as McDonald, and inner apostrophes or hyphens such as O'Connor.
-const NAME_WORD = String.raw`\p{Lu}\p{Ll}*(?:\p{Lu}\p{Ll}+)*(?:['’-]\p{Lu}?\p{Ll}+(?:\p{Lu}\p{Ll}+)*)*`;
-const CAPITAL_RUN = new RegExp(String.raw`(?<![\p{L}\p{N}'’-])${NAME_WORD}(?:\s+${NAME_WORD})*(?![\p{L}\p{N}])`, 'gu');
+// One name word. Unicode letters with combining marks such as E\u0301, inner capitals such as McDonald, and inner
+// apostrophes or hyphens such as O'Connor. Marks sit only in the lowercase class, so no two parts compete for one.
+const NAME_WORD = String.raw`\p{Lu}[\p{Ll}\p{M}]*(?:\p{Lu}[\p{Ll}\p{M}]+)*(?:['’-]\p{Lu}?[\p{Ll}\p{M}]+(?:\p{Lu}[\p{Ll}\p{M}]+)*)*`;
+// Lowercase surname particles that may sit between name words, as in Alice van Dijk or Maria de Silva.
+const PARTICLES = ['van', 'von', 'der', 'den', 'de', 'del', 'della', 'di', 'da', 'das', 'dos', 'du', 'des', 'la', 'le', 'ter', 'ten', 'zu', 'bin', 'ibn', 'al', 'el', 'af', 'av'];
+const PARTICLE_SET = new Set(PARTICLES);
+const PARTICLE = `(?:${PARTICLES.join('|')})`;
+const CAPITAL_RUN = new RegExp(
+  String.raw`(?<![\p{L}\p{N}'’-])${NAME_WORD}(?:\s+(?:${PARTICLE}\s+){0,3}${NAME_WORD})*(?![\p{L}\p{N}])`, 'gu',
+);
+const CAPITALS_WORD = String.raw`\p{Lu}{2,}(?:['’-]\p{Lu}+)*`;
+const CAPITALS_RUN = new RegExp(
+  String.raw`(?<![\p{L}\p{N}'’-])${CAPITALS_WORD}(?:\s+${CAPITALS_WORD})+(?![\p{L}\p{N}])`, 'gu',
+);
 const MAX_NAME_WORDS = 4;
 
-type NameWord = { word: string; at: number };
+// word is the form used for dictionary lookups. len is the length in the text, which a lookup form may not keep.
+type NameWord = { word: string; at: number; len: number };
 type NameSpan = { name: string; start: number; end: number };
 
 /** A word is known when it, a hyphen part, or its root after an O' or Mc prefix is in the name dictionaries. */
 function isKnownName(word: string): boolean {
-  const parts = word.split('-').flatMap((p) => [p, p.replace(/^(?:O['’]|Mc|Mac)(?=\p{Lu})/u, '')]);
+  // The dictionaries hold composed forms, so a decomposed E\u0301lodie is looked up as Élodie.
+  const parts = word.normalize('NFC').split('-').flatMap((p) => [p, p.replace(/^(?:O['’]|Mc|Mac)(?=\p{Lu})/u, '')]);
   return parts.some((p) => FIRST_NAMES.has(p) || LAST_NAMES.has(p));
 }
 
@@ -1656,13 +1669,26 @@ function isKnownName(word: string): boolean {
  */
 export function detectNamesInText(text: string): NameSpan[] {
   const results: NameSpan[] = [];
+  const collect = (words: NameWord[]) => {
+    // One span at a time, so a huge run never spreads more arguments than a call can take.
+    for (const segment of nameSegments(words)) for (const span of chunkSegment(text, segment)) results.push(span);
+  };
   for (const match of text.matchAll(CAPITAL_RUN)) {
-    if (!/\p{Ll}/u.test(match[0])) continue;
-    const words = [...match[0].matchAll(/\S+/g)].map((w) => ({ word: w[0], at: (match.index ?? 0) + (w.index ?? 0) }));
-    for (const segment of nameSegments(words)) results.push(...chunkSegment(text, segment));
+    if (/\p{Ll}/u.test(match[0])) collect(runWords(match, (w) => w));
   }
+  // All-capitals runs, as in JOHN SMITH, are looked up in title case.
+  for (const match of text.matchAll(CAPITALS_RUN)) collect(runWords(match, titleCase));
   return results;
 }
+
+/** The words of a run, with their offsets and length in the text, under the form used for lookups. */
+function runWords(match: RegExpMatchArray, form: (word: string) => string): NameWord[] {
+  return [...match[0].matchAll(/\S+/g)].map((w) => ({
+    word: form(w[0]), at: (match.index ?? 0) + (w.index ?? 0), len: w[0].length,
+  }));
+}
+
+const titleCase = (word: string): string => word.toLowerCase().replace(/(^|['’-])(\p{L})/gu, (_, sep: string, ch: string) => sep + ch.toUpperCase());
 
 /**
  * Splits a capitalized run at non-name words. A word that is both a non-name and a name, such as May or West,
@@ -1684,15 +1710,40 @@ function nameSegments(words: NameWord[]): NameWord[][] {
   return segments;
 }
 
-/** Splits a long segment into names of up to four words, each with at least two words and a known part. */
+/** Name words with any particles before them, as one unit each. Particles never count as words of their own. */
+function nameUnits(segment: NameWord[]): Array<{ start: number; end: number }> {
+  const units: Array<{ start: number; end: number }> = [];
+  let particleStart = -1;
+  for (const w of segment) {
+    if (PARTICLE_SET.has(w.word)) {
+      if (particleStart < 0) particleStart = w.at;
+      continue;
+    }
+    units.push({ start: particleStart >= 0 ? particleStart : w.at, end: w.at + w.len });
+    particleStart = -1;
+  }
+  return units;
+}
+
+/**
+ * Splits a long segment into names of up to four words, each with at least two words. The segment already holds a
+ * known name, so every chunk is kept, and an unknown surname after a long run of first names is still covered.
+ * Chunks are balanced, so five words split three and two and no word is left on its own.
+ */
 function chunkSegment(text: string, segment: NameWord[]): NameSpan[] {
+  const units = nameUnits(segment);
   const spans: NameSpan[] = [];
-  for (let i = 0; i < segment.length; i += MAX_NAME_WORDS) {
-    const chunk = segment.slice(i, i + MAX_NAME_WORDS);
-    if (chunk.length < 2 || !chunk.some((w) => isKnownName(w.word))) continue;
-    const last = chunk[chunk.length - 1];
-    const start = chunk[0].at;
-    const end = last.at + last.word.length;
+  if (units.length < 2) return spans;
+  const chunks = Math.ceil(units.length / MAX_NAME_WORDS);
+  const base = Math.floor(units.length / chunks);
+  let extra = units.length % chunks;
+  for (let i = 0; i < units.length;) {
+    const size = base + (extra > 0 ? 1 : 0);
+    if (extra > 0) extra--;
+    const chunk = units.slice(i, i + size);
+    i += size;
+    const start = chunk[0].start;
+    const end = chunk[chunk.length - 1].end;
     spans.push({ name: text.slice(start, end), start, end });
   }
   return spans;

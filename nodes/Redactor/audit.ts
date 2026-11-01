@@ -8,6 +8,21 @@ import * as crypto from 'crypto';
 import { RedactionHit, RedactionMode } from './types';
 import { ClassificationLabel } from './classification';
 
+/** A value-free reference shared by reports and audit records for the same session. */
+export function sessionReference(sessionId: string): string {
+  return `session:${crypto.createHash('sha256').update('redactor-session:').update(sessionId).digest('hex')}`;
+}
+
+/**
+ * Counts hits by a field. Counting in a Map and building own properties keeps labels such as constructor or
+ * __proto__ as ordinary counters.
+ */
+export function countHits(hits: RedactionHit[], field: 'category' | 'patternLabel'): Record<string, number> {
+  const counts = new Map<string, number>();
+  for (const hit of hits) counts.set(hit[field], (counts.get(hit[field]) ?? 0) + 1);
+  return Object.fromEntries(counts);
+}
+
 export interface AuditLogEntry {
   version: string;
   timestamp: string;
@@ -30,6 +45,8 @@ export interface AuditLogEntry {
   processingTimeMs: number;
   patternsUsed: number;
   presidioEnabled: boolean;
+  /** Texts Presidio could not scan in this run. Present only when above zero. */
+  presidioUnscannedTexts?: number;
   sessionId?: string;
 }
 
@@ -60,13 +77,10 @@ export function buildAuditEntry(
   presidioEnabled: boolean,
   classification?: ClassificationLabel,
   sessionId?: string,
+  presidioUnscannedTexts = 0,
 ): AuditLogEntry {
-  const hitsByCategory: Record<string, number> = {};
-  const hitsByPattern: Record<string, number> = {};
-  for (const hit of hits) {
-    hitsByCategory[hit.category] = (hitsByCategory[hit.category] || 0) + 1;
-    hitsByPattern[hit.patternLabel] = (hitsByPattern[hit.patternLabel] || 0) + 1;
-  }
+  const hitsByCategory = countHits(hits, 'category');
+  const hitsByPattern = countHits(hits, 'patternLabel');
 
   return {
     version: '2.0',
@@ -75,7 +89,8 @@ export function buildAuditEntry(
     severity: determineSeverity(classification?.level, hits.length),
     action,
     mode,
-    status: 'SUCCESS',
+    // Text Presidio never scanned makes the run partial, so an audit consumer can tell it from a full scan.
+    status: presidioUnscannedTexts > 0 ? 'PARTIAL' : 'SUCCESS',
     totalHits: hits.length,
     hitsByCategory,
     hitsByPattern,
@@ -84,6 +99,7 @@ export function buildAuditEntry(
     processingTimeMs,
     patternsUsed,
     presidioEnabled,
-    sessionId,
+    ...(presidioUnscannedTexts > 0 ? { presidioUnscannedTexts } : {}),
+    sessionId: sessionId === undefined ? undefined : sessionReference(sessionId),
   };
 }

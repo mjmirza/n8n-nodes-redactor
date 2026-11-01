@@ -14,10 +14,19 @@ export interface RunOptions {
   credentialAttached?: boolean;
   credentialError?: Error;
   typeVersion?: number;
+  /** Binary data per item, as n8n attaches files. */
+  binary?: Array<IDataObject | undefined>;
+  /** Parameters whose expression fails to evaluate. */
+  failingParams?: string[];
+  /** Parameters whose expression gives a different value per item, by item index. */
+  perItem?: Record<string, unknown[]>;
 }
 
 export function run(params: Record<string, unknown>, items: IDataObject[], opts: RunOptions = {}): Promise<INodeExecutionData[][]> {
-  const input: INodeExecutionData[] = items.map((json) => ({ json }));
+  const input: INodeExecutionData[] = items.map((json, i) => {
+    const binary = opts.binary?.[i];
+    return binary ? ({ json, binary } as INodeExecutionData) : { json };
+  });
   const staticData = opts.staticData ?? {};
   const attached = opts.credentialAttached ?? !!opts.credential;
   const node = {
@@ -36,6 +45,8 @@ export function run(params: Record<string, unknown>, items: IDataObject[], opts:
       return opts.credential;
     }),
     getNodeParameter: (name: string, _i: number, fallback?: unknown) => {
+      if (opts.failingParams?.includes(name)) throw new Error('Could not evaluate expression: missing node');
+      if (opts.perItem && name in opts.perItem) return opts.perItem[name][_i];
       if (name in params) return params[name];
       if (fallback !== undefined) return fallback;
       throw new Error(`Could not get parameter: ${name}`);
@@ -68,4 +79,32 @@ export function engineSetup(overrides: Partial<RedactionContext>): { vault: Memo
     ...overrides,
   };
   return { vault, ctx, hits: [] };
+}
+
+/**
+ * Milliseconds of CPU time this test process has used. Speed limits measure this rather than wall time, so other
+ * work on a loaded machine cannot make a linear-time check fail.
+ */
+export function cpuNow(): number {
+  const usage = process.cpuUsage();
+  return (usage.user + usage.system) / 1000;
+}
+
+/** Runs fn and fails when it takes ms or more of CPU time. */
+export function fast(fn: () => void, ms: number): void {
+  const started = cpuNow();
+  fn();
+  expect(cpuNow() - started).toBeLessThan(ms);
+}
+
+/** Redacts one note with default settings and returns the redacted text. */
+export async function redactNote(note: string, sessionId: string): Promise<string> {
+  const [out] = await run({ operation: 'redact', sessionId }, [{ note }]);
+  return out[0].json.note as string;
+}
+
+/** Runs version 2 Verify on one note and returns its status. */
+export async function verifyStatus(note: string): Promise<unknown> {
+  const [out] = await run({ operation: 'verify' }, [{ note }], { typeVersion: 2 });
+  return out[0].json.status;
 }

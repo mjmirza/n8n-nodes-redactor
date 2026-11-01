@@ -240,7 +240,8 @@ const INJECTION_PATTERNS: InjectionPattern[] = [
   },
   {
     category: 'delimiter_escape',
-    regex: /---\s*(new|system|override)\s*(context|instructions?|prompt)?\s*---/i,
+    // The optional word owns its leading whitespace, so a run of spaces has only one consumer when it is absent.
+    regex: /---\s*(new|system|override)(?:\s*(context|instructions?|prompt))?\s*---/i,
     severity: 'HIGH',
     score: 0.40,
     description: 'Horizontal rule context break',

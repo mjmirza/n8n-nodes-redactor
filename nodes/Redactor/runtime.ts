@@ -5,6 +5,50 @@ import { INJECTION_DESCRIPTIONS, PromptInjectionResult } from './injection';
 
 const VAULT_CREDENTIAL = 'redactorVaultApi';
 
+/** Direct settings get the same fail-closed pattern selection as tenant profiles. */
+export function selectedPatterns(fns: IExecuteFunctions, known: string[], recommended: string[]): string[] {
+  const scope = runSetting(fns, 'detectionScope', 'recommended');
+  if (scope === 'all') return known;
+  if (scope === 'recommended') return recommended;
+  if (scope !== 'select') throw new NodeOperationError(fns.getNode(), 'Detection Scope must be recommended, all or select');
+  const names = runSetting(fns, 'piiTypes');
+  const allowed = new Set(known);
+  if (!Array.isArray(names) || names.some((name) => typeof name !== 'string' || !allowed.has(name))) {
+    throw new NodeOperationError(fns.getNode(), 'PII Types must be an array of known pattern names');
+  }
+  return names;
+}
+
+/** Whether a saved parameter value holds an n8n expression anywhere inside it. */
+function hasExpression(value: unknown): boolean {
+  if (typeof value === 'string') return value.startsWith('=');
+  if (Array.isArray(value)) return value.some(hasExpression);
+  if (value !== null && typeof value === 'object') return Object.values(value).some(hasExpression);
+  return false;
+}
+
+/**
+ * A setting the whole run uses, such as the session or the tenant profile. An expression is evaluated for every item,
+ * and the run stops when items disagree, so a mixed batch never silently runs with the first item's settings.
+ */
+export function runSetting(fx: IExecuteFunctions, name: string, fallback?: unknown): unknown {
+  const read = (i: number) => (fallback === undefined ? fx.getNodeParameter(name, i) : fx.getNodeParameter(name, i, fallback));
+  const first = read(0);
+  const saved = (fx.getNode().parameters as Record<string, unknown> | undefined)?.[name];
+  if (saved !== undefined && !hasExpression(saved)) return first;
+  const expected = JSON.stringify(first);
+  const count = fx.getInputData().length;
+  for (let i = 1; i < count; i++) {
+    if (JSON.stringify(read(i)) !== expected) {
+      throw new NodeOperationError(fx.getNode(), `The setting "${name}" has a different value for item ${i} than for item 0`, {
+        description: 'One run uses one session and one set of settings. Split the batch first, for example with Loop Over Items, so each run sees one tenant or session.',
+      });
+    }
+  }
+  return first;
+}
+
+
 /** The credential wins. The legacy plain-text parameter is read only when no credential is attached. */
 export async function resolvePassphrase(fns: IExecuteFunctions): Promise<string> {
   if (fns.getNode().credentials?.[VAULT_CREDENTIAL]) {
@@ -30,8 +74,12 @@ export async function resolvePassphrase(fns: IExecuteFunctions): Promise<string>
 function legacyPassphrase(fns: IExecuteFunctions): string {
   let raw: unknown;
   try {
-    raw = fns.getNodeParameter('vaultPassphrase', 0, '');
+    raw = runSetting(fns, 'vaultPassphrase', '');
   } catch (error) {
+    // Items that disagree already carry a clear error. Only a failed expression is explained here.
+    if (error instanceof NodeOperationError) {
+      throw new NodeOperationError(fns.getNode(), error.message, { description: error.description ?? undefined });
+    }
     throw new NodeOperationError(fns.getNode(), 'The legacy vault passphrase could not be evaluated, so the vault stays locked.', {
       description: `Nothing was stored. Fix the expression, or move the passphrase into a Redactor Vault credential. Cause: ${(error as Error).message}`,
     });
@@ -82,9 +130,9 @@ export function assertUserRegexes(
     if (problem) refuse(`Custom pattern "${cp.label}"`, problem);
   }
   for (const list of lists) {
-    for (const entry of list.entries) {
+    for (const [index, entry] of list.entries.entries()) {
       const problem = entry.type === 'regex' ? checkRegex(entry.value) : null;
-      if (problem) refuse(`${list.name} entry "${entry.value}"`, problem);
+      if (problem) refuse(`${list.name} entry ${index + 1}`, problem);
     }
   }
 }

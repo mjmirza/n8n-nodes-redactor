@@ -1,3 +1,6 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
+
 import {
   checkPresidioHealth,
   analyzeWithPresidio,
@@ -76,7 +79,8 @@ describe('Presidio Client (mocked n8n transport)', () => {
   });
 
   test('accepts a string body', async () => {
-    const result = await analyzeWithPresidio('http://p', 'x y', 'en', 0.4, 1000, async () => ({ statusCode: 200, body: JSON.stringify([entity]) }));
+    // The text is long enough for the entity's span, so this checks string-body parsing, not offset validation.
+    const result = await analyzeWithPresidio('http://p', 'John Smith', 'en', 0.4, 1000, async () => ({ statusCode: 200, body: JSON.stringify([entity]) }));
     expect(result).toEqual([entity]);
   });
 
@@ -297,12 +301,10 @@ describe('enhanceWithPresidio', () => {
 // ═══════════════════════════════════════════════════════
 describe('Presidio Docker Setup', () => {
   test('docker command is documented correctly', () => {
-    // Verify the Docker image reference is correct
-    const dockerImage = 'mcr.microsoft.com/presidio-analyzer';
-    const defaultPort = 5002;
-    const internalPort = 3000;
-    expect(dockerImage).toContain('presidio-analyzer');
-    expect(defaultPort).toBe(5002);
-    expect(internalPort).toBe(3000);
+    // Reads the real setup guide, so a drift in the documented command fails this test.
+    const doc = readFileSync(join(__dirname, '..', 'docs', 'PRESIDIO_SETUP.md'), 'utf8');
+    expect(doc).toContain('mcr.microsoft.com/presidio-analyzer');
+    expect(doc).toContain('127.0.0.1:5002:3000');
+    expect(doc).not.toMatch(/-p 5002:3000/);
   });
 });

@@ -38,7 +38,7 @@ export interface TenantProfile {
   updatedAt?: string;
 }
 
-const MODES: RedactionMode[] = ['token', 'mask', 'hash', 'redact', 'pseudonymize', 'blackout', 'remove'];
+export const MODES: RedactionMode[] = ['token', 'mask', 'hash', 'redact', 'pseudonymize', 'blackout', 'remove'];
 const FIELD_MODES = ['all', 'allowlist', 'denylist'];
 const MATCH_TYPES = ['exact', 'contains', 'regex'];
 
@@ -114,7 +114,9 @@ function parseFieldRules(value: unknown): FieldRule[] {
 }
 
 function parseThreshold(value: unknown): number {
-  if (typeof value !== 'number' || value < 0 || value > 1) fail('confidenceThreshold must be a number from 0 to 1');
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
+    fail('confidenceThreshold must be a number from 0 to 1');
+  }
   return value;
 }
 

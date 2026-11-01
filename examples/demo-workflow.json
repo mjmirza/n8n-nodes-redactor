@@ -56,7 +56,7 @@
       "id": "redact-1",
       "name": "Redact PII",
       "type": "n8n-nodes-redactor.redactor",
-      "typeVersion": 1,
+      "typeVersion": 2,
       "position": [
         640,
         300
@@ -72,7 +72,7 @@
       "id": "restore-1",
       "name": "Restore PII",
       "type": "n8n-nodes-redactor.redactor",
-      "typeVersion": 1,
+      "typeVersion": 2,
       "position": [
         860,
         300

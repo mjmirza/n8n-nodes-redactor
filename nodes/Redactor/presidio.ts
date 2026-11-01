@@ -10,7 +10,7 @@
  * and enable "Enhanced NLP Detection" in the node settings.
  *
  * Docker setup (one command):
- *   docker run -d -p 5002:3000 mcr.microsoft.com/presidio-analyzer
+ *   docker run -d -p 127.0.0.1:5002:3000 mcr.microsoft.com/presidio-analyzer
  *
  * Or with docker-compose alongside n8n:
  *   services:
@@ -19,7 +19,7 @@
  *       ports: ["5678:5678"]
  *     presidio:
  *       image: mcr.microsoft.com/presidio-analyzer
- *       ports: ["5002:3000"]
+ *       ports: ["127.0.0.1:5002:3000"]
  */
 import { PII_PATTERNS } from './patterns';
 
@@ -125,29 +125,64 @@ const PRESIDIO_TO_CATEGORY: Record<string, string> = {
 };
 
 /**
- * Circuit breaker: after 3 consecutive failures, stop calling Presidio
- * for the rest of this execution. Per-URL to prevent cross-workflow bleed.
- * Resets on success or at start of each n8n execution.
+ * Circuit breaker: after 3 consecutive failures, stop calling Presidio for this URL.
+ * State is keyed by the requester, so each execution (one requester each) has its own breaker.
  */
-const failureCountByUrl: Map<string, number> = new Map();
+let breakers = new WeakMap<PresidioRequester, Map<string, number>>();
 const MAX_FAILURES = 3;
 
-function circuitOpen(url?: string): boolean {
-  if (!url) return false;
-  return (failureCountByUrl.get(url) || 0) >= MAX_FAILURES;
+function failures(request: PresidioRequester): Map<string, number> {
+  let table = breakers.get(request);
+  if (!table) breakers.set(request, (table = new Map()));
+  return table;
 }
 
-function recordSuccess(url?: string): void {
-  if (url) failureCountByUrl.set(url, 0);
+function circuitOpen(request: PresidioRequester, url: string): boolean {
+  return (failures(request).get(url) || 0) >= MAX_FAILURES;
 }
 
-function recordFailure(url?: string): void {
-  if (url) failureCountByUrl.set(url, (failureCountByUrl.get(url) || 0) + 1);
+function recordSuccess(request: PresidioRequester, url: string): void {
+  failures(request).set(url, 0);
 }
 
-/** Reset circuit breaker (call at start of each n8n execution) */
+// Texts Presidio did not scan, per requester, so the run can stop instead of passing them as scanned.
+let unscanned = new WeakMap<PresidioRequester, number>();
+
+function recordFailure(request: PresidioRequester, url: string): void {
+  const table = failures(request);
+  table.set(url, (table.get(url) || 0) + 1);
+  unscanned.set(request, (unscanned.get(request) || 0) + 1);
+}
+
+/** How many texts this requester sent that Presidio never scanned, through errors or an open breaker. */
+export function presidioUnscanned(request: PresidioRequester): number {
+  return unscanned.get(request) || 0;
+}
+
+/** Counts a text as unscanned when Presidio's answer could not be applied. */
+export function markUnscanned(request: PresidioRequester): void {
+  unscanned.set(request, (unscanned.get(request) || 0) + 1);
+}
+
+/** An entity this node can apply: a type, whole offsets and a finite score. */
+function validEntity(e: unknown, textLength: number): e is PresidioEntity {
+  if (e === null || typeof e !== 'object') return false;
+  const r = e as Record<string, unknown>;
+  return typeof r.entity_type === 'string' && validSpan(r.start, r.end, textLength) && validScore(r.score);
+}
+
+/** Whole offsets that cover at least one character of the submitted text. */
+function validSpan(start: unknown, end: unknown, textLength: number): boolean {
+  if (!Number.isInteger(start) || !Number.isInteger(end)) return false;
+  return (start as number) >= 0 && (end as number) > (start as number) && (end as number) <= textLength;
+}
+
+const validScore = (score: unknown): boolean => typeof score === 'number' && Number.isFinite(score);
+
+/** Forget every breaker state (tests use this to start clean). */
 export function resetCircuitBreaker(): void {
-  failureCountByUrl.clear();
+  breakers = new WeakMap();
+  unscanned = new WeakMap();
 }
 
 /**
@@ -176,10 +211,17 @@ export async function analyzeWithPresidio(
   request?: PresidioRequester,
 ): Promise<PresidioEntity[]> {
   if (!text || text.trim().length === 0) return [];
-  if (!request || !isHttpUrl(baseUrl)) return [];
+  if (!request) return [];
+  if (!isHttpUrl(baseUrl)) {
+    markUnscanned(request);
+    return [];
+  }
 
   // Circuit breaker: skip if too many consecutive failures for this URL
-  if (circuitOpen(baseUrl)) return [];
+  if (circuitOpen(request, baseUrl)) {
+    unscanned.set(request, (unscanned.get(request) || 0) + 1);
+    return [];
+  }
 
   const requestBody: PresidioAnalyzeRequest = {
     text,
@@ -197,29 +239,35 @@ export async function analyzeWithPresidio(
     });
 
     if (result.statusCode !== 200) {
-      recordFailure(baseUrl);
+      recordFailure(request, baseUrl);
       return [];
     }
 
     const entities = parseBody(result.body) as PresidioEntity[];
-    if (!Array.isArray(entities)) {
-      recordFailure(baseUrl);
+    const textLength = Array.from(text).length;
+    if (!Array.isArray(entities) || !entities.every((e) => validEntity(e, textLength))) {
+      recordFailure(request, baseUrl);
       return [];
     }
 
-    recordSuccess(baseUrl);
+    recordSuccess(request, baseUrl);
     return entities;
   } catch {
-    recordFailure(baseUrl);
+    recordFailure(request, baseUrl);
     return [];
   }
+}
+
+/** A table lookup that ignores inherited names such as constructor or __proto__. */
+function ownValue(table: Record<string, string>, key: string): string | undefined {
+  return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
 }
 
 /**
  * Get the redactor label for a Presidio entity type.
  */
 export function getRedactorLabel(presidioEntityType: string): string {
-  return PRESIDIO_TO_REDACTOR_LABEL[presidioEntityType] || presidioEntityType;
+  return ownValue(PRESIDIO_TO_REDACTOR_LABEL, presidioEntityType) || presidioEntityType;
 }
 
 /**
@@ -229,7 +277,7 @@ export function getRedactorCategory(presidioEntityType: string): string {
   // A built-in pattern with the same label decides, so both detection paths agree on the category.
   const label = getRedactorLabel(presidioEntityType);
   const builtIn = PII_PATTERNS.find((p) => p.label === label);
-  return builtIn?.category ?? PRESIDIO_TO_CATEGORY[presidioEntityType] ?? 'identity';
+  return builtIn?.category ?? ownValue(PRESIDIO_TO_CATEGORY, presidioEntityType) ?? 'identity';
 }
 
 /**
