@@ -50,11 +50,11 @@ After Restore, your workflow gets the real values back.
 
 | Environment | Status |
 |---|---|
-| n8n Cloud | Supported from 2.0.0 |
+| n8n Cloud | Supported from 4.0.0 |
 | Self-hosted n8n 1.x and 2.x | Supported |
-| n8n verified community nodes | Eligible from 2.0.0. Passes n8n's verification scanner with no findings |
+| n8n verified community nodes | Eligible from 4.0.0. Passes n8n's verification scanner with no findings |
 
-Version 2.0.0 uses no local disk. The vault lives in workflow storage and audit records go to the Report output. Upgrading from 1.x? Read [docs/MIGRATION.md](https://github.com/mjmirza/n8n-nodes-redactor/blob/master/docs/MIGRATION.md). The 1.x line stays installable with `npm install n8n-nodes-redactor@v1-legacy`.
+Version 4.0.0 uses no local disk. The vault lives in workflow storage and audit records go to the Report output. Upgrading from 1.x? Read [docs/MIGRATION.md](https://github.com/mjmirza/n8n-nodes-redactor/blob/master/docs/MIGRATION.md). The 1.x line stays installable with `npm install n8n-nodes-redactor@v1-legacy`.
 
 ## Operations
 

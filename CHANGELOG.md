@@ -6,7 +6,9 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 Planned: random scoped tokens, and numbers restored as numbers.
 
-## [2.0.0] - 2026-11-01
+## [4.0.0] - 2026-11-01
+
+The version skips to 4.0.0 because 2.0.0 and 3.0.0 to 3.0.2 were published in March 2026 and later withdrawn, and npm never reuses a version number.
 
 Runs on n8n Cloud and passes n8n's verification scanner with zero findings. 1.x stays available on the `v1-legacy` npm tag for self-hosted setups that need the disk vault. See [docs/MIGRATION.md](docs/MIGRATION.md).
 

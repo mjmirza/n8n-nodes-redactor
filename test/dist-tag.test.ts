@@ -11,6 +11,7 @@ describe('tools/npm-dist-tag.sh', () => {
     ['v1.0.0', 'v1-legacy'],
     ['v0.9.1', 'v1-legacy'],
     ['v2.0.0', 'latest'],
+    ['v4.0.0', 'latest'],
     ['v10.3.4', 'latest'],
   ])('%s publishes as %s', (tag, expected) => {
     expect(run(tag)).toEqual({ code: 0, out: expected });
