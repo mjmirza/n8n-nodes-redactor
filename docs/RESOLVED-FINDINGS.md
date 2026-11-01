@@ -117,3 +117,4 @@ Maintainer decisions that are out of scope for review are listed in [DESIGN-DECI
 | R12-2 | Medium | engine.ts:1488 | Prior-token filtering built a suffix array, so long inputs cost far more than in 7.0.0 | re-review 80-7 (codex-review-80) | 63d316a |
 | R13-1 | High | patterns.ts:639 | Embedded equals signs and quotes in unquoted values hid later credentials | re-review 81-1 (codex-review-81) and unquoted-value generation in test/connstring-property.test.ts | b931b3f |
 | R13-2 | Medium | engine.ts:1486 | Prior-token filtering did one check per position per token length | re-review 81-2 (codex-review-81) | b931b3f |
+| R14-1 | Medium | engine.ts:1547 | Growing sessions rebuilt the whole token matcher whenever a new token was added | re-review 82-1, 82-2 (codex-review-82) and the bracketed case in 80-session-growth | b6b8a3c |
