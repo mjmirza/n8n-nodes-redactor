@@ -118,6 +118,12 @@ Every version:
 
 7.0 is a major release because saved workflows of every node version can produce different output. Nothing needs to be reconfigured, but check downstream steps that read redacted values.
 
+- Connection-string detection consumes complete ODBC brace-enclosed values, including semicolons and doubled closing braces, so password suffixes cannot survive Redact or pass Verify.
+- Connection-string keys accept spaces and tabs around equals signs, and quoted passwords with doubled quotes are consumed whole.
+- JWT headers are detected after hyphen boundaries with a constant number of linear scans, so URL prefixes cannot hide encoded personal data from Redact or Verify.
+- Unsecured JWTs whose decoded header specifies alg none are detected with their trailing empty signature. Other algorithms still require a nonempty signature.
+- Session IDs are converted to strings once when read, so numeric expressions use the same identifier for storage, restoration and opaque report and audit references without value-bearing hash errors.
+- The final pseudonym restoration check compares objects independently of property order while preserving array order and value types, so integer-like pseudonym keys no longer falsely stop valid output.
 - Pseudonym repair reserves token-shaped text from every generated output before allocating repair tokens and checks restoration against the final vault, including after workflow storage is reloaded.
 - Connection-string detection consumes quoted values with embedded semicolons and doubled enclosing quotes, so no password suffix survives Redact or passes Verify.
 - JWT detection scans Base64URL segments and validates decoded JSON objects instead of requiring fixed prefixes, so legal whitespace before claims is covered by Redact and Verify.

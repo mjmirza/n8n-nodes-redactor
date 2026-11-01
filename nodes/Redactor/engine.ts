@@ -1641,6 +1641,18 @@ function restorablePair(
 
 const isPlainRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
 
+/** JSON structures compare by own keys and typed values. Array positions remain significant. */
+function sameStructure(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left)) {
+    return Array.isArray(right) && left.length === right.length && left.every((value, i) => sameStructure(value, right[i]));
+  }
+  if (!isPlainRecord(left) || !isPlainRecord(right)) return false;
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length && keys.every((key) =>
+    Object.prototype.hasOwnProperty.call(right, key) && sameStructure(left[key], right[key]));
+}
+
 /**
  * Pseudonyms carry no delimiters, and a mapping made for a later field can spell text next to a pseudonym in an
  * earlier one. After the run, every output string and key is restored with the final vault. One that would not
@@ -1667,7 +1679,7 @@ export function ensureRestorable(
   if (!reserved) return fixed;
   const finalRestore = makeRestorer(session.entries);
   fixed.forEach((out, i) => {
-    if (JSON.stringify(restoreWith(out, finalRestore, session.entries)) !== JSON.stringify(inputs[i])) {
+    if (!sameStructure(restoreWith(out, finalRestore, session.entries), inputs[i])) {
       throw new Error('Pseudonym repair could not preserve restoration, so nothing was output.');
     }
   });

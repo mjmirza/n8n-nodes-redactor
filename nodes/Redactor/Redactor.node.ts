@@ -1180,7 +1180,7 @@ export class Redactor implements INodeType {
     // Only Redact and Restore are bound to a session. Purge and Stats are not.
     let sessionId = '';
     if (operation === 'redact' || operation === 'restore') {
-      sessionId = runSetting(this, 'sessionId') as string;
+      sessionId = String(runSetting(this, 'sessionId') ?? '');
       if (!sessionId) {
         throw new NodeOperationError(this.getNode(), 'Session ID is required');
       }

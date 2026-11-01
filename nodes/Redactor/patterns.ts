@@ -402,7 +402,88 @@ function segmentObject(text: string, seg: JwtSegment): Record<string, unknown> |
   return seg.object;
 }
 
-/** Dot-joined Base64URL runs of three or more parts, where a header with alg is followed by a JSON object. */
+const jsonSpace = (byte: number): boolean => byte === 32 || byte === 9 || byte === 10 || byte === 13;
+
+/** Position before a quote's preceding backslash run, so reverse lexing visits each byte only once. */
+function beforeQuote(bytes: Buffer, at: number): number {
+  let before = at - 1;
+  while (bytes[before] === 92) before--;
+  return before;
+}
+
+const JSON_DEPTH: Record<number, number> = { 125: 1, 93: 1, 123: -1, 91: -1 };
+
+/** Locate the outer object ending a decoded run, ignoring braces inside JSON strings. Parsing validates it later. */
+function jsonObjectSuffix(bytes: Buffer): number {
+  let end = bytes.length - 1;
+  while (jsonSpace(bytes[end])) end--;
+  if (bytes[end] !== 125) return -1;
+  let depth = 0;
+  let quoted = false;
+  for (let at = end; at >= 0; at--) {
+    if (bytes[at] === 34) {
+      const before = beforeQuote(bytes, at);
+      if ((at - before) % 2 === 1) quoted = !quoted;
+      at = before + 1;
+      continue;
+    }
+    if (quoted) continue;
+    depth += JSON_DEPTH[bytes[at]] ?? 0;
+    if (depth === 0) return at;
+  }
+  return -1;
+}
+
+/** Only quartet boundaries map to whole decoded bytes. Leading JSON whitespace may precede the opening brace. */
+function headerBoundary(text: string, base: number, bytes: Buffer, objectStart: number): number {
+  let leading = objectStart;
+  while (leading > 0 && jsonSpace(bytes[leading - 1])) leading--;
+  for (let byte = Math.ceil(leading / 3) * 3; byte <= objectStart; byte += 3) {
+    const at = base + byte / 3 * 4;
+    if (text[at - 1] === '-') return at;
+  }
+  return -1;
+}
+
+/** Four alignments cover every hyphen boundary, with a constant number of linear decodes rather than one per suffix. */
+function prefixedJwtHeader(text: string, segment: JwtSegment): JwtSegment | null {
+  if (!text.slice(segment.start, segment.end).includes('-')) return null;
+  for (let phase = 0; phase < 4; phase++) {
+    const base = segment.start + phase;
+    const bytes = Buffer.from(text.slice(base, segment.end), 'base64url');
+    const objectStart = jsonObjectSuffix(bytes);
+    if (objectStart < 0) continue;
+    const start = headerBoundary(text, base, bytes, objectStart);
+    if (start < 0) continue;
+    const object = jwtObject(text.slice(start, segment.end));
+    if (typeof object?.alg === 'string') return { start, end: segment.end, object };
+  }
+  return null;
+}
+
+function jwtPairSpan(text: string, chain: JwtSegment[], end: number, unsecured: boolean): Span | null {
+  const first = chain[0];
+  const header = typeof segmentObject(text, first)?.alg === 'string' ? first : prefixedJwtHeader(text, first);
+  if (!header || !segmentObject(text, chain[1])) return null;
+  if (unsecured && header.object?.alg !== 'none') return null;
+  return { start: header.start, end };
+}
+
+const hasEmptySignature = (text: string, end: number): boolean =>
+  text[end] === '.' && !/[A-Za-z0-9_-]/.test(text[end + 1] ?? '');
+
+function jwtChainSpan(text: string, chain: JwtSegment[]): Span | null {
+  if (chain.length < 2) return null;
+  const last = chain[chain.length - 1];
+  if (chain.length === 3) {
+    const signed = jwtPairSpan(text, chain, last.end, false);
+    if (signed) return signed;
+  }
+  if (!hasEmptySignature(text, last.end)) return null;
+  return jwtPairSpan(text, chain.slice(-2), last.end + 1, true);
+}
+
+/** Dot-joined Base64URL runs with JSON headers and claims, including unsecured JWTs with an empty signature. */
 function scanJwts(text: string): Span[] {
   const spans: Span[] = [];
   const segments = /[A-Za-z0-9_-]+/g;
@@ -412,12 +493,11 @@ function scanJwts(text: string): Span[] {
     const previous = chain[chain.length - 1];
     if (previous && (m.index !== previous.end + 1 || text[previous.end] !== '.')) chain.length = 0;
     chain.push({ start: m.index, end: segments.lastIndex });
-    if (chain.length < 3) continue;
-    const header = segmentObject(text, chain[0]);
-    if (typeof header?.alg === 'string' && segmentObject(text, chain[1])) {
-      spans.push({ start: chain[0].start, end: segments.lastIndex });
+    const span = jwtChainSpan(text, chain);
+    if (span) {
+      spans.push(span);
       chain.length = 0;
-    } else chain.shift();
+    } else if (chain.length === 3) chain.shift();
   }
   return spans;
 }
@@ -480,18 +560,19 @@ function scanLdapDns(text: string): Span[] {
 
 const isLineBreak = (ch: string | undefined): boolean => ch === '\n' || ch === '\r';
 
-/** Quoted values honour doubled enclosing quotes; unquoted quotes are ordinary value characters. */
+/** Quoted and ODBC braced values honour doubled closing delimiters. */
 function connValueEnd(text: string, from: number, limit: number): number {
   let at = from;
   while (at < limit && /\s/.test(text[at])) at++;
-  if (text[at] === '"' || text[at] === "'") at = quotedValueEnd(text, at, limit);
+  if (/["'{]/.test(text[at] ?? '')) at = quotedValueEnd(text, at, limit);
   while (at < limit && text[at] !== ';') at++;
   return at;
 }
 
-/** The index after the closing quote of the value opened at at, reading a doubled quote as a literal one. */
+/** The index after the closing delimiter, reading a doubled closing delimiter as a literal one. */
 function quotedValueEnd(text: string, at: number, limit: number): number {
-  const quote = text[at++];
+  const opener = text[at++];
+  const quote = opener === '{' ? '}' : opener;
   while (at < limit) {
     if (text[at++] !== quote) continue;
     if (text[at] !== quote) return at;
@@ -525,18 +606,15 @@ function nextSemi(text: string, line: { end: number; semi: number }, from: numbe
   return line.semi;
 }
 
-/** The last segment of one line that holds Password= or Pwd= with a value: the ; before it, and its end. */
+/** The last segment with a trimmed Password or Pwd key and a value: the ; before it, and its end. */
 function lastPasswordSegment(text: string, lineStart: number, lineEnd: number): { semi: number; end: number } | null {
   let found: { semi: number; end: number } | null = null;
   let segStart = lineStart;
   while (segStart <= lineEnd) {
     const segEnd = connSegmentEnd(text, segStart, lineEnd);
     const segment = text.slice(segStart, segEnd);
-    let key = -1;
-    for (const k of segment.matchAll(/(?:Password|Pwd)=/gi)) {
-      if ((k.index ?? 0) + k[0].length < segment.length) key = k.index ?? 0;
-    }
-    if (key >= 0) found = { semi: segStart - 1, end: segEnd };
+    const key = /^[ \t]*(?:Password|Pwd)[ \t]*=/i.exec(segment);
+    if (key && key[0].length < segment.length) found = { semi: segStart - 1, end: segEnd };
     segStart = segEnd + 1;
   }
   return found;
@@ -548,7 +626,7 @@ function lastPasswordSegment(text: string, lineStart: number, lineEnd: number): 
  */
 function scanConnStrings(text: string): Span[] {
   const spans: Span[] = [];
-  const starts = /(?<![A-Za-z])(?:Server|Data Source|Host)=/gi;
+  const starts = /(?<![A-Za-z])(?:Server|Data Source|Host)[ \t]*=/gi;
   let line: { end: number; password: { semi: number; end: number } | null; semi: number } = { end: -1, password: null, semi: -2 };
   let m: RegExpExecArray | null;
   while ((m = starts.exec(text)) !== null) {
