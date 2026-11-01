@@ -162,9 +162,8 @@ describe('Restore safety', () => {
 
     // Must complete quickly (no infinite loop)
     expect(elapsed).toBeLessThan(1000);
-    // The split/join approach replaces in order, so [EMAIL_0] becomes
-    // "Contact [PHONE_1] for info", then [PHONE_1] becomes "555-1234"
-    expect(result.text).toBe('Message: Contact 555-1234 for info');
+    // Restore is one pass over the source, so an inserted original is never rescanned.
+    expect(result.text).toBe('Message: Contact [PHONE_1] for info');
   });
 });
 

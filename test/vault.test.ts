@@ -132,14 +132,20 @@ describe('WorkflowVault', () => {
     vault = new WorkflowVault(store);
   });
 
-  test('initialises its namespace in the store', () => {
-    expect(store.redactorVault).toEqual({});
+  test('initialises its namespace in the store on first write, never on read', () => {
+    expect(store.redactorVault).toBeUndefined();
+    vault.getOrCreateSession('init', 0);
+    vault.save('init');
+    expect(Object.keys(store.redactorVault as object)).toHaveLength(1);
   });
 
   test('recovers from a non-object namespace', () => {
     const bad: VaultStore = { redactorVault: 'garbage' };
-    new WorkflowVault(bad);
-    expect(bad.redactorVault).toEqual({});
+    const v = new WorkflowVault(bad);
+    expect(v.listSessions()).toEqual([]);
+    v.getOrCreateSession('fresh', 0);
+    v.save('fresh');
+    expect(Object.keys(bad.redactorVault as object)).toHaveLength(1);
   });
 
   test('save writes the session into the store', () => {
@@ -217,9 +223,10 @@ describe('WorkflowVault', () => {
   });
 
   test('handles corrupt stored entries gracefully', () => {
-    (store.redactorVault as Record<string, unknown>).broken = 'not an object';
+    store.redactorVault = { broken: 'not an object' };
     const v = new WorkflowVault(store);
     expect(Array.isArray(v.listSessions())).toBe(true);
+    v.cleanup();
     expect((store.redactorVault as Record<string, unknown>).broken).toBeUndefined();
   });
 

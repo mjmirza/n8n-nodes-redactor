@@ -5,6 +5,7 @@
  */
 
 import { RedactionMode, CustomPattern, AllowDenyEntry, FieldRule } from './types';
+import { checkRegex } from './regexSafety';
 
 export interface TenantProfile {
   profileId?: string;
@@ -60,6 +61,8 @@ function entries(value: unknown, name: string, defaultType: AllowDenyEntry['type
     if (!isObject(e) || typeof e.value !== 'string') fail(`${name}[${i}].value must be a string`);
     const type = e.type ?? defaultType;
     if (typeof type !== 'string' || !MATCH_TYPES.includes(type)) fail(`${name}[${i}].type must be one of ${MATCH_TYPES.join(', ')}`);
+    const problem = type === 'regex' ? checkRegex(e.value) : null;
+    if (problem) fail(`${name}[${i}].value regex ${problem}`);
     return { value: e.value, type: type as AllowDenyEntry['type'] };
   });
 }
@@ -94,11 +97,8 @@ function parseCustomPatterns(value: unknown): CustomPattern[] {
     if (!isObject(c) || typeof c.label !== 'string' || typeof c.regex !== 'string') {
       fail(`customPatterns[${i}] needs string label and regex`);
     }
-    try {
-      new RegExp(c.regex);
-    } catch {
-      fail(`customPatterns[${i}].regex is not a valid regular expression`);
-    }
+    const problem = checkRegex(c.regex);
+    if (problem) fail(`customPatterns[${i}].regex ${problem}`);
     return { label: c.label, regex: c.regex, category: typeof c.category === 'string' ? c.category : undefined };
   });
 }

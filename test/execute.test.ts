@@ -25,7 +25,8 @@ function run(
 const mem = { vaultStorage: 'memory' };
 
 beforeEach(() => {
-  const v = createVault('memory');
+  // A harness without getWorkflow() runs in the unsaved-workflow memory namespace.
+  const v = createVault('memory', undefined, undefined, 'wf:unsaved');
   for (const s of v.listSessions()) v.deleteSession(s.sessionId);
 });
 

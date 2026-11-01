@@ -26,78 +26,99 @@ function isExpired(createdAt: string, ttl: number, now = Date.now()): boolean {
 
 const memoryStore: Map<string, VaultSession> = new Map();
 const reverseIndex: Map<string, Map<string, VaultEntry>> = new Map();
-const MAX_SESSIONS = 1000; // Prevent unbounded memory growth
+const MAX_SESSIONS = 1000; // Per workflow, so one workflow cannot evict another
+const MAX_TOTAL_SESSIONS = 20000; // Hard memory ceiling across all workflows
 
+/** Refuses a token that already maps to a different original. */
+function assertNoConflict(session: VaultSession, entry: VaultEntry): void {
+  const existing = session.entries[entry.token];
+  if (existing && existing.original !== entry.original) {
+    throw new Error(`Vault token "${entry.token}" already maps to a different value in session "${session.sessionId}"`);
+  }
+}
+
+/** Process-wide memory store, scoped per workflow so sessions never cross workflows. */
 export class MemoryVault implements IVault {
-  getOrCreateSession(sessionId: string, ttl: number): VaultSession {
-    // Auto-cleanup expired sessions on every create to prevent memory leak
-    this.cleanup();
-    // Enforce max session limit
-    if (memoryStore.size >= MAX_SESSIONS && !memoryStore.has(sessionId)) {
-      // Evict oldest session
+  constructor(private namespace = '') {}
+
+  private key(sessionId: string): string {
+    return `${this.namespace}\u0000${sessionId}`;
+  }
+
+  private ownKeys(): string[] {
+    const prefix = `${this.namespace}\u0000`;
+    return Array.from(memoryStore.keys()).filter((k) => k.startsWith(prefix));
+  }
+
+  private drop(key: string): void {
+    memoryStore.delete(key);
+    reverseIndex.delete(key);
+  }
+
+  private evictIfFull(key: string): void {
+    if (memoryStore.has(key)) return;
+    const own = this.ownKeys();
+    if (own.length >= MAX_SESSIONS) this.drop(own[0]);
+    if (memoryStore.size >= MAX_TOTAL_SESSIONS) {
       const oldest = memoryStore.keys().next().value;
-      if (oldest !== undefined) {
-        memoryStore.delete(oldest);
-        reverseIndex.delete(oldest);
-      }
+      if (oldest !== undefined) this.drop(oldest);
     }
-    if (!memoryStore.has(sessionId)) {
-      memoryStore.set(sessionId, {
-        sessionId,
-        entries: {},
-        createdAt: new Date().toISOString(),
-        ttl,
-      });
+  }
+
+  getOrCreateSession(sessionId: string, ttl: number): VaultSession {
+    this.cleanup();
+    const key = this.key(sessionId);
+    this.evictIfFull(key);
+    if (!memoryStore.has(key)) {
+      memoryStore.set(key, { sessionId, entries: {}, createdAt: new Date().toISOString(), ttl });
     }
-    return memoryStore.get(sessionId)!;
+    return memoryStore.get(key)!;
   }
 
   getSession(sessionId: string): VaultSession | null {
-    const session = memoryStore.get(sessionId);
+    const key = this.key(sessionId);
+    const session = memoryStore.get(key);
     if (!session) return null;
     if (isExpired(session.createdAt, session.ttl)) {
-      memoryStore.delete(sessionId);
-      reverseIndex.delete(sessionId);
+      this.drop(key);
       return null;
     }
     return session;
   }
 
   addEntry(sessionId: string, entry: VaultEntry): void {
-    const session = memoryStore.get(sessionId);
-    if (session) {
-      session.entries[entry.token] = entry;
-      // Maintain reverse lookup index for O(1) dedup
-      if (!reverseIndex.has(sessionId)) reverseIndex.set(sessionId, new Map());
-      reverseIndex.get(sessionId)!.set(entry.original, entry);
-    }
+    const key = this.key(sessionId);
+    const session = memoryStore.get(key);
+    if (!session) return;
+    assertNoConflict(session, entry);
+    session.entries[entry.token] = entry;
+    if (!reverseIndex.has(key)) reverseIndex.set(key, new Map());
+    reverseIndex.get(key)!.set(entry.original, entry);
   }
 
   findByOriginal(sessionId: string, original: string): VaultEntry | undefined {
-    // O(1) lookup via reverse index instead of O(n) scan
-    const index = reverseIndex.get(sessionId);
-    if (index) {
-      const entry = index.get(original);
-      if (entry) return entry;
-    }
-    // Fallback to linear scan (for sessions loaded without index)
-    const session = memoryStore.get(sessionId);
+    const key = this.key(sessionId);
+    const entry = reverseIndex.get(key)?.get(original);
+    if (entry) return entry;
+    const session = memoryStore.get(key);
     if (!session) return undefined;
     return Object.values(session.entries).find((e) => e.original === original);
   }
 
   deleteSession(sessionId: string): void {
-    memoryStore.delete(sessionId);
-    reverseIndex.delete(sessionId);
+    this.drop(this.key(sessionId));
   }
 
   listSessions(): Array<{ sessionId: string; entryCount: number; createdAt: string; ttl: number }> {
-    return Array.from(memoryStore.values()).map((s) => ({
-      sessionId: s.sessionId,
-      entryCount: Object.keys(s.entries).length,
-      createdAt: s.createdAt,
-      ttl: s.ttl,
-    }));
+    return this.ownKeys()
+      .map((k) => memoryStore.get(k)!)
+      .filter((s) => !isExpired(s.createdAt, s.ttl))
+      .map((s) => ({
+        sessionId: s.sessionId,
+        entryCount: Object.keys(s.entries).length,
+        createdAt: s.createdAt,
+        ttl: s.ttl,
+      }));
   }
 
   // Required by IVault (called through the interface), so it is not dead code.
@@ -109,10 +130,9 @@ export class MemoryVault implements IVault {
   cleanup(): number {
     let removed = 0;
     const now = Date.now();
-    for (const [id, session] of memoryStore.entries()) {
+    for (const [key, session] of memoryStore.entries()) {
       if (isExpired(session.createdAt, session.ttl, now)) {
-        memoryStore.delete(id);
-        reverseIndex.delete(id);
+        this.drop(key);
         removed++;
       }
     }
@@ -140,18 +160,23 @@ const MAX_STORED_SESSIONS = 500;
 export class WorkflowVault implements IVault {
   private cache: Map<string, VaultSession> = new Map();
 
+  // Reads never write the store, so read-only runs cannot persist a stale snapshot.
   constructor(
     private store: VaultStore,
     private passphrase = '',
-  ) {
-    const existing = store[STORE_KEY];
-    if (!existing || typeof existing !== 'object' || Array.isArray(existing)) {
-      store[STORE_KEY] = {};
-    }
-    this.cleanup();
-  }
+  ) {}
 
   private get sessions(): Record<string, StoredSession> {
+    const existing = this.store[STORE_KEY];
+    if (existing && typeof existing === 'object' && !Array.isArray(existing)) {
+      return existing as Record<string, StoredSession>;
+    }
+    return {};
+  }
+
+  private writableSessions(): Record<string, StoredSession> {
+    const existing = this.store[STORE_KEY];
+    if (!existing || typeof existing !== 'object' || Array.isArray(existing)) this.store[STORE_KEY] = {};
     return this.store[STORE_KEY] as Record<string, StoredSession>;
   }
 
@@ -167,27 +192,24 @@ export class WorkflowVault implements IVault {
         return JSON.parse(decryptVaultData(Buffer.from(stored.cipher, 'base64'), this.passphrase)) as VaultSession;
       }
     } catch {
-      // Wrong passphrase or tampered data. Treated as not found.
+      // Wrong passphrase or tampered data. Callers decide whether that is fatal.
     }
     return null;
   }
 
+  /** A live record exists for this ID but this passphrase cannot open it. */
+  private isUnreadable(sessionId: string): boolean {
+    const stored = this.sessions[this.key(sessionId)];
+    if (!stored || typeof stored !== 'object' || isExpired(stored.createdAt, stored.ttl)) return false;
+    const session = this.decode(stored);
+    return !session || session.sessionId !== sessionId;
+  }
+
   private load(sessionId: string): VaultSession | null {
     const cached = this.cache.get(sessionId);
-    if (cached) {
-      if (isExpired(cached.createdAt, cached.ttl)) {
-        this.deleteSession(sessionId);
-        return null;
-      }
-      return cached;
-    }
-    const k = this.key(sessionId);
-    const stored = this.sessions[k];
-    if (!stored) return null;
-    if (isExpired(stored.createdAt, stored.ttl)) {
-      delete this.sessions[k];
-      return null;
-    }
+    if (cached) return isExpired(cached.createdAt, cached.ttl) ? null : cached;
+    const stored = this.sessions[this.key(sessionId)];
+    if (!stored || isExpired(stored.createdAt, stored.ttl)) return null;
     const session = this.decode(stored);
     if (!session || session.sessionId !== sessionId) return null;
     this.cache.set(sessionId, session);
@@ -198,6 +220,11 @@ export class WorkflowVault implements IVault {
     this.cleanup();
     const existing = this.load(sessionId);
     if (existing) return existing;
+    if (this.isUnreadable(sessionId)) {
+      throw new Error(
+        `Session "${sessionId}" exists but cannot be decrypted with this passphrase. Use the passphrase it was written with, or a different Session ID.`,
+      );
+    }
     const session: VaultSession = { sessionId, entries: {}, createdAt: new Date().toISOString(), ttl };
     this.cache.set(sessionId, session);
     return session;
@@ -209,7 +236,9 @@ export class WorkflowVault implements IVault {
 
   addEntry(sessionId: string, entry: VaultEntry): void {
     const session = this.cache.get(sessionId);
-    if (session) session.entries[entry.token] = entry;
+    if (!session) return;
+    assertNoConflict(session, entry);
+    session.entries[entry.token] = entry;
   }
 
   findByOriginal(sessionId: string, original: string): VaultEntry | undefined {
@@ -220,12 +249,14 @@ export class WorkflowVault implements IVault {
 
   deleteSession(sessionId: string): void {
     this.cache.delete(sessionId);
-    delete this.sessions[this.key(sessionId)];
+    const k = this.key(sessionId);
+    if (k in this.sessions) delete this.writableSessions()[k];
   }
 
   listSessions(): Array<{ sessionId: string; entryCount: number; createdAt: string; ttl: number }> {
     const out: Array<{ sessionId: string; entryCount: number; createdAt: string; ttl: number }> = [];
     for (const stored of Object.values(this.sessions)) {
+      if (!stored || typeof stored !== 'object' || isExpired(stored.createdAt, stored.ttl)) continue;
       const session = this.decode(stored);
       if (!session) continue; // Encrypted with another passphrase, or corrupt
       out.push({
@@ -241,32 +272,41 @@ export class WorkflowVault implements IVault {
   save(sessionId: string): void {
     const session = this.cache.get(sessionId);
     if (!session) return;
+    if (this.isUnreadable(sessionId)) {
+      throw new Error(`Refusing to overwrite session "${sessionId}": it cannot be decrypted with this passphrase.`);
+    }
+    const sessions = this.writableSessions();
     const k = this.key(sessionId);
-    if (!this.sessions[k]) this.evictIfFull();
+    if (!sessions[k]) this.evictIfFull();
     const stored: StoredSession = { createdAt: session.createdAt, ttl: session.ttl };
     if (this.passphrase) {
       stored.cipher = encryptVaultData(JSON.stringify(session), this.passphrase).toString('base64');
     } else {
       stored.session = session;
     }
-    this.sessions[k] = stored;
+    sessions[k] = stored;
   }
 
   private evictIfFull(): void {
-    const keys = Object.keys(this.sessions);
+    const sessions = this.writableSessions();
+    const keys = Object.keys(sessions);
     if (keys.length < MAX_STORED_SESSIONS) return;
     keys
-      .sort((a, b) => new Date(this.sessions[a].createdAt).getTime() - new Date(this.sessions[b].createdAt).getTime())
+      .sort((a, b) => new Date(sessions[a].createdAt).getTime() - new Date(sessions[b].createdAt).getTime())
       .slice(0, keys.length - MAX_STORED_SESSIONS + 1)
-      .forEach((k) => delete this.sessions[k]);
+      .forEach((k) => delete sessions[k]);
   }
 
   cleanup(): number {
     let removed = 0;
     const now = Date.now();
-    for (const [k, stored] of Object.entries(this.sessions)) {
-      if (!stored || typeof stored !== 'object' || isExpired(stored.createdAt, stored.ttl, now)) {
-        delete this.sessions[k];
+    const stale = Object.entries(this.sessions)
+      .filter(([, stored]) => !stored || typeof stored !== 'object' || isExpired(stored.createdAt, stored.ttl, now))
+      .map(([k]) => k);
+    if (stale.length) {
+      const sessions = this.writableSessions();
+      for (const k of stale) {
+        delete sessions[k];
         removed++;
       }
     }
@@ -277,10 +317,10 @@ export class WorkflowVault implements IVault {
   }
 }
 
-/** 'workflow' and the 1.x value 'file' persist in the store; anything else is in memory. */
-export function createVault(storage: string, store?: VaultStore, passphrase?: string): IVault {
+/** 'workflow' and the 1.x value 'file' persist in the store; memory is scoped by namespace. */
+export function createVault(storage: string, store?: VaultStore, passphrase?: string, namespace = ''): IVault {
   if ((storage === 'workflow' || storage === 'file') && store) {
     return new WorkflowVault(store, passphrase || '');
   }
-  return new MemoryVault();
+  return new MemoryVault(namespace);
 }
