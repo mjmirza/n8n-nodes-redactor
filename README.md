@@ -71,8 +71,12 @@ Version 4.0.0 uses no local disk. The vault lives in workflow storage and audit 
 The recommended production chain looks like this.
 
 ```
-Data source > Detect > Redact > LLM > Verify > Restore > Output > Purge
+Data source > Detect > Redact > LLM > Restore > Output > Purge
+                          |
+                          +-> Verify > If (status is FAIL) > Stop and Error
 ```
+
+Verify returns one report, not the items it checked, so run it on a branch next to the main chain. Connect it to the Redact output to confirm nothing leaks to the LLM, and stop the run on `FAIL`. Verify also fails when an item carries a binary attachment, because attachments are not scanned. Redact removes attachments by default. Set Binary Attachments to Keep Unscanned only when the files hold no personal data.
 
 ## Redaction modes
 

@@ -259,7 +259,8 @@ describe('re-review 61-11 and 12: semantic context in arrays and booleans', () =
 describe('re-review 61-13: binary attachments survive', () => {
   const binary = { file: { data: 'aGVsbG8=', mimeType: 'text/plain', fileName: 'note.txt' } };
   it.each(['redact', 'detect'])('%s keeps item.binary', async (operation) => {
-    const [out] = await run({ operation, sessionId: 'bin' }, [{ note: 'alice@example.com' }], { binary: [binary] });
+    const params = { operation, sessionId: 'bin', binaryAttachments: 'keep' };
+    const [out] = await run(params, [{ note: 'alice@example.com' }], { binary: [binary] });
     expect(out[0].binary).toEqual(binary);
   });
 

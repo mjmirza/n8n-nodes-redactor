@@ -139,6 +139,10 @@ export interface RedactionContext {
   keyOrigins?: WeakMap<object, Map<string, string>>;
   // Every string, key and number of the input; a pseudonym never equals text already present.
   inputText?: string;
+  /** Search index over inputText, built on first use and dropped with the context. */
+  inputIndex?: { sa?: Int32Array };
+  /** The value being redacted is a JSON boolean, so its mapping restores as one. */
+  boolean?: boolean;
   // Positions of replacements per output container and key, so Presidio never re-redacts them.
   lockedSpans?: WeakMap<object, Map<string, Array<[number, number]>>>;
   // Replacement positions inside output keys, per container and key, for Presidio.

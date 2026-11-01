@@ -21,6 +21,7 @@ import {
 } from './context';
 import { detectNamesInText, NAME_CONTEXT_WORDS } from './names';
 import { generatePseudonym } from './pseudonymize';
+import { countHits } from './audit';
 import {
   analyzeWithPresidio,
   getRedactorLabel,
@@ -128,6 +129,7 @@ function storeReversible(
     patternLabel: pattern.label,
     category: ('category' in pattern ? pattern.category : 'identity') as PiiCategory,
     createdAt: new Date().toISOString(),
+    ...(ctx.boolean ? { boolean: true } : {}),
   });
   return token;
 }
@@ -201,9 +203,9 @@ export function collectInputText(value: unknown): string {
   return parts.join('\u0000');
 }
 
-/** A same-original mapping is reused only when it has the same type, numeric or text. */
+/** A same-original mapping is reused only when it has the same type: number, boolean or text. */
 function reusable(taken: VaultEntry | undefined, original: string, ctx: RedactionContext): boolean {
-  return !!taken && taken.original === original && !!taken.numeric === !!ctx.numeric;
+  return !!taken && taken.original === original && !!taken.numeric === !!ctx.numeric && !!taken.boolean === !!ctx.boolean;
 }
 
 /** Retries deterministically until the pseudonym is free in this session and absent from the input. */
@@ -212,23 +214,24 @@ function uniquePseudonym(vault: IVault, sessionId: string, original: string, lab
   for (let attempt = 0; attempt < 32; attempt++) {
     const seed = attempt === 0 ? original : `${original}\u0000${attempt}`;
     const candidate = generatePseudonym(sessionId, seed, label);
-    if (candidate === original || inputContains(ctx.inputText, candidate)) continue;
+    if (candidate === original || inputContains(ctx, candidate)) continue;
     const taken = entries[candidate];
     if (!taken || reusable(taken, original, ctx)) return candidate;
   }
   return freshToken(label, vault, sessionId, ctx.reservedTokens);
 }
 
-// Short input is searched directly. Longer input gets a suffix array once, so each candidate costs O(length log n).
+// Short input is searched directly. Longer input gets a suffix array once per run, kept on the run's context and
+// released with it, so each candidate costs O(length log n) and no copy of the input outlives the run.
 const DIRECT_SEARCH_MAX = 4096;
-let inputIndex: { text: string; sa: Int32Array } | undefined;
 
 /** Whether text occurs anywhere in the run's input. */
-function inputContains(input: string | undefined, text: string): boolean {
+function inputContains(ctx: RedactionContext, text: string): boolean {
+  const input = ctx.inputText;
   if (!input) return false;
   if (input.length <= DIRECT_SEARCH_MAX) return input.includes(text);
-  if (inputIndex?.text !== input) inputIndex = { text: input, sa: suffixArray(input) };
-  const { sa } = inputIndex;
+  const holder = ctx.inputIndex ?? (ctx.inputIndex = {});
+  const sa = holder.sa ?? (holder.sa = suffixArray(input));
   let lo = 0;
   let hi = sa.length;
   while (lo < hi) {
@@ -950,13 +953,11 @@ function redactBoolean(
   siblingKeys?: string[],
 ): unknown {
   const text = String(value);
-  // A boolean never shares a mapping with the string "true" or "false".
-  const boolCtx: RedactionContext = { ...ctx, dedup: false };
+  // A boolean gets a mapping of its own, typed at creation, and never shares one with the string "true" or "false".
+  const boolCtx: RedactionContext = { ...ctx, dedup: false, boolean: true };
   const out = redactSemantic(text, boolCtx, vault, sessionId, hits, itemIndex, path, display, siblingKeys);
   if (out === null || out === text) return value;
   ctx.lastLocked = boolCtx.lastLocked;
-  const entry = vault.getSession(sessionId)?.entries[out];
-  if ((ctx.mode === 'token' || ctx.mode === 'pseudonymize') && entry?.original === text) entry.boolean = true;
   return out;
 }
 
@@ -1518,6 +1519,47 @@ function restoreWith(value: unknown, restore: (text: string) => string, entries:
   return value;
 }
 
+/** One bracketed token for a whole original string, so no text around it can be read as another mapping. */
+function wholeToken(original: string, vault: IVault, sessionId: string, ctx: RedactionContext): string {
+  const token = freshToken('TEXT', vault, sessionId, ctx.reservedTokens);
+  addMapping(vault, sessionId, { token, original, patternLabel: 'TEXT', category: 'other', createdAt: new Date().toISOString() });
+  return token;
+}
+
+/** Pairs an input value with its redacted output and replaces any string or key that would not restore exactly. */
+function restorablePair(input: unknown, output: unknown, check: (input: string, output: string) => string): unknown {
+  if (typeof input === 'string' && typeof output === 'string') return check(input, output);
+  if (Array.isArray(input) && Array.isArray(output)) return output.map((o, i) => restorablePair(input[i], o, check));
+  if (!isPlainRecord(input) || !isPlainRecord(output)) return output;
+  const inEntries = Object.entries(input);
+  const outEntries = Object.entries(output);
+  if (inEntries.length !== outEntries.length) return output;
+  const fixed: Record<string, unknown> = {};
+  outEntries.forEach(([key, value], i) => {
+    const [inKey, inValue] = inEntries[i];
+    setOwn(fixed, check(inKey, key), restorablePair(inValue, value, check));
+  });
+  return fixed;
+}
+
+const isPlainRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * Pseudonyms carry no delimiters, and a mapping made for a later field can spell text next to a pseudonym in an
+ * earlier one. After the run, every output string and key is restored with the final vault. One that would not
+ * restore to its input is replaced whole by a bracketed token, so Restore always returns the exact input.
+ */
+export function ensureRestorable(inputs: unknown[], outputs: unknown[], ctx: RedactionContext, vault: IVault, sessionId: string): unknown[] {
+  const session = vault.getSession(sessionId);
+  if (!session || ctx.mode !== 'pseudonymize') return outputs;
+  const restore = makeRestorer(session.entries);
+  const check = (input: string, output: string): string => {
+    if (input === output) return output;
+    return restoreString(output, restore, session.entries) === input ? output : wholeToken(input, vault, sessionId, ctx);
+  };
+  return outputs.map((out, i) => restorablePair(inputs[i], out, check));
+}
+
 /**
  * Restore redacted tokens back to original values, in values and in keys.
  */
@@ -1842,13 +1884,8 @@ export async function enhanceWithPresidio(
  * SECURITY: Original PII values are NEVER included in the report.
  */
 export function buildReport(sessionId: string, hits: RedactionHit[]): RedactionReport {
-  const hitsByCategory: Record<string, number> = {};
-  const hitsByPattern: Record<string, number> = {};
-
-  for (const hit of hits) {
-    hitsByCategory[hit.category] = (hitsByCategory[hit.category] || 0) + 1;
-    hitsByPattern[hit.patternLabel] = (hitsByPattern[hit.patternLabel] || 0) + 1;
-  }
+  const hitsByCategory = countHits(hits, 'category');
+  const hitsByPattern = countHits(hits, 'patternLabel');
 
   return {
     sessionId,

@@ -14,7 +14,9 @@ import {
 
 import { getPatternOptions } from './patterns';
 import { createVault } from './vault';
-import { redactValue, restoreValue, buildReport, enhanceWithPresidio, collectTokenLike, collectInputText, priorTokenMatcher } from './engine';
+import {
+  redactValue, restoreValue, buildReport, enhanceWithPresidio, collectTokenLike, collectInputText, priorTokenMatcher, ensureRestorable,
+} from './engine';
 import {
   CustomPattern,
   RedactionContext,
@@ -77,6 +79,14 @@ const RECOMMENDED_PATTERNS = [
   // Biometric
   'uuid', 'imei', 'iccid',
 ];
+
+function verifyMessage(leaks: number, attachments: number): string {
+  if (leaks === 0 && attachments === 0) return 'No PII detected in values. Data appears properly redacted.';
+  const parts: string[] = [];
+  if (leaks > 0) parts.push(`Found ${leaks} potential PII leak(s). Values contain detectable sensitive data.`);
+  if (attachments > 0) parts.push(`${attachments} binary attachment(s) were not scanned and may contain PII.`);
+  return parts.join(' ');
+}
 
 /** Keeps the item's binary attachments on the output item. */
 function withBinary(out: INodeExecutionData, source: INodeExecutionData): INodeExecutionData {
@@ -625,6 +635,30 @@ export class Redactor implements INodeType {
         default: false,
         description: 'Whether to scan input for prompt injection attempts (jailbreaks, instruction overrides, delimiter escapes, encoded payloads) before it reaches an LLM. Detected injections are flagged in the output.',
       },
+      {
+        displayName: 'Binary Attachments',
+        name: 'binaryAttachments',
+        type: 'options',
+        displayOptions: {
+          show: {
+            operation: ['redact'],
+          },
+        },
+        options: [
+          {
+            name: 'Remove',
+            value: 'remove',
+            description: 'Drop attachments from the output, so no unscanned data reaches the next node',
+          },
+          {
+            name: 'Keep Unscanned',
+            value: 'keep',
+            description: 'Pass attachments through unchanged. Their content is not scanned or redacted.',
+          },
+        ],
+        default: 'remove',
+        description: 'What to do with binary attachments. The node redacts JSON only, so a file can still hold personal data.',
+      },
 
       // ═══════════════════════════════════════
       // AUDIT LOG
@@ -992,18 +1026,18 @@ export class Redactor implements INodeType {
         return [returnData];
       }
 
-      // Verify
-      const passed = allHits.length === 0;
+      // Verify. Attachments cannot be scanned, so an item that carries one cannot pass.
+      const unscannedAttachments = items.reduce((n, item) => n + Object.keys(item.binary ?? {}).length, 0);
+      const passed = allHits.length === 0 && unscannedAttachments === 0;
       const verifyReport = buildReport(tempSessionId, allHits);
       return [[{
         json: {
           verified: passed,
           status: passed ? 'PASS' : 'FAIL',
           leaksFound: allHits.length,
+          unscannedAttachments,
           itemsScanned: items.length,
-          message: passed
-            ? 'No PII detected in values. Data appears properly redacted.'
-            : `Found ${allHits.length} potential PII leak(s). Values contain detectable sensitive data.`,
+          message: verifyMessage(allHits.length, unscannedAttachments),
           hitsByCategory: verifyReport.hitsByCategory,
           hitsByPattern: verifyReport.hitsByPattern,
           leaks: allHits.map((h) => ({
@@ -1141,17 +1175,15 @@ export class Redactor implements INodeType {
         });
         return { statusCode: response.statusCode as number, body: response.body as unknown };
       };
-      let enablePresidio = false;
+      const binaryAttachments = this.getNodeParameter('binaryAttachments', 0, 'remove') as string;
+      // Absent settings fall back to their defaults. An expression that fails stops the run, so a broken setting
+      // never turns NLP detection off silently.
+      const enablePresidio = this.getNodeParameter('enablePresidio', 0, false) as boolean;
       let presidioUrl = '';
       let presidioLanguage = 'en';
-      try {
-        enablePresidio = this.getNodeParameter('enablePresidio', 0, false) as boolean;
-        if (enablePresidio) {
-          presidioUrl = this.getNodeParameter('presidioUrl', 0, 'http://localhost:5002') as string;
-          presidioLanguage = this.getNodeParameter('presidioLanguage', 0, 'en') as string;
-        }
-      } catch {
-        // Presidio parameters not available
+      if (enablePresidio) {
+        presidioUrl = this.getNodeParameter('presidioUrl', 0, 'http://localhost:5002') as string;
+        presidioLanguage = this.getNodeParameter('presidioLanguage', 0, 'en') as string;
       }
 
       // Parse allow list
@@ -1235,6 +1267,7 @@ export class Redactor implements INodeType {
         reservedTokens: collectTokenLike(items.map((it) => it.json)),
         keyOrigins: new WeakMap(),
         inputText: collectInputText(items.map((it) => it.json)),
+        inputIndex: {},
         lockedSpans: new WeakMap(),
         keyLocks: new WeakMap(),
         priorTokens: priorTokenMatcher(vault.getSession(sessionId)?.entries),
@@ -1271,9 +1304,16 @@ export class Redactor implements INodeType {
           }
         }
 
-        returnData.push(withBinary({ json: redacted, pairedItem: { item: i } }, items[i]));
+        const redactedItem: INodeExecutionData = { json: redacted, pairedItem: { item: i } };
+        returnData.push(binaryAttachments === 'keep' ? withBinary(redactedItem, items[i]) : redactedItem);
         for (const hit of hits) allHits.push(hit);
       }
+
+      // A mapping made for a later item can spell text next to an earlier pseudonym, so every output is checked last.
+      const restorable = ensureRestorable(items.map((it) => it.json), returnData.map((r) => r.json), ctx, vault, sessionId);
+      restorable.forEach((json, i) => {
+        returnData[i].json = json as IDataObject;
+      });
 
       // An absent setting means off. A setting whose expression fails stops the run before anything is saved.
       const promptInjection = this.getNodeParameter('promptInjection', 0, false) as boolean;

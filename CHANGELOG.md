@@ -20,7 +20,13 @@ Fixes every finding from a ninth adversarial review, run against 6.1.0. Each one
 - **Formats were missed or cut short.** Five-word names, decomposed accents, names with `van`, `de` and similar particles, labelled names with apostrophes, hyphens or inner capitals, a valid card after a stray digit, Unicode email local parts, IBANs grouped with nonbreaking spaces, IPv6 after a colon label, the unspecified address `::`, `AB` blood types, connection-string passwords past 512 characters and LDAP DNs past 33 attributes are now found whole.
 
 ### Fixed
-- Redact, Restore and Detect dropped binary attachments. Output items now keep `item.binary`.
+- Restore and Detect dropped binary attachments. They now keep `item.binary`. Redact gains a Binary Attachments option: Remove, the default, drops them because their content is not scanned, and Keep Unscanned passes them through. Verify fails when an item carries an attachment, and reports `unscannedAttachments`.
+- In Pseudonymize mode, a mapping made for a later field could spell text next to a pseudonym in an earlier field, so Restore returned the other field's value. Every output string and key is now restored before the run ends, and one that would not restore exactly is replaced whole by a bracketed `[TEXT_n]` token.
+- A Presidio setting whose expression failed silently turned Presidio off. The error now stops the run.
+- A boolean and the string `true` could share one pseudonym, so Restore returned both with one type. Each boolean gets its own mapping.
+- The run kept a copy of the input in memory after it finished, for the pseudonym collision search. The search index now lives only as long as the run.
+- Report and audit counters for an entity type named like a built-in object property, such as `constructor`, were malformed. They are now plain counts.
+- The README chain placed Verify between the LLM and Restore, where its report replaced the model reply. Verify now runs on a branch.
 - A Prompt Injection setting whose expression failed silently turned scanning off. The error now stops the run before the vault is saved.
 - Presidio was asked for scores of 0.4 and up even when the threshold was lower. The configured threshold is sent.
 - Pseudonym generation, URL redaction next to deny-list matches, and Presidio key traversal took quadratic time. Each is now linear.

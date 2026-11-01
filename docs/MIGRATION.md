@@ -124,8 +124,9 @@ Every version:
 - In Pseudonymize mode, a value whose pseudonym would run together with the text beside it gets a bracketed token such as `[SALARY_3]` instead, so Restore returns the exact original.
 - Overlapping Presidio entities are covered as a whole. Touching parts of the same type become one replacement, and parts of different types keep their own.
 - Presidio is asked for scores from the configured confidence threshold, where 6.x always asked for 0.4 and up. Without a threshold it still asks for 0.4.
-- Output items keep their binary attachments.
-- A Prompt Injection setting whose expression fails stops the run with that error.
+- Restore and Detect keep binary attachments. Redact removes them unless Binary Attachments is set to Keep Unscanned, because the node does not scan file content. Verify reports `FAIL` and counts `unscannedAttachments` when an item carries an attachment.
+- In Pseudonymize mode, a string or key that would not restore exactly, because a mapping made for another field spells text next to it, is replaced whole by a `[TEXT_n]` token.
+- A Prompt Injection or Presidio setting whose expression fails stops the run with that error.
 - A tenant profile with a `NaN` confidence threshold is refused.
 - A built-in pattern match that overlaps an earlier replacement no longer causes a rescan from the next character. Its free parts are still redacted.
 

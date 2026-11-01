@@ -8,6 +8,16 @@ import * as crypto from 'crypto';
 import { RedactionHit, RedactionMode } from './types';
 import { ClassificationLabel } from './classification';
 
+/**
+ * Counts hits by a field. Counting in a Map and building own properties keeps labels such as constructor or
+ * __proto__ as ordinary counters.
+ */
+export function countHits(hits: RedactionHit[], field: 'category' | 'patternLabel'): Record<string, number> {
+  const counts = new Map<string, number>();
+  for (const hit of hits) counts.set(hit[field], (counts.get(hit[field]) ?? 0) + 1);
+  return Object.fromEntries(counts);
+}
+
 export interface AuditLogEntry {
   version: string;
   timestamp: string;
@@ -61,12 +71,8 @@ export function buildAuditEntry(
   classification?: ClassificationLabel,
   sessionId?: string,
 ): AuditLogEntry {
-  const hitsByCategory: Record<string, number> = {};
-  const hitsByPattern: Record<string, number> = {};
-  for (const hit of hits) {
-    hitsByCategory[hit.category] = (hitsByCategory[hit.category] || 0) + 1;
-    hitsByPattern[hit.patternLabel] = (hitsByPattern[hit.patternLabel] || 0) + 1;
-  }
+  const hitsByCategory = countHits(hits, 'category');
+  const hitsByPattern = countHits(hits, 'patternLabel');
 
   return {
     version: '2.0',
