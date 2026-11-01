@@ -80,6 +80,11 @@ Sessions written before the change keep working, because the passphrase is the s
 - Tokens for a custom label keep only letters, digits and underscores, so the label `my-secret` produces `[MY_SECRET_0]`. Restore still reads tokens from earlier versions.
 - A key named `__proto__` is kept as an ordinary property on Redact and Restore.
 
+## Behaviour changes in 5.2
+
+- Input text equal to a token the session already maps, such as `[EMAIL_0]` from an earlier run, is replaced with a `[LITERAL_n]` token and restores as that same text. If a workflow redacts already redacted data in the same session, run Restore twice to get back to the originals.
+- The regex safety check refuses a variable repetition inside a lookahead or lookbehind, such as `(?=a+)`. Fixed counts such as `(?=[0-9]{4})` are still accepted.
+
 ## Tenant profile fields
 
 All fields are optional. Unknown fields are rejected so a typo never passes silently.

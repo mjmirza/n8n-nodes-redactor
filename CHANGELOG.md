@@ -6,6 +6,18 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 Planned: random scoped tokens.
 
+## [5.2.0] - 2026-11-01
+
+Fixes every finding from a sixth adversarial review, run against 5.1.0. Each one has a regression test in `test/codex-review-51.test.ts`.
+
+### Security
+- **An overlapping match could hide a later free one.** When a match touched text an earlier detector claimed, the search skipped past it and missed a free match starting inside it. The search now retries one position later. The free rest of a partly claimed name is redacted too.
+- **Three more slow regex shapes passed the safety check.** `\B` inside a class is now read as the letter B, named groups with non-ASCII names are parsed, and a variable repetition inside a lookahead or lookbehind is refused.
+
+### Fixed
+- Input text equal to a token from an earlier run in the same session was restored to that token's original. It now gets its own mapping and restores unchanged.
+- Matching took quadratic time in the number of matches. One pass per detector now keeps it linear.
+
 ## [5.1.0] - 2026-11-01
 
 Fixes every finding from a fifth adversarial review, run against 5.0.0. Each one has a regression test in `test/codex-review-50.test.ts`.

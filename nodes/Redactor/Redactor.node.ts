@@ -14,7 +14,7 @@ import {
 
 import { getPatternOptions } from './patterns';
 import { createVault } from './vault';
-import { redactValue, restoreValue, buildReport, enhanceWithPresidio, collectTokenLike, collectInputText } from './engine';
+import { redactValue, restoreValue, buildReport, enhanceWithPresidio, collectTokenLike, collectInputText, priorTokenMatcher } from './engine';
 import {
   CustomPattern,
   RedactionContext,
@@ -1214,6 +1214,7 @@ export class Redactor implements INodeType {
         keyOrigins: new WeakMap(),
         inputText: collectInputText(items.map((it) => it.json)),
         lockedSpans: new WeakMap(),
+        priorTokens: priorTokenMatcher(vault.getSession(sessionId)?.entries),
       };
 
       const allHits: RedactionHit[] = [];

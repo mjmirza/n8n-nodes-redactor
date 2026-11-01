@@ -23,11 +23,13 @@ interface GroupFrame {
   branchConsumes: boolean;
   allConsume: boolean;
   nullable: boolean;
+  // Inside a lookahead or lookbehind, where a repetition can be re-evaluated at every position.
+  inLook: boolean;
 }
 
-const newFrame = (zeroWidth = false): GroupFrame => ({
+const newFrame = (zeroWidth = false, inLook = zeroWidth): GroupFrame => ({
   hasVariableQuantifier: false, hasAlternation: false, run: null, chars: emptySet(), zeroWidth,
-  branchConsumes: false, allConsume: true, nullable: false,
+  branchConsumes: false, allConsume: true, nullable: false, inLook,
 });
 
 /** Ends a branch at | or ). A group that can match nothing never separates repetitions. */
@@ -66,7 +68,7 @@ function skipClass(src: string, i: number): number {
 
 function groupPrefixLength(src: string, i: number): number {
   if (src[i + 1] !== '?') return 1;
-  const named = /^\(\?<[A-Za-z_$][\w$]*>/.exec(src.slice(i));
+  const named = /^\(\?<[^=!>][^>]*>/.exec(src.slice(i));
   if (named) return named[0].length;
   const look = /^\(\?(?::|=|!|<=|<!)/.exec(src.slice(i));
   return look ? look[0].length : 1;
@@ -103,7 +105,8 @@ function readToken(src: string, i: number, stack: GroupFrame[]): Step {
   }
   if (c === '[') return { atomEnd: skipClass(src, i), closed: null };
   if (c === '(') {
-    stack.push(newFrame(/^\(\?(?:=|!|<=|<!)/.test(src.slice(i))));
+    const look = /^\(\?(?:=|!|<=|<!)/.test(src.slice(i));
+    stack.push(newFrame(look, look || stack[stack.length - 1].inLook));
     return { atomEnd: i, closed: null, next: i + groupPrefixLength(src, i) };
   }
   if (c === '|') return alternation(stack, i);
@@ -157,7 +160,10 @@ function consumes(q: Quantifier | null, chars: Charset | null, closed: GroupFram
   return !closed?.nullable;
 }
 
+const IN_LOOK = 'repeats a variable part inside a lookahead or lookbehind, which is not supported';
+
 function stepProblem(src: string, i: number, step: Step, q: Quantifier | null, top: GroupFrame): string | null {
+  if (top.inLook && isVariable(q)) return IN_LOOK;
   const problem = applyQuantifier(q, step.closed, top);
   if (problem || q?.max === 0) return problem;
   const chars = stepChars(src, i, step);

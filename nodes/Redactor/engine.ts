@@ -839,33 +839,60 @@ function assertUserRegexInput(text: string, what: string): void {
 /** Returns a replacement, or null to leave the match as free text. Offsets are source positions. */
 type Replacer = (match: string, sourceOffset: number) => string | null;
 
-/** The free segment that wholly contains the source range, or -1. */
-function freeSegmentAt(segs: Segment[], start: number, end: number): number {
-  return segs.findIndex((seg) => !seg.locked && seg.src <= start && end <= seg.src + seg.text.length);
-}
+/** Walks the segments once per detector. Matches arrive in source order, so the walk never goes back. */
+class SegmentCursor {
+  readonly next: Segment[] = [];
+  private i = 0;
+  private cur: Segment | undefined;
 
-/** Locks one source range inside its free segment. */
-function lockRange(segs: Segment[], index: number, start: number, end: number, replacement: string): void {
-  const seg = segs[index];
-  const parts: Segment[] = [];
-  if (start > seg.src) parts.push({ text: seg.text.slice(0, start - seg.src), locked: false, src: seg.src });
-  parts.push({ text: replacement, locked: true, src: -1 });
-  const tail = end - seg.src;
-  if (tail < seg.text.length) parts.push({ text: seg.text.slice(tail), locked: false, src: end });
-  segs.splice(index, 1, ...parts);
+  constructor(private readonly segs: Segment[]) {
+    this.cur = segs[0];
+  }
+
+  /** The free segment that wholly contains the range, or undefined when any part is already claimed. */
+  freeAt(start: number, end: number): Segment | undefined {
+    while (this.cur && (this.cur.locked || this.cur.src + this.cur.text.length <= start)) this.take();
+    const cur = this.cur;
+    return cur && cur.src <= start && end <= cur.src + cur.text.length ? cur : undefined;
+  }
+
+  lock(start: number, end: number, replacement: string): void {
+    const cur = this.cur!;
+    if (start > cur.src) this.next.push({ text: cur.text.slice(0, start - cur.src), locked: false, src: cur.src });
+    this.next.push({ text: replacement, locked: true, src: -1 });
+    const tail = end - cur.src;
+    if (tail < cur.text.length) this.cur = { text: cur.text.slice(tail), locked: false, src: end };
+    else this.cur = this.segs[++this.i];
+  }
+
+  finish(): Segment[] {
+    while (this.cur) this.take();
+    return this.next;
+  }
+
+  private take(): void {
+    this.next.push(this.cur!);
+    this.cur = this.segs[++this.i];
+  }
 }
 
 /** Matches against the whole source, so anchors and lookbehind keep their meaning, and replaces only free text. */
 function replaceFree(pass: TextPass, re: RegExp, fn: Replacer): void {
-  const flags = re.flags.includes('g') ? re.flags : `${re.flags}g`;
-  for (const m of pass.source.matchAll(new RegExp(re.source, flags))) {
-    const start = m.index ?? 0;
+  const global = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
+  const cursor = new SegmentCursor(pass.segs);
+  let m: RegExpExecArray | null;
+  while ((m = global.exec(pass.source)) !== null) {
+    const start = m.index;
     const end = start + m[0].length;
-    const index = m[0] === '' ? -1 : freeSegmentAt(pass.segs, start, end);
-    if (index < 0) continue;
+    // A match touching claimed text is retried one position later, so a free match it overlapped is still found.
+    if (m[0] === '' || !cursor.freeAt(start, end)) {
+      global.lastIndex = start + 1;
+      continue;
+    }
     const replacement = fn(m[0], start);
-    if (replacement !== null) lockRange(pass.segs, index, start, end, replacement);
+    if (replacement !== null) cursor.lock(start, end, replacement);
   }
+  pass.segs = cursor.finish();
 }
 
 /** State shared by the stages of one text pass. */
@@ -934,6 +961,8 @@ function builtInStage(pass: TextPass): void {
 /** Distinct names in the source, longest first, so a longer name is never split by a shorter one. */
 function sourceNames(pass: TextPass): string[] {
   const names = new Set(detectNamesInText(pass.source).map((nm) => nm.name));
+  // Free text is scanned too, so the unclaimed rest of a partly claimed name is still found.
+  for (const seg of pass.segs) if (!seg.locked) for (const nm of detectNamesInText(seg.text)) names.add(nm.name);
   return [...names].sort((x, y) => y.length - x.length);
 }
 
@@ -997,6 +1026,23 @@ function lockChild(ctx: RedactionContext, container: object, key: string, comput
   return out;
 }
 
+/** Matches every token this session already maps, so input text equal to one can be protected. */
+export function priorTokenMatcher(entries: Record<string, unknown> | undefined): RegExp | undefined {
+  const tokens = Object.keys(entries ?? {}).filter((t) => t.length > 0).sort((a, b) => b.length - a.length);
+  return tokens.length > 0 ? new RegExp(tokens.map(escapeRe).join('|'), 'g') : undefined;
+}
+
+/** Input text equal to an earlier mapping gets its own mapping, so Restore returns it unchanged. */
+function literalStage(pass: TextPass): void {
+  const { ctx, vault, sessionId } = pass;
+  if (!ctx.priorTokens || (ctx.mode !== 'token' && ctx.mode !== 'pseudonymize')) return;
+  replaceFree(pass, ctx.priorTokens, (match) => {
+    const token = freshToken('LITERAL', vault, sessionId, ctx.reservedTokens);
+    vault.addEntry(sessionId, { token, original: match, patternLabel: 'LITERAL', category: 'other', createdAt: new Date().toISOString() });
+    return token;
+  });
+}
+
 /** Redacts PII in a text string. Each stage leaves earlier replacements untouched. */
 function redactText(
   text: string,
@@ -1011,6 +1057,7 @@ function redactText(
     source: text, segs: [{ text, locked: false, src: 0 }], threshold: ctx.confidenceThreshold ?? 0,
     ctx, vault, sessionId, hits, itemIndex, fieldPath,
   };
+  literalStage(pass);
   denyListStage(pass);
   builtInStage(pass);
   nameStage(pass);

@@ -94,6 +94,8 @@ function escapeSet(src: string, i: number): Charset {
 /** Reads one class member at j. Returns its set, the index after it, and its code for ranges. */
 function classMember(body: string, j: number): { set: Charset; next: number; code: number | null } {
   if (body[j] === '\\' && body[j + 1] === 'b') return { set: codeSet(8), next: j + 2, code: 8 };
+  // Inside a class, backslash B is a literal B, never a boundary.
+  if (body[j] === '\\' && body[j + 1] === 'B') return { set: codeSet(66), next: j + 2, code: 66 };
   if (body[j] === '\\') {
     const { length, code } = readEscape(body, j);
     return { set: escapeSet(body, j), next: j + length, code };
