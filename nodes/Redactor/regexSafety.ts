@@ -2,7 +2,7 @@
  * One structural regex check, shared by profile parsing and runtime matching.
  * It rejects patterns whose backtracking can grow exponentially with input length.
  */
-import { atomCharset, Charset, emptySet, overlaps, union } from './regexCharset';
+import { atomCharset, Charset, emptySet, overlaps, readEscape, union } from './regexCharset';
 
 const MAX_REGEX_LENGTH = 500;
 
@@ -19,11 +19,23 @@ interface GroupFrame {
   run: Charset | null;
   chars: Charset;
   zeroWidth: boolean;
+  // Whether the current branch, and every earlier branch, must consume at least one character.
+  branchConsumes: boolean;
+  allConsume: boolean;
+  nullable: boolean;
 }
 
 const newFrame = (zeroWidth = false): GroupFrame => ({
   hasVariableQuantifier: false, hasAlternation: false, run: null, chars: emptySet(), zeroWidth,
+  branchConsumes: false, allConsume: true, nullable: false,
 });
+
+/** Ends a branch at | or ). A group that can match nothing never separates repetitions. */
+function endBranch(frame: GroupFrame): void {
+  frame.allConsume &&= frame.branchConsumes;
+  frame.branchConsumes = false;
+  frame.nullable = !frame.allConsume;
+}
 
 function readBraces(src: string, i: number): Quantifier | null {
   const m = /^\{(\d+)(,(\d*))?\}/.exec(src.slice(i));
@@ -67,25 +79,35 @@ interface Step {
   error?: string;
 }
 
+function alternation(stack: GroupFrame[], i: number): Step {
+  const top = stack[stack.length - 1];
+  top.hasAlternation = true;
+  top.run = null;
+  endBranch(top);
+  return { atomEnd: i, closed: null, next: i + 1 };
+}
+
+function closeGroup(c: string, stack: GroupFrame[]): GroupFrame | null {
+  if (c !== ')' || stack.length <= 1) return null;
+  const closed = stack.pop()!;
+  endBranch(closed);
+  return closed;
+}
+
 /** Reads one token at i. Groups and alternation only change the frame stack. */
 function readToken(src: string, i: number, stack: GroupFrame[]): Step {
   const c = src[i];
   if (c === '\\') {
     if (/[1-9k]/.test(src[i + 1] ?? '')) return { atomEnd: i, closed: null, error: 'back-references are not supported' };
-    return { atomEnd: i + 2, closed: null };
+    return { atomEnd: i + readEscape(src, i).length, closed: null };
   }
   if (c === '[') return { atomEnd: skipClass(src, i), closed: null };
   if (c === '(') {
     stack.push(newFrame(/^\(\?(?:=|!|<=|<!)/.test(src.slice(i))));
     return { atomEnd: i, closed: null, next: i + groupPrefixLength(src, i) };
   }
-  if (c === '|') {
-    stack[stack.length - 1].hasAlternation = true;
-    stack[stack.length - 1].run = null;
-    return { atomEnd: i, closed: null, next: i + 1 };
-  }
-  const closed = c === ')' && stack.length > 1 ? stack.pop()! : null;
-  return { atomEnd: i + 1, closed };
+  if (c === '|') return alternation(stack, i);
+  return { atomEnd: i + 1, closed: closeGroup(c, stack) };
 }
 
 const NESTED = 'a repeated group contains a quantifier or alternation (catastrophic backtracking)';
@@ -129,11 +151,19 @@ function stepChars(src: string, i: number, step: Step): Charset | null {
   return closed.zeroWidth ? null : closed.chars;
 }
 
+/** Whether the atom must consume at least one character, so it can separate repetitions. */
+function consumes(q: Quantifier | null, chars: Charset | null, closed: GroupFrame | null): boolean {
+  if (chars === null || (q !== null && q.min < 1)) return false;
+  return !closed?.nullable;
+}
+
 function stepProblem(src: string, i: number, step: Step, q: Quantifier | null, top: GroupFrame): string | null {
   const problem = applyQuantifier(q, step.closed, top);
   if (problem || q?.max === 0) return problem;
-  const variable = isVariable(q) || step.closed?.hasVariableQuantifier === true;
-  return applySequence(stepChars(src, i, step), variable, (q?.min ?? 1) >= 1, top);
+  const chars = stepChars(src, i, step);
+  const required = consumes(q, chars, step.closed);
+  if (required) top.branchConsumes = true;
+  return applySequence(chars, isVariable(q) || !!step.closed?.hasVariableQuantifier, required, top);
 }
 
 /** Returns why the pattern was refused, or null when it is safe to run. */

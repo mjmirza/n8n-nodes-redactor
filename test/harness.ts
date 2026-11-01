@@ -1,6 +1,8 @@
 /** Shared execute() harness for the node tests. Mirrors how n8n hands a node its context. */
 import type { IDataObject, IExecuteFunctions, INodeExecutionData } from 'n8n-workflow';
 import { Redactor } from '../nodes/Redactor/Redactor.node';
+import { checkRegex } from '../nodes/Redactor/regexSafety';
+import { parseTenantProfile } from '../nodes/Redactor/profiles';
 
 export interface RunOptions {
   staticData?: IDataObject;
@@ -46,3 +48,9 @@ export function run(params: Record<string, unknown>, items: IDataObject[], opts:
 
 /** n8n saves static data as JSON after a production run. */
 export const persist = (data: IDataObject): IDataObject => JSON.parse(JSON.stringify(data));
+
+/** The safety check and profile parsing must both refuse the regex. */
+export function expectRegexRefused(re: string): void {
+  expect(checkRegex(re)).not.toBeNull();
+  expect(() => parseTenantProfile({ customPatterns: [{ label: 'x', regex: re }] })).toThrow();
+}

@@ -123,8 +123,10 @@ export interface RedactionContext {
   keyOrigins?: WeakMap<object, Map<string, string>>;
   // Every string, key and number of the input; a pseudonym never equals text already present.
   inputText?: string;
-  // Positions of replacements per item and output path, so Presidio never re-redacts them.
-  lockedSpans?: Map<string, Array<[number, number]>>;
+  // Positions of replacements per output container and key, so Presidio never re-redacts them.
+  lockedSpans?: WeakMap<object, Map<string, Array<[number, number]>>>;
+  // Spans of the value most recently produced, picked up by its container.
+  lastLocked?: Array<[number, number]>;
   // Set while redacting a number, so its mapping never merges with a text mapping.
   numeric?: boolean;
 }

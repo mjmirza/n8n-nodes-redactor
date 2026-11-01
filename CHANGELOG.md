@@ -6,6 +6,22 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 Planned: random scoped tokens.
 
+## [5.0.0] - 2026-11-01
+
+Fixes every finding from a fourth adversarial review, run against 4.3.0. Each one has a regression test in `test/codex-review-43.test.ts`. The major version reflects one new failure mode. a custom or deny list regex now stops the run on a value over 20,000 characters instead of scanning it.
+
+### Security
+- **4.3.0 could miss built-in detections.** User regexes ran on 2048-character windows, and the window edges also split built-in matching, so an email near an edge stayed in the output. Windowing is removed. Every pattern scans the full value again.
+- **Windows invented anchors.** `^SECRET` matched at a window start in the middle of the text. Anchors keep their meaning again.
+- **Three slow regexes passed the safety check.** Groups that can match nothing, such as `(?:b|)`, no longer count as separators, escapes such as `\x61` are read whole, and case folding happens after a class is complemented, so `[^a]` correctly overlaps `A`.
+- **User regexes now have a hard input limit.** A custom or deny list regex on a value longer than 20,000 characters stops the run with an error naming the regex and the limit. An allow list regex is never tested on such a value, so the value stays redacted.
+
+### Fixed
+- Presidio skipped a nested field whose path text equalled a dotted key, such as `a.b`. Replacements are now remembered per output object and key, not per path string.
+- A value under an empty key `""` was pseudonymized twice and could not be restored. It now round trips.
+- A number and a string with the same digits could produce the same composite token, so the string restored as a number. A partly matched number now gets its own `NUMBER` token.
+- A repeated name was scored only at its first mention. Each mention is now scored on its own context.
+
 ## [4.3.0] - 2026-11-01
 
 Fixes every finding from a third adversarial security review, run against 4.2.0. Each one has a regression test in `test/codex-review-42.test.ts`.
