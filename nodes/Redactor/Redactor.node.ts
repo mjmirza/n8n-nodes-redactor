@@ -78,6 +78,11 @@ const RECOMMENDED_PATTERNS = [
   'uuid', 'imei', 'iccid',
 ];
 
+/** Keeps the item's binary attachments on the output item. */
+function withBinary(out: INodeExecutionData, source: INodeExecutionData): INodeExecutionData {
+  return source.binary ? { ...out, binary: source.binary } : out;
+}
+
 /** Version 1 keeps sensitivity levels under hitsByCategory. Version 2 counts PII categories there. */
 function versionRopaSummary(ropa: IDataObject, byLevel: Record<string, number>, typeVersion: number): void {
   const summary = ropa.processingSummary as IDataObject;
@@ -949,7 +954,7 @@ export class Redactor implements INodeType {
 
       if (operation === 'detect') {
         // Always return original data + detection summary as last item
-        const returnData: INodeExecutionData[] = items.map((item, i) => ({ json: item.json, pairedItem: { item: i } }));
+        const returnData: INodeExecutionData[] = items.map((item, i) => withBinary({ json: item.json, pairedItem: { item: i } }, item));
         const report = buildReport(tempSessionId, allHits);
 
         // Summary always appended so user sees results
@@ -1266,27 +1271,25 @@ export class Redactor implements INodeType {
           }
         }
 
-        returnData.push({ json: redacted, pairedItem: { item: i } });
+        returnData.push(withBinary({ json: redacted, pairedItem: { item: i } }, items[i]));
         for (const hit of hits) allHits.push(hit);
       }
+
+      // An absent setting means off. A setting whose expression fails stops the run before anything is saved.
+      const promptInjection = this.getNodeParameter('promptInjection', 0, false) as boolean;
 
       // Persist vault
       vault.save(sessionId);
 
       // Prompt injection detection (if enabled)
       let injectionResult = null;
-      try {
-        const promptInjection = this.getNodeParameter('promptInjection', 0, false) as boolean;
-        if (promptInjection) {
-          for (let i = 0; i < items.length; i++) {
-            const result = scanForInjection(items[i].json as Record<string, unknown>);
-            if (result.detected && (!injectionResult || result.score > injectionResult.score)) {
-              injectionResult = sanitizeInjection(result);
-            }
+      if (promptInjection) {
+        for (let i = 0; i < items.length; i++) {
+          const result = scanForInjection(items[i].json as Record<string, unknown>);
+          if (result.detected && (!injectionResult || result.score > injectionResult.score)) {
+            injectionResult = sanitizeInjection(result);
           }
         }
-      } catch {
-        // Prompt injection parameter not available
       }
 
       const auditEntry = auditLog && hasReportOutput
@@ -1347,7 +1350,7 @@ export class Redactor implements INodeType {
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
         const restored = restoreValue(item.json, vault, sessionId) as IDataObject;
-        returnData.push({ json: restored, pairedItem: { item: i } });
+        returnData.push(withBinary({ json: restored, pairedItem: { item: i } }, item));
       }
 
       if (deleteAfterRestore) {

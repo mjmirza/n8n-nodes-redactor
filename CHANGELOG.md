@@ -6,6 +6,26 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 Planned: random scoped tokens.
 
+## [7.0.0] - 2026-11-01
+
+Fixes every finding from a ninth adversarial review, run against 6.1.0. Each one has a regression test in `test/codex-review-61.test.ts` that fails on 6.1.0. This is a major release because saved workflows can produce different output: more values are redacted, booleans under sensitive keys are replaced, and some pseudonyms become bracketed tokens. `docs/MIGRATION.md` lists every change.
+
+### Security
+- **Restore could return the wrong value for pseudonyms.** Text next to a pseudonym could spell another stored pseudonym, so `1EMP309 EMP608` restored as `EMP608 EMP608`. Such a replacement now gets a bracketed token, which neighbouring text cannot extend.
+- **Overlapping Presidio entities left part of a name in clear text.** Every part of every detected entity is now covered. Touching parts of the same type merge into one replacement.
+- **Wildcard field rules, three built-in detectors and one injection rule took quadratic or worse time.** Field rules are matched without regexes. Email address literals, internal hostnames and JWTs are found by linear scanners, and the horizontal-rule injection rule no longer backtracks over spaces.
+- **Presidio entity types named after built-in object properties, such as `constructor`, were silently dropped.** Label and category lookups use own properties only.
+- **Array elements lost the context of their key,** so `id: ["ACME-SECRET-ID"]` next to a name was not redacted. Elements are now judged like a single value under the same key.
+- **Booleans under sensitive keys, such as `disability: true`, were never redacted.** They are replaced, classified, and restored as booleans.
+- **Formats were missed or cut short.** Five-word names, decomposed accents, names with `van`, `de` and similar particles, labelled names with apostrophes, hyphens or inner capitals, a valid card after a stray digit, Unicode email local parts, IBANs grouped with nonbreaking spaces, IPv6 after a colon label, the unspecified address `::`, `AB` blood types, connection-string passwords past 512 characters and LDAP DNs past 33 attributes are now found whole.
+
+### Fixed
+- Redact, Restore and Detect dropped binary attachments. Output items now keep `item.binary`.
+- A Prompt Injection setting whose expression failed silently turned scanning off. The error now stops the run before the vault is saved.
+- Presidio was asked for scores of 0.4 and up even when the threshold was lower. The configured threshold is sent.
+- Pseudonym generation, URL redaction next to deny-list matches, and Presidio key traversal took quadratic time. Each is now linear.
+- A tenant profile accepted a `NaN` confidence threshold. It is refused.
+
 ## [6.1.0] - 2026-11-01
 
 Fixes every finding from an eighth adversarial review, run against 6.0.0. Each one has a regression test in `test/codex-review-60.test.ts` that fails on 6.0.0. The one output change that could surprise a saved workflow, Verify checking names, applies to node version 2 only.

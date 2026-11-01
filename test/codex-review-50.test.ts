@@ -3,22 +3,12 @@
  */
 import type { IDataObject } from 'n8n-workflow';
 import { resetCircuitBreaker } from '../nodes/Redactor/presidio';
-import { MemoryVault } from '../nodes/Redactor/vault';
 import { redactValue, restoreValue, enhanceWithPresidio } from '../nodes/Redactor/engine';
-import type { RedactionContext, RedactionHit } from '../nodes/Redactor/types';
+import type { RedactionContext } from '../nodes/Redactor/types';
 
-import { expectRegexRefused, run, persist } from './harness';
+import { expectRegexRefused, run, persist, engineSetup } from './harness';
 
-function setup(overrides: Partial<RedactionContext>): { vault: MemoryVault; ctx: RedactionContext; hits: RedactionHit[] } {
-  const vault = new MemoryVault();
-  vault.getOrCreateSession('s', 0);
-  const ctx: RedactionContext = {
-    enabledPatterns: [], customPatterns: [], mode: 'token', dedup: true, fieldRules: [], fieldMode: 'all',
-    lockedSpans: new WeakMap(), keyOrigins: new WeakMap(), skipSemantic: true, scanNumbers: true,
-    ...overrides,
-  };
-  return { vault, ctx, hits: [] };
-}
+const setup = engineSetup;
 
 function redactWith(input: unknown, overrides: Partial<RedactionContext>): IDataObject {
   const { vault, ctx, hits } = setup(overrides);

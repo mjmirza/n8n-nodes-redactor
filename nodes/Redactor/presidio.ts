@@ -215,11 +215,16 @@ export async function analyzeWithPresidio(
   }
 }
 
+/** A table lookup that ignores inherited names such as constructor or __proto__. */
+function ownValue(table: Record<string, string>, key: string): string | undefined {
+  return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
+}
+
 /**
  * Get the redactor label for a Presidio entity type.
  */
 export function getRedactorLabel(presidioEntityType: string): string {
-  return PRESIDIO_TO_REDACTOR_LABEL[presidioEntityType] || presidioEntityType;
+  return ownValue(PRESIDIO_TO_REDACTOR_LABEL, presidioEntityType) || presidioEntityType;
 }
 
 /**
@@ -229,7 +234,7 @@ export function getRedactorCategory(presidioEntityType: string): string {
   // A built-in pattern with the same label decides, so both detection paths agree on the category.
   const label = getRedactorLabel(presidioEntityType);
   const builtIn = PII_PATTERNS.find((p) => p.label === label);
-  return builtIn?.category ?? PRESIDIO_TO_CATEGORY[presidioEntityType] ?? 'identity';
+  return builtIn?.category ?? ownValue(PRESIDIO_TO_CATEGORY, presidioEntityType) ?? 'identity';
 }
 
 /**

@@ -114,6 +114,21 @@ Every version:
 - Presidio entities take the category of the built-in pattern with the same label, so a VAT code is counted as financial.
 - The ROPA record reports the TTL of an existing session rather than the one requested.
 
+## Moving to 7.0
+
+7.0 is a major release because saved workflows of every node version can produce different output. Nothing needs to be reconfigured, but check downstream steps that read redacted values.
+
+- More text is redacted: five-word names, decomposed accents, names with particles such as `van` or `de`, labelled names with apostrophes, hyphens or inner capitals, a valid card after a stray digit, Unicode email local parts, IBANs grouped with nonbreaking spaces, IPv6 after a colon label, the address `::`, full `AB` blood types, connection-string passwords of any length on one line, and LDAP DNs of any length. A connection-string password and an LDAP value now end at a line break.
+- An element of an array is judged with the keys next to the array, so `id: ["ACME-SECRET-ID"]` beside a name is redacted like `id: "ACME-SECRET-ID"`.
+- A boolean under a sensitive key, such as `disability: true`, is replaced with a token and counted in Classify and ROPA. Restore returns the boolean.
+- In Pseudonymize mode, a value whose pseudonym would run together with the text beside it gets a bracketed token such as `[SALARY_3]` instead, so Restore returns the exact original.
+- Overlapping Presidio entities are covered as a whole. Touching parts of the same type become one replacement, and parts of different types keep their own.
+- Presidio is asked for scores from the configured confidence threshold, where 6.x always asked for 0.4 and up. Without a threshold it still asks for 0.4.
+- Output items keep their binary attachments.
+- A Prompt Injection setting whose expression fails stops the run with that error.
+- A tenant profile with a `NaN` confidence threshold is refused.
+- A built-in pattern match that overlaps an earlier replacement no longer causes a rescan from the next character. Its free parts are still redacted.
+
 ## Tenant profile fields
 
 All fields are optional. Unknown fields are rejected so a typo never passes silently.

@@ -114,7 +114,9 @@ function parseFieldRules(value: unknown): FieldRule[] {
 }
 
 function parseThreshold(value: unknown): number {
-  if (typeof value !== 'number' || value < 0 || value > 1) fail('confidenceThreshold must be a number from 0 to 1');
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
+    fail('confidenceThreshold must be a number from 0 to 1');
+  }
   return value;
 }
 

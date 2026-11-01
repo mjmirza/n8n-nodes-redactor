@@ -22,7 +22,8 @@ function luhnCheck(num: string): boolean {
 /**
  * IBAN checksum validation (ISO 13616)
  */
-const EMAIL_LOCAL = /[A-Za-z0-9._%+'!#$&*/=?^`{|}~-]/;
+// SMTPUTF8 local parts may hold any letter, digit or combining mark, as in josé or 用户.
+const EMAIL_LOCAL = /^[\p{L}\p{N}\p{M}._%+'!#$&*/=?^`{|}~-]$/u;
 const EMAIL_DOMAIN = /[\p{L}\p{N}.-]/u;
 // A TLD is letters, or an IDNA A-label such as xn--p1ai.
 const EMAIL_DOMAIN_SHAPE = /^[\p{L}\p{N}-]+(?:[.][\p{L}\p{N}-]+)*[.](?:\p{L}{2,}|xn--[a-z0-9-]{2,59})$/iu;
@@ -40,14 +41,33 @@ function openingQuote(text: string, close: number): number {
   return -1;
 }
 
+/** The next ] at or after a position. The scan asks with rising positions, so each ] is searched for once. */
+type CloseFinder = (from: number) => number;
+
+function closeFinder(text: string): CloseFinder {
+  let found = -2;
+  return (from) => {
+    if (found !== -1 && found < from) found = text.indexOf(']', from);
+    return found;
+  };
+}
+
 /** End of an address literal such as [192.168.1.1] or [IPv6:2001:db8::1], or -1. */
-function addressLiteralEnd(text: string, at: number): number {
-  const close = text.indexOf(']', at + 2);
+function addressLiteralEnd(text: string, at: number, nextClose: CloseFinder): number {
+  const close = nextClose(at + 2);
   if (close < 0 || close - at > 64) return -1;
   const inner = text.slice(at + 2, close);
   const v4 = /^\d{1,3}(?:[.]\d{1,3}){3}$/.test(inner) && inner.split('.').every((n) => Number(n) <= 255);
   const v6 = /^IPv6:/i.test(inner) && isIpv6(inner.slice(5));
   return v4 || v6 ? close + 1 : -1;
+}
+
+/** Whether the two code units before end form one astral character. */
+function surrogatePairBefore(text: string, end: number): boolean {
+  if (end < 2) return false;
+  const low = text.charCodeAt(end - 1);
+  const high = text.charCodeAt(end - 2);
+  return low >= 0xdc00 && low <= 0xdfff && high >= 0xd800 && high <= 0xdbff;
 }
 
 /** Start of the local part before the @ at at, including a quoted local part. Returns -1 when empty. */
@@ -57,13 +77,17 @@ function emailLocalStart(text: string, at: number): number {
     return open >= 0 && open < at - 2 ? open : -1;
   }
   let start = at;
-  while (start > 0 && EMAIL_LOCAL.test(text[start - 1])) start--;
+  while (start > 0) {
+    const width = surrogatePairBefore(text, start) ? 2 : 1;
+    if (!EMAIL_LOCAL.test(text.slice(start - width, start))) break;
+    start -= width;
+  }
   return start < at ? start : -1;
 }
 
 /** End of the domain after the @ at at, trimmed of trailing dots and hyphens. Returns -1 without a valid TLD. */
-function emailDomainEnd(text: string, at: number): number {
-  if (text[at + 1] === '[') return addressLiteralEnd(text, at);
+function emailDomainEnd(text: string, at: number, nextClose: CloseFinder): number {
+  if (text[at + 1] === '[') return addressLiteralEnd(text, at, nextClose);
   let end = at + 1;
 
   while (end < text.length && EMAIL_DOMAIN.test(text[end])) end++;
@@ -74,9 +98,10 @@ function emailDomainEnd(text: string, at: number): number {
 /** Finds addresses around each @ in one linear pass, so a long run of letters never backtracks. */
 function scanEmails(text: string): Array<{ start: number; end: number }> {
   const spans: Array<{ start: number; end: number }> = [];
+  const nextClose = closeFinder(text);
   for (let at = text.indexOf('@'); at >= 0; at = text.indexOf('@', at + 1)) {
     const start = emailLocalStart(text, at);
-    const end = start < 0 ? -1 : emailDomainEnd(text, at);
+    const end = start < 0 ? -1 : emailDomainEnd(text, at, nextClose);
     if (end > 0) spans.push({ start, end });
   }
   return spans;
@@ -160,10 +185,12 @@ const IBAN_LENGTHS: Record<string, number> = {
 };
 
 const ALNUM = /[A-Za-z0-9]/;
+// One space of any width within a line, such as a nonbreaking space. The checksum removes the same characters.
+const GROUP_SPACE = /^[^\S\r\n]$/;
 
 /** Whether a space at this point separates two groups of four. */
 const groupGap = (text: string, at: number, compact: number): boolean =>
-  text[at] === ' ' && compact % 4 === 0 && ALNUM.test(text[at + 1] ?? '');
+  GROUP_SPACE.test(text[at] ?? '') && compact % 4 === 0 && ALNUM.test(text[at + 1] ?? '');
 
 /** End of an IBAN of exactly this many characters starting here, or -1. */
 function ibanEnd(text: string, start: number, length: number): number {
@@ -202,13 +229,22 @@ function longestCard(groups: DigitGroup[], i: number): number {
   return best;
 }
 
-/** Cards within one run of digit groups. */
+/**
+ * Cards within one run of digit groups. Every group start is tried, so a valid card that overlaps an earlier
+ * candidate, as in 6 4111 1111 1111 1111, is covered too. Each start looks at most 19 digits ahead.
+ */
 function cardsInRun(groups: DigitGroup[], spans: Span[]): void {
-  let i = 0;
-  while (i < groups.length) {
+  let reach = -1;
+  for (let i = 0; i < groups.length; i++) {
+    // A candidate overlapping an earlier one must start like a payment card, with a major industry digit 2 to 6,
+    // so the digits after a complete card never extend it.
+    if (groups[i].start < reach && !/^[2-6]/.test(groups[i].digits)) continue;
     const best = longestCard(groups, i);
-    if (best >= 0) spans.push({ start: groups[i].start, end: groups[best].start + groups[best].digits.length });
-    i = best >= 0 ? best + 1 : i + 1;
+    if (best < 0) continue;
+    const end = groups[best].start + groups[best].digits.length;
+    if (end <= reach) continue;
+    spans.push({ start: groups[i].start, end });
+    reach = end;
   }
 }
 
@@ -244,11 +280,13 @@ function trimIpv6(s: string): string {
   return out;
 }
 
-const looksLikeIpv6 = (s: string): boolean => s.split(':').length >= 3 && /[0-9A-Fa-f]/.test(s) && isIpv6(s);
+// The unspecified address :: has no digits, so the grammar alone decides.
+const looksLikeIpv6 = (s: string): boolean => s.split(':').length >= 3 && isIpv6(s);
 
 function scanIpv6(text: string): Span[] {
   const spans: Span[] = [];
-  for (const m of text.matchAll(/(?<![0-9A-Za-z:.])[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*/g)) {
+  // A colon before the address may be a label, as in IP:2001:db8::1, so only letters, digits and dots block a start.
+  for (const m of text.matchAll(/(?<![0-9A-Za-z.])[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*/g)) {
     const s = trimIpv6(m[0]);
     const start = m.index ?? 0;
     if (looksLikeIpv6(s)) spans.push({ start, end: start + s.length });
@@ -256,6 +294,189 @@ function scanIpv6(text: string): Span[] {
   return spans;
 }
 
+
+const WORD_CHAR = /[A-Za-z0-9_]/;
+
+/** Whether a \b sits before position at, where text[at] is a word character. */
+const wordStart = (text: string, at: number): boolean => at === 0 || !WORD_CHAR.test(text[at - 1]);
+
+/**
+ * Finds a label before each dot-anchored tail, walking back over its own run only. Linear: every run is read at most
+ * twice, and a failed label restarts the tail search at the next dot.
+ */
+function scanBackLabels(
+  text: string,
+  tail: RegExp,
+  labelChar: RegExp,
+  startsAt: (text: string, at: number) => boolean,
+  minLabel: number,
+): Span[] {
+  const spans: Span[] = [];
+  const re = new RegExp(tail.source, tail.flags.includes('g') ? tail.flags : `${tail.flags}g`);
+  let floor = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const dot = m.index;
+    let run = dot;
+    while (run > floor && labelChar.test(text[run - 1])) run--;
+    let start = -1;
+    for (let at = run; at + minLabel <= dot; at++) {
+      if (startsAt(text, at)) {
+        start = at;
+        break;
+      }
+    }
+    if (start < 0) {
+      re.lastIndex = dot + 1;
+      continue;
+    }
+    const end = dot + m[0].length;
+    spans.push({ start, end });
+    floor = end;
+  }
+  return spans;
+}
+
+/** Internal hostnames such as db-1.internal, with the same matches as the regex but no backtracking over long labels. */
+function scanInternalHosts(text: string): Span[] {
+  return scanBackLabels(
+    text,
+    /\.(?:internal|local|corp|intranet|lan|private|home\.arpa)(?:\.[a-z]+)*\b/gi,
+    /[A-Za-z0-9-]/,
+    (t, at) => /[A-Za-z]/.test(t[at]) && wordStart(t, at),
+    2,
+  );
+}
+
+/** JSON Web Tokens: a header starting eyJ, then two dot-separated parts. */
+function scanJwts(text: string): Span[] {
+  return scanBackLabels(
+    text,
+    /\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+/g,
+    /[A-Za-z0-9_-]/,
+    (t, at) => t.startsWith('eyJ', at) && wordStart(t, at),
+    3,
+  );
+}
+
+const LDAP_ATTRS = ['CN', 'OU', 'DC', 'ST', 'O', 'C', 'L'];
+
+/** Length of an attribute name and its = at position at, or -1. */
+function ldapAttrAt(text: string, at: number): number {
+  for (const attr of LDAP_ATTRS) {
+    if (text.substr(at, attr.length).toUpperCase() === attr && text[at + attr.length] === '=') return attr.length + 1;
+  }
+  return -1;
+}
+
+/** End of an attribute value: the next comma or line break. */
+function ldapValueEnd(text: string, from: number): number {
+  let end = from;
+  while (end < text.length && text[end] !== ',' && text[end] !== '\n' && text[end] !== '\r') end++;
+  return end;
+}
+
+/** Follows ", attr=value" pairs after a first value ending at end. Counts the first value too. */
+function ldapChain(text: string, firstEnd: number): { end: number; count: number } {
+  let end = firstEnd;
+  let count = 1;
+  while (text[end] === ',') {
+    let at = end + 1;
+    while (at < text.length && /\s/.test(text[at])) at++;
+    const attr = ldapAttrAt(text, at);
+    if (attr < 0) break;
+    const next = ldapValueEnd(text, at + attr);
+    if (next === at + attr) break;
+    end = next;
+    count++;
+  }
+  return { end, count };
+}
+
+/** Distinguished names of two or more attributes, of any length, in one pass. */
+function scanLdapDns(text: string): Span[] {
+  const spans: Span[] = [];
+  const starts = /(?<![A-Za-z])(?:CN|OU|DC|ST|O|C|L)=/gi;
+  let m: RegExpExecArray | null;
+  while ((m = starts.exec(text)) !== null) {
+    const valueStart = m.index + m[0].length;
+    const firstEnd = ldapValueEnd(text, valueStart);
+    const { end, count } = firstEnd > valueStart ? ldapChain(text, firstEnd) : { end: firstEnd, count: 0 };
+    if (count >= 2) {
+      spans.push({ start: m.index, end });
+      starts.lastIndex = end;
+    } else {
+      // A later start inside this value would end at the same delimiter and fail the same way.
+      starts.lastIndex = Math.max(starts.lastIndex, firstEnd);
+    }
+  }
+  return spans;
+}
+
+const isLineBreak = (ch: string | undefined): boolean => ch === '\n' || ch === '\r';
+
+/** The line around at, read once: its end and its last password segment. */
+function connLine(text: string, at: number): { end: number; password: { semi: number; end: number } | null; semi: number } {
+  let lineStart = at;
+  while (lineStart > 0 && !isLineBreak(text[lineStart - 1])) lineStart--;
+  let end = at;
+  while (end < text.length && !isLineBreak(text[end])) end++;
+  return { end, password: lastPasswordSegment(text, lineStart, end), semi: -2 };
+}
+
+/** The first ; at or after from on the line, or -1. Searched once and reused, so starts before it never rescan. */
+function nextSemi(text: string, line: { end: number; semi: number }, from: number): number {
+  if (line.semi !== -1 && line.semi < from) {
+    line.semi = text.indexOf(';', from);
+    if (line.semi > line.end) line.semi = -1;
+  }
+  return line.semi;
+}
+
+/** The last segment of one line that holds Password= or Pwd= with a value: the ; before it, and its end. */
+function lastPasswordSegment(text: string, lineStart: number, lineEnd: number): { semi: number; end: number } | null {
+  let found: { semi: number; end: number } | null = null;
+  let segStart = lineStart;
+  while (segStart <= lineEnd) {
+    let segEnd = text.indexOf(';', segStart);
+    if (segEnd < 0 || segEnd > lineEnd) segEnd = lineEnd;
+    const segment = text.slice(segStart, segEnd);
+    let key = -1;
+    for (const k of segment.matchAll(/(?:Password|Pwd)=/gi)) {
+      if ((k.index ?? 0) + k[0].length < segment.length) key = k.index ?? 0;
+    }
+    if (key >= 0) found = { semi: segStart - 1, end: segEnd };
+    segStart = segEnd + 1;
+  }
+  return found;
+}
+
+/**
+ * Key=value connection strings with credentials, on one line, from Server=, Data Source= or Host= through the last
+ * Password= or Pwd= value, with no length limit. Each line is read once.
+ */
+function scanConnStrings(text: string): Span[] {
+  const spans: Span[] = [];
+  const starts = /(?<![A-Za-z])(?:Server|Data Source|Host)=/gi;
+  let line: { end: number; password: { semi: number; end: number } | null; semi: number } = { end: -1, password: null, semi: -2 };
+  let m: RegExpExecArray | null;
+  while ((m = starts.exec(text)) !== null) {
+    const start = m.index;
+    const valueStart = start + m[0].length;
+    if (start > line.end) line = connLine(text, start);
+    const semi = nextSemi(text, line, valueStart);
+    if (semi <= valueStart || !line.password || line.password.semi < semi) continue;
+    spans.push({ start, end: line.password.end });
+    starts.lastIndex = line.password.end;
+  }
+  return spans;
+}
+
+// A labelled name word: any letters and marks, with inner apostrophes or hyphens, as in O'Connor or Smith-Jones.
+// The label is matched case-insensitively, so the word does not tell upper from lower case and nothing competes.
+const CTX_NAME_WORD = String.raw`\p{L}[\p{L}\p{M}]*(?:['’-]\p{L}[\p{L}\p{M}]*)*`;
+const FULL_NAME_LABELS = String.raw`full\s*name|first\s*name|last\s*name|surname|family\s*name|given\s*name|Vorname|Nachname|Familienname|nom\s*de\s*famille|prenom|nombre|apellido`;
+const MAIDEN_LABELS = String.raw`mother['’]?s?\s*maiden\s*name|Geburtsname|nom\s+de\s+jeune\s+fille`;
 
 export const PII_PATTERNS: PiiPattern[] = [
   // ═══════════════════════════════════════════
@@ -1009,6 +1230,7 @@ export const PII_PATTERNS: PiiPattern[] = [
     label: 'INTERNAL_HOST',
     category: 'enterprise',
     regex: /\b[a-z][a-z0-9-]+\.(?:internal|local|corp|intranet|lan|private|home\.arpa)(?:\.[a-z]+)*\b/gi,
+    scan: scanInternalHosts,
     description: 'Internal/intranet hostnames (.internal, .local, .corp, .lan)',
   },
   {
@@ -1023,6 +1245,7 @@ export const PII_PATTERNS: PiiPattern[] = [
     label: 'LDAP_DN',
     category: 'enterprise',
     regex: /(?<![A-Za-z])(?:CN|OU|DC|O|C|L|ST)=[^,]{1,256}(?:,\s*(?:CN|OU|DC|O|C|L|ST)=[^,]{1,256}){1,32}/gi,
+    scan: scanLdapDns,
     description: 'LDAP Distinguished Names (CN=...,OU=...,DC=...)',
   },
   {
@@ -1051,6 +1274,7 @@ export const PII_PATTERNS: PiiPattern[] = [
     label: 'CONN_STRING',
     category: 'enterprise',
     regex: /(?<![A-Za-z])(?:Server|Data Source|Host)=[^;]{1,512};[^;]{0,512}(?:;[^;]{0,512}){0,10}(?:Password|Pwd)=[^;]{1,512}/gi,
+    scan: scanConnStrings,
     description: 'Connection strings with credentials (ADO.NET / key=value style)',
   },
   {
@@ -1107,6 +1331,7 @@ export const PII_PATTERNS: PiiPattern[] = [
     label: 'JWT',
     category: 'enterprise',
     regex: /\beyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+/g,
+    scan: scanJwts,
     description: 'JSON Web Tokens (JWT)',
   },
   {
@@ -1443,7 +1668,7 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'mothersMaidenName',
     label: 'MAIDEN_NAME',
     category: 'identity',
-    regex: /(?:mother'?s?\s*maiden\s*name|Geburtsname|nom\s+de\s+jeune\s+fille)[:\s]+[A-ZÀ-ÿ][a-zà-ÿ]+/gi,
+    regex: new RegExp(String.raw`(?:${MAIDEN_LABELS})[:\s]+${CTX_NAME_WORD}`, 'giu'),
     description: 'Mother\'s maiden name (security question, labeled)',
   },
   {
@@ -1492,7 +1717,7 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'fullNameCtx',
     label: 'FULL_NAME',
     category: 'identity',
-    regex: /(?:full\s*name|first\s*name|last\s*name|surname|family\s*name|given\s*name|Vorname|Nachname|Familienname|nom\s*de\s*famille|prenom|nombre|apellido)[:\s]+[A-ZÀ-ÿ][a-zà-ÿ]+(?:\s+[A-ZÀ-ÿ][a-zà-ÿ]+){0,3}/gi,
+    regex: new RegExp(String.raw`(?:${FULL_NAME_LABELS})[:\s]+${CTX_NAME_WORD}(?:\s+${CTX_NAME_WORD}){0,3}`, 'giu'),
     description: 'Full name, first name, last name (labeled, multi-language)',
   },
   {
@@ -1619,7 +1844,7 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'bloodTypeCtx',
     label: 'BLOOD_TYPE',
     category: 'medical',
-    regex: /(?:blood\s*type|blood\s*group)[:\s]*(?:A|B|AB|O)[+-]?/gi,
+    regex: /(?:blood\s*type|blood\s*group)[:\s]*(?:AB|A|B|O)[+-]?(?![A-Za-z0-9])/gi,
     description: 'Blood type (contextual)',
   },
   {

@@ -82,6 +82,8 @@ export interface VaultEntry {
   createdAt: string;
   // Set when the original was a JSON number, so Restore returns a number.
   numeric?: boolean;
+  /** The original was a JSON boolean, so Restore returns true or false. */
+  boolean?: boolean;
 }
 
 export interface VaultSession {
