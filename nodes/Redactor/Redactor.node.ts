@@ -1213,7 +1213,7 @@ export class Redactor implements INodeType {
         reservedTokens: collectTokenLike(items.map((it) => it.json)),
         keyOrigins: new WeakMap(),
         inputText: collectInputText(items.map((it) => it.json)),
-        lockedSpans: new Map(),
+        lockedSpans: new WeakMap(),
       };
 
       const allHits: RedactionHit[] = [];

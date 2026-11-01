@@ -39,7 +39,8 @@ function isAllowListed(value: string, allowList?: AllowDenyEntry[]): boolean {
         case 'contains':
           return value.includes(entry.value);
         case 'regex':
-          if (!isSafeRegex(entry.value)) return false;
+          // Too long to test safely, so the value is not allow-listed and stays redacted.
+          if (!isSafeRegex(entry.value) || value.length > USER_REGEX_MAX_INPUT) return false;
           return new RegExp(entry.value, 'i').test(value);
         default:
           return value === entry.value;
@@ -649,7 +650,7 @@ function redactSemantic(
   const semConf = semantic.label === 'IDENTIFIER' ? AMBIGUOUS_FIELD_CONFIDENCE : SEMANTIC_CONFIDENCE;
   if (semConf < (ctx.confidenceThreshold ?? 0)) return null;
   const replacement = applyRedaction(raw, { label: semantic.label, category: semantic.category }, ctx, vault, sessionId);
-  if (replacement) ctx.lockedSpans?.set(lockKey(itemIndex, display), [[0, replacement.length]]);
+  ctx.lastLocked = replacement ? [[0, replacement.length]] : undefined;
   hits.push({
     token: replacement, original: '***',
     patternName: `semantic_${semantic.label}`,
@@ -669,7 +670,8 @@ function numericMapping(out: string, text: string, ctx: RedactionContext, vault:
     existing.numeric = true;
     return out;
   }
-  const token = existing ? freshToken('NUMBER', vault, sessionId, ctx.reservedTokens) : out;
+  // A composite like [DIG_0][DIG_1] can also come from a string, so the number gets its own token.
+  const token = freshToken('NUMBER', vault, sessionId, ctx.reservedTokens);
   vault.addEntry(sessionId, {
     token, original: text, patternLabel: 'NUMBER', category: 'other', createdAt: new Date().toISOString(), numeric: true,
   });
@@ -695,9 +697,12 @@ function redactNumber(
   if (!ctx.skipSemantic) out = redactSemantic(text, numCtx, vault, sessionId, hits, itemIndex, path, display, siblingKeys);
   if (out === null && ctx.scanNumbers) out = redactText(text, numCtx, vault, sessionId, hits, itemIndex, display);
   if (out === null || out === text) return value;
-  if (ctx.mode !== 'token' && ctx.mode !== 'pseudonymize') return out;
+  if (ctx.mode !== 'token' && ctx.mode !== 'pseudonymize') {
+    ctx.lastLocked = [[0, out.length]];
+    return out;
+  }
   const mapped = numericMapping(out, text, ctx, vault, sessionId);
-  ctx.lockedSpans?.set(lockKey(itemIndex, display), [[0, mapped.length]]);
+  ctx.lastLocked = [[0, mapped.length]];
   return mapped;
 }
 
@@ -751,7 +756,8 @@ function redactObject(
     origins.set(outKey, k);
     const childDisplay = display ? `${display}.${outKey}` : outKey;
     for (const h of keyHits) hits.push({ ...h, field: childDisplay });
-    obj[outKey] = redactValue(v, ctx, vault, sessionId, hits, itemIndex, fieldPath, siblingKeys, childDisplay);
+    obj[outKey] = lockChild(ctx, obj, outKey, () =>
+      redactValue(v, ctx, vault, sessionId, hits, itemIndex, fieldPath, siblingKeys, childDisplay));
   }
   ctx.keyOrigins?.set(obj, origins);
   return obj;
@@ -786,9 +792,12 @@ export function redactValue(
   }
 
   if (Array.isArray(value)) {
-    return value.map((v, i) =>
-      redactValue(v, ctx, vault, sessionId, hits, itemIndex, `${currentPath}[${i}]`, undefined, `${displayPath}[${i}]`),
-    );
+    const out: unknown[] = [];
+    value.forEach((v, i) => {
+      out.push(lockChild(ctx, out, String(i), () =>
+        redactValue(v, ctx, vault, sessionId, hits, itemIndex, `${currentPath}[${i}]`, undefined, `${displayPath}[${i}]`)));
+    });
+    return out;
   }
 
   if (value !== null && typeof value === 'object') {
@@ -807,21 +816,16 @@ interface Segment {
   src: number;
 }
 
-// User regexes run on windows of at most this many characters, so polynomial backtracking stays bounded.
-const USER_REGEX_WINDOW = 2048;
+// User regexes never run on longer text. Their matches would be missed silently, so the run stops instead.
+const USER_REGEX_MAX_INPUT = 20_000;
 
-/** Splits a free segment into windows, preferring a whitespace boundary near each window end. */
-function windows(seg: Segment, size: number): Segment[] {
-  const out: Segment[] = [];
-  let at = 0;
-  while (seg.text.length - at > size) {
-    const cut = seg.text.lastIndexOf(' ', at + size);
-    const end = cut > at + size / 2 ? cut + 1 : at + size;
-    out.push({ text: seg.text.slice(at, end), locked: false, src: seg.src + at });
-    at = end;
-  }
-  out.push({ text: seg.text.slice(at), locked: false, src: seg.src + at });
-  return out;
+/** Stops the run when a custom or deny-list regex would have to scan text over the limit. */
+function assertUserRegexInput(text: string, what: string): void {
+  if (text.length <= USER_REGEX_MAX_INPUT) return;
+  throw new Error(
+    `${what} cannot scan a value of ${text.length} characters, the limit is ${USER_REGEX_MAX_INPUT}. ` +
+      'Exclude the field with field rules, or remove the regex.',
+  );
 }
 
 /** Returns a replacement, or null to leave the match as free text. Offsets are source positions. */
@@ -842,13 +846,13 @@ function replaceInFree(seg: Segment, re: RegExp, fn: Replacer, into: Segment[]):
 }
 
 /** Replaces only in free segments, so one detector never edits another detector's output. */
-function replaceFree(pass: TextPass, re: RegExp, fn: Replacer, window?: number): void {
+function replaceFree(pass: TextPass, re: RegExp, fn: Replacer): void {
   const flags = re.flags.includes('g') ? re.flags : `${re.flags}g`;
   const global = new RegExp(re.source, flags);
   const next: Segment[] = [];
   for (const seg of pass.segs) {
     if (seg.locked) next.push(seg);
-    else for (const piece of window ? windows(seg, window) : [seg]) replaceInFree(piece, global, fn, next);
+    else replaceInFree(seg, global, fn, next);
   }
   pass.segs = next;
 }
@@ -882,17 +886,17 @@ function denyListRegex(entry: AllowDenyEntry): RegExp | null {
 
 function denyListStage(pass: TextPass): void {
   for (const entry of pass.ctx.denyList ?? []) {
+    if (entry.type === 'regex') assertUserRegexInput(pass.source, `Deny list regex "${entry.value}"`);
     try {
       const re = denyListRegex(entry);
       if (!re) continue;
-      const window = entry.type === 'regex' ? USER_REGEX_WINDOW : undefined;
       replaceFree(pass, re, (match) =>
         TOKEN_RE.test(match)
           ? null
           : redactMatch(pass, match, { label: 'DENY_LIST', category: 'other' }, {
               patternName: 'denyList', patternLabel: 'DENY_LIST', category: 'other', confidence: DENY_LIST_CONFIDENCE,
             }),
-      window);
+      );
     } catch { /* skip invalid */ }
   }
 }
@@ -916,24 +920,24 @@ function builtInStage(pass: TextPass): void {
   }
 }
 
-/** Distinct names in free text, each with the source offset of its first occurrence. */
-function freeNames(pass: TextPass): Map<string, number> {
-  const names = new Map<string, number>();
+/** Distinct names found in free text. */
+function freeNames(pass: TextPass): Set<string> {
+  const names = new Set<string>();
   for (const seg of pass.segs) {
-    if (seg.locked) continue;
-    for (const nm of detectNamesInText(seg.text)) if (!names.has(nm.name)) names.set(nm.name, seg.src + nm.start);
+    if (!seg.locked) for (const nm of detectNamesInText(seg.text)) names.add(nm.name);
   }
   return names;
 }
 
+/** Each occurrence is scored on its own context, so one weak mention never hides a strong one. */
 function nameStage(pass: TextPass): void {
   if (pass.ctx.skipSemantic) return;
-  for (const [name, start] of freeNames(pass)) {
+  for (const name of freeNames(pass)) {
     if ((name.includes('[') && name.includes(']')) || isAllowListed(name, pass.ctx.allowList)) continue;
-    const confidence = hasContextWords(pass.source, start, start + name.length, NAME_CONTEXT_WORDS) ? 0.8 : 0.65;
-    if (confidence < pass.threshold) continue;
     let replacement: string | undefined;
-    replaceFree(pass, new RegExp(escapeRe(name), 'g'), (match) => {
+    replaceFree(pass, new RegExp(escapeRe(name), 'g'), (match, start) => {
+      const confidence = hasContextWords(pass.source, start, start + match.length, NAME_CONTEXT_WORDS) ? 0.8 : 0.65;
+      if (confidence < pass.threshold) return null;
       replacement ??= redactMatch(pass, match, { label: 'PERSON_NAME', category: 'identity' }, {
         patternName: 'personNameDict', patternLabel: 'PERSON_NAME', category: 'identity', confidence,
       });
@@ -947,6 +951,7 @@ function customStage(pass: TextPass): void {
   for (const cp of pass.ctx.customPatterns) {
     if (!cp.label || !cp.regex || !isSafeRegex(cp.regex)) continue;
     const pattern = { label: cp.label.toUpperCase(), category: (cp.category as PiiCategory) || 'identity' };
+    assertUserRegexInput(pass.source, `Custom pattern "${cp.label}"`);
     try {
       replaceFree(pass, new RegExp(cp.regex, 'g'), (match) =>
         TOKEN_RE.test(match) || isAllowListed(match, pass.ctx.allowList)
@@ -955,24 +960,34 @@ function customStage(pass: TextPass): void {
               patternName: `custom_${cp.label}`, patternLabel: pattern.label, category: pattern.category,
               confidence: CUSTOM_PATTERN_CONFIDENCE,
             }),
-      USER_REGEX_WINDOW);
+      );
     } catch { /* skip invalid regex */ }
   }
 }
 
-/** Remembers where replacements sit in the output, so Presidio never re-redacts them. */
-function recordLocked(ctx: RedactionContext, itemIndex: number, fieldPath: string, segs: Segment[]): void {
-  if (!ctx.lockedSpans || fieldPath === '') return;
+/** Remembers where replacements sit in the value just produced, so Presidio never re-redacts them. */
+function recordLocked(ctx: RedactionContext, segs: Segment[]): void {
   const spans: Array<[number, number]> = [];
   let at = 0;
   for (const seg of segs) {
     if (seg.locked) spans.push([at, at + seg.text.length]);
     at += seg.text.length;
   }
-  if (spans.length > 0) ctx.lockedSpans.set(lockKey(itemIndex, fieldPath), spans);
+  ctx.lastLocked = spans.length > 0 ? spans : undefined;
 }
 
-const lockKey = (itemIndex: number, fieldPath: string): string => `${itemIndex}\u0000${fieldPath}`;
+/** Stores the locked spans of a child value under its container and key, never under a path string. */
+function lockChild(ctx: RedactionContext, container: object, key: string, compute: () => unknown): unknown {
+  ctx.lastLocked = undefined;
+  const out = compute();
+  if (ctx.lastLocked && ctx.lockedSpans && typeof out === 'string') {
+    const byKey = ctx.lockedSpans.get(container) ?? new Map<string, Array<[number, number]>>();
+    byKey.set(key, ctx.lastLocked);
+    ctx.lockedSpans.set(container, byKey);
+  }
+  ctx.lastLocked = undefined;
+  return out;
+}
 
 /** Redacts PII in a text string. Each stage leaves earlier replacements untouched. */
 function redactText(
@@ -992,7 +1007,7 @@ function redactText(
   builtInStage(pass);
   nameStage(pass);
   customStage(pass);
-  recordLocked(ctx, itemIndex, fieldPath, pass.segs);
+  recordLocked(ctx, pass.segs);
   return pass.segs.map((s) => s.text).join('');
 }
 
@@ -1061,10 +1076,9 @@ function presidioSpans(
   value: string,
   entities: Array<{ entity_type: string; start: number; end: number; score: number }>,
   ctx: RedactionContext,
-  key: string,
+  locked: Array<[number, number]>,
 ): Span[] {
   const threshold = ctx.confidenceThreshold ?? 0;
-  const locked = ctx.lockedSpans?.get(key) ?? [];
   const free = (s: Span) => !locked.some(([start, end]) => s.start < end && start < s.end);
   return resolveOverlaps(toUtf16Spans(value, entities).filter((s) => s.score >= threshold && free(s)));
 }
@@ -1077,12 +1091,13 @@ async function presidioRedactString(
   hits: RedactionHit[],
   itemIndex: number,
   path: string,
+  locked: Array<[number, number]>,
 ): Promise<string> {
   if (value.trim().length === 0 || TOKEN_RE.test(value)) return value;
   const entities = await analyzeWithPresidio(
     ctx.presidioUrl!, value, ctx.presidioLanguage || 'en', 0.4, 10000, ctx.presidioRequest,
   );
-  const spans = presidioSpans(value, entities, ctx, lockKey(itemIndex, path));
+  const spans = presidioSpans(value, entities, ctx, locked);
   let text = value;
   for (const span of spans) {
     const matchedText = value.slice(span.start, span.end);
@@ -1110,11 +1125,12 @@ async function presidioWalk(
   itemIndex: number,
   path: string,
   policyPath: string,
+  locked: Array<[number, number]> = [],
 ): Promise<unknown> {
   if (typeof value === 'string') {
     if (!shouldProcessField(policyPath, ctx.fieldMode, ctx.fieldRules)) return value;
     try {
-      return await presidioRedactString(value, ctx, vault, sessionId, hits, itemIndex, path);
+      return await presidioRedactString(value, ctx, vault, sessionId, hits, itemIndex, path, locked);
     } catch {
       return value; // Presidio failed for this field. Regex results stand.
     }
@@ -1122,7 +1138,8 @@ async function presidioWalk(
   if (Array.isArray(value)) {
     const out: unknown[] = [];
     for (let i = 0; i < value.length; i++) {
-      out.push(await presidioWalk(value[i], ctx, vault, sessionId, hits, itemIndex, `${path}[${i}]`, `${policyPath}[${i}]`));
+      const lock = ctx.lockedSpans?.get(value)?.get(String(i));
+      out.push(await presidioWalk(value[i], ctx, vault, sessionId, hits, itemIndex, `${path}[${i}]`, `${policyPath}[${i}]`, lock));
     }
     return out;
   }
@@ -1133,7 +1150,8 @@ async function presidioWalk(
       const original = origins?.get(k) ?? k;
       const child = path ? `${path}.${k}` : k;
       const childPolicy = policyPath ? `${policyPath}.${original}` : original;
-      out[k] = await presidioWalk(v, ctx, vault, sessionId, hits, itemIndex, child, childPolicy);
+      const lock = ctx.lockedSpans?.get(value)?.get(k);
+      out[k] = await presidioWalk(v, ctx, vault, sessionId, hits, itemIndex, child, childPolicy, lock);
     }
     return out;
   }

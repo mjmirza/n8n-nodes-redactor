@@ -64,6 +64,15 @@ Sessions written before the change keep working, because the passphrase is the s
 - A pseudonym never equals text present anywhere in the input of the run, so some pseudonyms differ from 4.2 for the same session and value. Existing mappings are reused.
 - A number and a string with the same digits get separate vault entries, so each restores with its own type.
 
+## Behaviour changes in 5.0
+
+- A custom pattern or deny list regex stops the run when it would scan a value longer than 20,000 characters. The error names the regex and the limit. Exclude long fields with field rules, or remove the regex. Built-in patterns, exact and contains deny list entries are not limited.
+- An allow list regex is never tested on a value longer than 20,000 characters, so such a value is not allow-listed and stays redacted.
+- The 2048-character windows from 4.3 are gone. Every pattern scans the whole value, and `^` and `$` mean the start and end of the value again.
+- The regex safety check is stricter. A group that can match nothing, such as `(?:b|)`, no longer separates two repetitions, escapes such as `\x61` count as the character they stand for, and a negated class such as `[^a]` is compared case-insensitively after negation. Patterns such as `^a+(?:b|)a+`, `\x61+\x61+` and `A+[^a]A+` are now refused.
+- A number that a pattern matched only in part is replaced with one `[NUMBER_n]` token, so it never shares a token with a string of the same digits.
+- Each mention of a repeated name is scored on its own context, so a later mention with a context word such as "spoke with" can be redacted at a threshold the first mention misses.
+
 ## Tenant profile fields
 
 All fields are optional. Unknown fields are rejected so a typo never passes silently.

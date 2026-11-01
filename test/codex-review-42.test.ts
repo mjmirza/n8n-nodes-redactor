@@ -115,7 +115,7 @@ describe('re-review 42-6: sequential overlapping repetition is refused', () => {
     expect(checkRegex(re)).toBeNull();
   });
 
-  it('matches user regexes in bounded windows on long input', () => {
+  it('matches user regexes on long input up to the length limit', () => {
     const vault = new MemoryVault();
     vault.getOrCreateSession('cap', 0);
     const ctx: RedactionContext = {
@@ -123,7 +123,7 @@ describe('re-review 42-6: sequential overlapping repetition is refused', () => {
       fieldRules: [], fieldMode: 'all', skipSemantic: true,
     };
     const started = Date.now();
-    const out = redactValue({ note: 'a'.repeat(200_000) + '? mail bob@example.com' }, ctx, vault, 'cap', [], 0);
+    const out = redactValue({ note: 'a'.repeat(19_000) + '? mail bob@example.com' }, ctx, vault, 'cap', [], 0);
     expect(Date.now() - started).toBeLessThan(10_000);
     expect(JSON.stringify(out)).not.toContain('bob@example.com');
   });
