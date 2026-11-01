@@ -23,11 +23,26 @@ export async function resolvePassphrase(fns: IExecuteFunctions): Promise<string>
     }
     return cred.passphrase;
   }
+  return legacyPassphrase(fns);
+}
+
+/** Only an absent or empty legacy setting means no encryption. A failed evaluation stops the run. */
+function legacyPassphrase(fns: IExecuteFunctions): string {
+  let raw: unknown;
   try {
-    return (fns.getNodeParameter('vaultPassphrase', 0, '') as string) || '';
-  } catch {
-    return '';
+    raw = fns.getNodeParameter('vaultPassphrase', 0, '');
+  } catch (error) {
+    throw new NodeOperationError(fns.getNode(), 'The legacy vault passphrase could not be evaluated, so the vault stays locked.', {
+      description: `Nothing was stored. Fix the expression, or move the passphrase into a Redactor Vault credential. Cause: ${(error as Error).message}`,
+    });
   }
+  if (raw === undefined || raw === null || raw === '') return '';
+  if (typeof raw !== 'string') {
+    throw new NodeOperationError(fns.getNode(), 'The legacy vault passphrase is not text, so the vault stays locked.', {
+      description: 'Nothing was stored. Set the passphrase to a text value, or use a Redactor Vault credential.',
+    });
+  }
+  return raw;
 }
 
 /** Memory sessions are keyed by workflow, so one workflow never sees another's sessions. */
@@ -49,7 +64,7 @@ export function assertUserRegexes(
 ): void {
   const refuse = (what: string, problem: string): never => {
     throw new NodeOperationError(fns.getNode(), `${what} regex ${problem}`, {
-      description: 'Rewrite the pattern without nested or alternated repetition, for example [ab]+ instead of (a|b)+.',
+      description: 'Rewrite the pattern without nested or alternated repetition, for example [ab]+ instead of (a|b)+, and without two repetitions in a row that can match the same characters, for example \\d+ instead of \\d+\\d+. Put a fixed separator such as - or @ between repeated parts.',
     });
   };
   for (const cp of customPatterns) {

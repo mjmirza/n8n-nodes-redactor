@@ -56,6 +56,14 @@ Sessions written before the change keep working, because the passphrase is the s
 - The regex safety check also refuses alternation or optional parts hidden inside a wrapper group, such as `^(?:(?:a|aa))+$` or `(a?)+`.
 - Purge removes expired sessions and sessions encrypted with a different passphrase too.
 
+## Behaviour changes in 4.3
+
+- The regex safety check refuses two repetitions in a row that can match the same characters, such as `\d+\d+`, `a*a*b` or `[a-z]+\w+@`. Such patterns can take exponential time on short input. The check compares the characters each part can match, treats upper and lower case as the same, and counts every character outside ASCII as one shared character. A fixed separator between the parts makes the pattern safe again, as in `[A-Z]+-[0-9]+` or `\w+@\w+[.]\w+`. Patterns such as `[A-Z]{2}[0-9]+`, `EMP-[0-9]{6}?`, `\d{3}-\d{4}` and `[0-9]{3}` are still accepted.
+- Custom pattern and deny list regexes run on windows of at most 2048 characters of long text, split at a space when one is near. A match that would cross a window edge is not found.
+- A legacy passphrase expression that fails to evaluate stops the run. Fix the expression or move the passphrase into a Redactor Vault credential.
+- A pseudonym never equals text present anywhere in the input of the run, so some pseudonyms differ from 4.2 for the same session and value. Existing mappings are reused.
+- A number and a string with the same digits get separate vault entries, so each restores with its own type.
+
 ## Tenant profile fields
 
 All fields are optional. Unknown fields are rejected so a typo never passes silently.

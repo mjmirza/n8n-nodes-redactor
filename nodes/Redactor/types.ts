@@ -121,4 +121,10 @@ export interface RedactionContext {
   reservedTokens?: Set<string>;
   // Output object to its key origins, so Presidio applies field rules to original paths.
   keyOrigins?: WeakMap<object, Map<string, string>>;
+  // Every string, key and number of the input; a pseudonym never equals text already present.
+  inputText?: string;
+  // Positions of replacements per item and output path, so Presidio never re-redacts them.
+  lockedSpans?: Map<string, Array<[number, number]>>;
+  // Set while redacting a number, so its mapping never merges with a text mapping.
+  numeric?: boolean;
 }

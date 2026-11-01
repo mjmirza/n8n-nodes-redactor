@@ -8,7 +8,6 @@ import {
   PiiPattern,
   RedactionContext,
   RedactionHit,
-  RedactionMode,
   RedactionReport,
   VaultEntry,
 } from './types';
@@ -105,12 +104,12 @@ type RedactionPattern = PiiPattern | { label: string; category: PiiCategory };
 function storeReversible(
   match: string,
   pattern: RedactionPattern,
+  ctx: RedactionContext,
   vault: IVault,
   sessionId: string,
-  dedup: boolean,
   makeToken: () => string,
 ): string {
-  if (dedup) {
+  if (ctx.dedup) {
     const existing = vault.findByOriginal(sessionId, match);
     if (existing && !existing.numeric) return existing.token;
   }
@@ -133,28 +132,22 @@ const IRREVERSIBLE: Record<string, (match: string, label: string) => string> = {
   remove: () => '', // Complete removal, no trace left
 };
 
-/**
- * Apply redaction with proper category on the vault entry.
- */
+/** Applies the context's mode to one match. Reversible modes store the mapping in the vault. */
 function applyRedaction(
   match: string,
   pattern: RedactionPattern,
-  mode: RedactionMode,
+  ctx: RedactionContext,
   vault: IVault,
   sessionId: string,
-  dedup: boolean,
-  reserved?: Set<string>,
 ): string {
-  if (mode === 'token') {
-    return storeReversible(match, pattern, vault, sessionId, dedup, () => freshToken(pattern.label, vault, sessionId, reserved));
+  if (ctx.mode === 'token') {
+    return storeReversible(match, pattern, ctx, vault, sessionId, () => freshToken(pattern.label, vault, sessionId, ctx.reservedTokens));
   }
-  if (mode === 'pseudonymize') {
+  if (ctx.mode === 'pseudonymize') {
     // The pseudonym is stored as the token so Restore can map it back.
-    return storeReversible(match, pattern, vault, sessionId, dedup, () =>
-      uniquePseudonym(vault, sessionId, match, pattern.label),
-    );
+    return storeReversible(match, pattern, ctx, vault, sessionId, () => uniquePseudonym(vault, sessionId, match, pattern.label, ctx));
   }
-  const irreversible = IRREVERSIBLE[mode];
+  const irreversible = IRREVERSIBLE[ctx.mode];
   return irreversible ? irreversible(match, pattern.label) : match;
 }
 
@@ -169,33 +162,49 @@ function freshToken(label: string, vault: IVault, sessionId: string, reserved?: 
 
 const TOKEN_LIKE_RE = /\[[A-Z][A-Z0-9_]*_\d+\]/g;
 
-/** Collects token-shaped text from every string and key, so generated tokens never collide with input. */
-export function collectTokenLike(value: unknown, into: Set<string> = new Set()): Set<string> {
-  const scan = (text: string) => {
-    for (const m of text.matchAll(TOKEN_LIKE_RE)) into.add(m[0]);
-  };
-  if (typeof value === 'string') scan(value);
-  else if (Array.isArray(value)) value.forEach((v) => collectTokenLike(v, into));
+/** Visits every string, key and number in a JSON value. */
+function walkText(value: unknown, visit: (text: string) => void): void {
+  if (typeof value === 'string' || typeof value === 'number') visit(String(value));
+  else if (Array.isArray(value)) value.forEach((v) => walkText(v, visit));
   else if (value !== null && typeof value === 'object') {
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      scan(k);
-      collectTokenLike(v, into);
+      visit(k);
+      walkText(v, visit);
     }
   }
+}
+
+/** Collects token-shaped text from every string and key, so generated tokens never collide with input. */
+export function collectTokenLike(value: unknown, into: Set<string> = new Set()): Set<string> {
+  walkText(value, (text) => {
+    for (const m of text.matchAll(TOKEN_LIKE_RE)) into.add(m[0]);
+  });
   return into;
 }
 
-/** Retries deterministically until the pseudonym is free in this session. */
-function uniquePseudonym(vault: IVault, sessionId: string, original: string, label: string): string {
+/** Joins every string, key and number of the input, so pseudonyms can avoid text already present. */
+export function collectInputText(value: unknown): string {
+  const parts: string[] = [];
+  walkText(value, (text) => parts.push(text));
+  return parts.join('\u0000');
+}
+
+/** A same-original mapping is reused only when it has the same type, numeric or text. */
+function reusable(taken: VaultEntry | undefined, original: string, ctx: RedactionContext): boolean {
+  return !!taken && taken.original === original && !!taken.numeric === !!ctx.numeric;
+}
+
+/** Retries deterministically until the pseudonym is free in this session and absent from the input. */
+function uniquePseudonym(vault: IVault, sessionId: string, original: string, label: string, ctx: RedactionContext): string {
   const entries = vault.getSession(sessionId)?.entries ?? {};
   for (let attempt = 0; attempt < 32; attempt++) {
     const seed = attempt === 0 ? original : `${original}\u0000${attempt}`;
     const candidate = generatePseudonym(sessionId, seed, label);
+    if (candidate === original || ctx.inputText?.includes(candidate)) continue;
     const taken = entries[candidate];
-    if (candidate === original) continue;
-    if (!taken || taken.original === original) return candidate;
+    if (!taken || reusable(taken, original, ctx)) return candidate;
   }
-  return generateToken(label, Object.keys(entries).length);
+  return freshToken(label, vault, sessionId, ctx.reservedTokens);
 }
 
 /**
@@ -639,9 +648,8 @@ function redactSemantic(
   if (isAllowListed(raw, ctx.allowList)) return null;
   const semConf = semantic.label === 'IDENTIFIER' ? AMBIGUOUS_FIELD_CONFIDENCE : SEMANTIC_CONFIDENCE;
   if (semConf < (ctx.confidenceThreshold ?? 0)) return null;
-  const replacement = applyRedaction(
-    raw, { label: semantic.label, category: semantic.category }, ctx.mode, vault, sessionId, ctx.dedup, ctx.reservedTokens,
-  );
+  const replacement = applyRedaction(raw, { label: semantic.label, category: semantic.category }, ctx, vault, sessionId);
+  if (replacement) ctx.lockedSpans?.set(lockKey(itemIndex, display), [[0, replacement.length]]);
   hits.push({
     token: replacement, original: '***',
     patternName: `semantic_${semantic.label}`,
@@ -653,7 +661,22 @@ function redactSemantic(
   return replacement;
 }
 
-/** Numbers keep their type unless a semantic field or a pattern claims them; a whole-number token restores as a number. */
+/** A whole-value mapping with the number's type, so Restore returns a number even for partial matches. */
+function numericMapping(out: string, text: string, ctx: RedactionContext, vault: IVault, sessionId: string): string {
+  const entries = vault.getSession(sessionId)?.entries ?? {};
+  const existing = entries[out];
+  if (existing?.original === text) {
+    existing.numeric = true;
+    return out;
+  }
+  const token = existing ? freshToken('NUMBER', vault, sessionId, ctx.reservedTokens) : out;
+  vault.addEntry(sessionId, {
+    token, original: text, patternLabel: 'NUMBER', category: 'other', createdAt: new Date().toISOString(), numeric: true,
+  });
+  return token;
+}
+
+/** Numbers keep their type unless a semantic field or a pattern claims them. */
 function redactNumber(
   value: number,
   ctx: RedactionContext,
@@ -666,15 +689,16 @@ function redactNumber(
   siblingKeys?: string[],
 ): unknown {
   const text = String(value);
-  // A fresh token per number, so a string occurrence of the same digits never restores as a number.
-  const numCtx: RedactionContext = { ...ctx, dedup: false };
+  // Numeric mappings never share an entry with a text occurrence of the same digits.
+  const numCtx: RedactionContext = { ...ctx, dedup: false, numeric: true };
   let out: string | null = null;
   if (!ctx.skipSemantic) out = redactSemantic(text, numCtx, vault, sessionId, hits, itemIndex, path, display, siblingKeys);
   if (out === null && ctx.scanNumbers) out = redactText(text, numCtx, vault, sessionId, hits, itemIndex, display);
   if (out === null || out === text) return value;
-  const entry = vault.getSession(sessionId)?.entries[out];
-  if (entry && entry.original === text) entry.numeric = true;
-  return out;
+  if (ctx.mode !== 'token' && ctx.mode !== 'pseudonymize') return out;
+  const mapped = numericMapping(out, text, ctx, vault, sessionId);
+  ctx.lockedSpans?.set(lockKey(itemIndex, display), [[0, mapped.length]]);
+  return mapped;
 }
 
 /** Keys can carry PII too, so they are scanned like text and never take another key's name. */
@@ -776,45 +800,63 @@ export function redactValue(
 
 const escapeRe = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+/** Free text is untouched source text starting at src. Locked text is a replacement this pass produced. */
 interface Segment {
   text: string;
   locked: boolean;
+  src: number;
 }
 
-/** Splits text into free segments and locked ones, the replacements this pass already produced. */
-function segments(text: string, produced: Set<string>): Segment[] {
-  if (produced.size === 0) return [{ text, locked: false }];
-  const guard = new RegExp([...produced].sort((a, b) => b.length - a.length).map(escapeRe).join('|'), 'g');
+// User regexes run on windows of at most this many characters, so polynomial backtracking stays bounded.
+const USER_REGEX_WINDOW = 2048;
+
+/** Splits a free segment into windows, preferring a whitespace boundary near each window end. */
+function windows(seg: Segment, size: number): Segment[] {
   const out: Segment[] = [];
-  let last = 0;
-  for (const m of text.matchAll(guard)) {
-    const at = m.index ?? 0;
-    if (at > last) out.push({ text: text.slice(last, at), locked: false });
-    out.push({ text: m[0], locked: true });
-    last = at + m[0].length;
+  let at = 0;
+  while (seg.text.length - at > size) {
+    const cut = seg.text.lastIndexOf(' ', at + size);
+    const end = cut > at + size / 2 ? cut + 1 : at + size;
+    out.push({ text: seg.text.slice(at, end), locked: false, src: seg.src + at });
+    at = end;
   }
-  if (last < text.length) out.push({ text: text.slice(last), locked: false });
+  out.push({ text: seg.text.slice(at), locked: false, src: seg.src + at });
   return out;
 }
 
-type Replacer = (match: string, ...args: unknown[]) => string;
+/** Returns a replacement, or null to leave the match as free text. Offsets are source positions. */
+type Replacer = (match: string, sourceOffset: number) => string | null;
 
-/** Replaces only in free segments, so one detector never edits another detector's output. */
-function replaceOutside(text: string, produced: Set<string>, re: RegExp, fn: Replacer): string {
-  return segments(text, produced)
-    .map((seg) => (seg.locked ? seg.text : seg.text.replace(new RegExp(re.source, re.flags), fn)))
-    .join('');
+function replaceInFree(seg: Segment, re: RegExp, fn: Replacer, into: Segment[]): void {
+  let last = 0;
+  for (const m of seg.text.matchAll(re)) {
+    const at = m.index ?? 0;
+    if (m[0] === '') continue;
+    const replacement = fn(m[0], seg.src + at);
+    if (replacement === null) continue;
+    if (at > last) into.push({ text: seg.text.slice(last, at), locked: false, src: seg.src + last });
+    into.push({ text: replacement, locked: true, src: -1 });
+    last = at + m[0].length;
+  }
+  if (last < seg.text.length) into.push({ text: seg.text.slice(last), locked: false, src: seg.src + last });
 }
 
-function occursOutside(text: string, produced: Set<string>, needle: string): boolean {
-  return segments(text, produced).some((seg) => !seg.locked && seg.text.includes(needle));
+/** Replaces only in free segments, so one detector never edits another detector's output. */
+function replaceFree(pass: TextPass, re: RegExp, fn: Replacer, window?: number): void {
+  const flags = re.flags.includes('g') ? re.flags : `${re.flags}g`;
+  const global = new RegExp(re.source, flags);
+  const next: Segment[] = [];
+  for (const seg of pass.segs) {
+    if (seg.locked) next.push(seg);
+    else for (const piece of window ? windows(seg, window) : [seg]) replaceInFree(piece, global, fn, next);
+  }
+  pass.segs = next;
 }
 
 /** State shared by the stages of one text pass. */
 interface TextPass {
   source: string;
-  result: string;
-  produced: Set<string>;
+  segs: Segment[];
   threshold: number;
   ctx: RedactionContext;
   vault: IVault;
@@ -826,12 +868,10 @@ interface TextPass {
 
 type HitDetail = Pick<RedactionHit, 'patternName' | 'patternLabel' | 'category' | 'confidence'>;
 
-/** Stores the replacement, records the hit, and locks the replacement against later stages. */
+/** Stores the replacement and records the hit. The caller locks it by position. */
 function redactMatch(pass: TextPass, match: string, pattern: RedactionPattern, detail: HitDetail): string {
-  const { ctx, vault, sessionId } = pass;
-  const replacement = applyRedaction(match, pattern, ctx.mode, vault, sessionId, ctx.dedup, ctx.reservedTokens);
+  const replacement = applyRedaction(match, pattern, pass.ctx, pass.vault, pass.sessionId);
   pass.hits.push({ token: replacement, original: '***', field: pass.fieldPath, itemIndex: pass.itemIndex, ...detail });
-  if (replacement) pass.produced.add(replacement);
   return replacement;
 }
 
@@ -845,25 +885,24 @@ function denyListStage(pass: TextPass): void {
     try {
       const re = denyListRegex(entry);
       if (!re) continue;
-      pass.result = replaceOutside(pass.result, pass.produced, re, (match) =>
+      const window = entry.type === 'regex' ? USER_REGEX_WINDOW : undefined;
+      replaceFree(pass, re, (match) =>
         TOKEN_RE.test(match)
-          ? match
+          ? null
           : redactMatch(pass, match, { label: 'DENY_LIST', category: 'other' }, {
               patternName: 'denyList', patternLabel: 'DENY_LIST', category: 'other', confidence: DENY_LIST_CONFIDENCE,
             }),
-      );
+      window);
     } catch { /* skip invalid */ }
   }
 }
 
-function builtInMatch(pass: TextPass, pattern: PiiPattern, match: string, args: unknown[]): string {
-  if (TOKEN_RE.test(match) || (match.startsWith('[') && match.endsWith(']'))) return match;
+function builtInMatch(pass: TextPass, pattern: PiiPattern, match: string, offset: number): string | null {
+  if (TOKEN_RE.test(match) || (match.startsWith('[') && match.endsWith(']'))) return null;
   const validatorPassed = pattern.validate ? pattern.validate(match) : true;
-  if (!validatorPassed || isAllowListed(match, pass.ctx.allowList)) return match;
-  const offsetArg = args[args.length - 2];
-  const offset = typeof offsetArg === 'number' ? offsetArg : 0;
+  if (!validatorPassed || isAllowListed(match, pass.ctx.allowList)) return null;
   const confidence = calculateConfidence(pattern.name, !!pattern.validate, validatorPassed, pass.source, offset, offset + match.length);
-  if (confidence < pass.threshold) return match;
+  if (confidence < pass.threshold) return null;
   return redactMatch(pass, match, pattern, {
     patternName: pattern.name, patternLabel: pattern.label, category: pattern.category, confidence,
   });
@@ -873,22 +912,33 @@ function builtInMatch(pass: TextPass, pattern: PiiPattern, match: string, args: 
 function builtInStage(pass: TextPass): void {
   const enabled = getPatternsByNames(pass.ctx.enabledPatterns);
   for (const pattern of [...enabled.filter((p) => p.validate), ...enabled.filter((p) => !p.validate)]) {
-    const re = new RegExp(pattern.regex.source, pattern.regex.flags);
-    pass.result = replaceOutside(pass.result, pass.produced, re, (match, ...args) => builtInMatch(pass, pattern, match, args));
+    replaceFree(pass, pattern.regex, (match, offset) => builtInMatch(pass, pattern, match, offset));
   }
+}
+
+/** Distinct names in free text, each with the source offset of its first occurrence. */
+function freeNames(pass: TextPass): Map<string, number> {
+  const names = new Map<string, number>();
+  for (const seg of pass.segs) {
+    if (seg.locked) continue;
+    for (const nm of detectNamesInText(seg.text)) if (!names.has(nm.name)) names.set(nm.name, seg.src + nm.start);
+  }
+  return names;
 }
 
 function nameStage(pass: TextPass): void {
   if (pass.ctx.skipSemantic) return;
-  for (const nm of detectNamesInText(pass.result)) {
-    if ((nm.name.includes('[') && nm.name.includes(']')) || isAllowListed(nm.name, pass.ctx.allowList)) continue;
-    const confidence = hasContextWords(pass.source, nm.start, nm.end, NAME_CONTEXT_WORDS) ? 0.8 : 0.65;
-    if (confidence < pass.threshold || !occursOutside(pass.result, pass.produced, nm.name)) continue;
-    const before = new Set(pass.produced);
-    const replacement = redactMatch(pass, nm.name, { label: 'PERSON_NAME', category: 'identity' }, {
-      patternName: 'personNameDict', patternLabel: 'PERSON_NAME', category: 'identity', confidence,
+  for (const [name, start] of freeNames(pass)) {
+    if ((name.includes('[') && name.includes(']')) || isAllowListed(name, pass.ctx.allowList)) continue;
+    const confidence = hasContextWords(pass.source, start, start + name.length, NAME_CONTEXT_WORDS) ? 0.8 : 0.65;
+    if (confidence < pass.threshold) continue;
+    let replacement: string | undefined;
+    replaceFree(pass, new RegExp(escapeRe(name), 'g'), (match) => {
+      replacement ??= redactMatch(pass, match, { label: 'PERSON_NAME', category: 'identity' }, {
+        patternName: 'personNameDict', patternLabel: 'PERSON_NAME', category: 'identity', confidence,
+      });
+      return replacement;
     });
-    pass.result = replaceOutside(pass.result, before, new RegExp(escapeRe(nm.name), 'g'), () => replacement);
   }
 }
 
@@ -898,17 +948,31 @@ function customStage(pass: TextPass): void {
     if (!cp.label || !cp.regex || !isSafeRegex(cp.regex)) continue;
     const pattern = { label: cp.label.toUpperCase(), category: (cp.category as PiiCategory) || 'identity' };
     try {
-      pass.result = replaceOutside(pass.result, pass.produced, new RegExp(cp.regex, 'g'), (match) =>
+      replaceFree(pass, new RegExp(cp.regex, 'g'), (match) =>
         TOKEN_RE.test(match) || isAllowListed(match, pass.ctx.allowList)
-          ? match
+          ? null
           : redactMatch(pass, match, pattern, {
               patternName: `custom_${cp.label}`, patternLabel: pattern.label, category: pattern.category,
               confidence: CUSTOM_PATTERN_CONFIDENCE,
             }),
-      );
+      USER_REGEX_WINDOW);
     } catch { /* skip invalid regex */ }
   }
 }
+
+/** Remembers where replacements sit in the output, so Presidio never re-redacts them. */
+function recordLocked(ctx: RedactionContext, itemIndex: number, fieldPath: string, segs: Segment[]): void {
+  if (!ctx.lockedSpans || fieldPath === '') return;
+  const spans: Array<[number, number]> = [];
+  let at = 0;
+  for (const seg of segs) {
+    if (seg.locked) spans.push([at, at + seg.text.length]);
+    at += seg.text.length;
+  }
+  if (spans.length > 0) ctx.lockedSpans.set(lockKey(itemIndex, fieldPath), spans);
+}
+
+const lockKey = (itemIndex: number, fieldPath: string): string => `${itemIndex}\u0000${fieldPath}`;
 
 /** Redacts PII in a text string. Each stage leaves earlier replacements untouched. */
 function redactText(
@@ -921,14 +985,15 @@ function redactText(
   fieldPath: string,
 ): string {
   const pass: TextPass = {
-    source: text, result: text, produced: new Set(), threshold: ctx.confidenceThreshold ?? 0,
+    source: text, segs: [{ text, locked: false, src: 0 }], threshold: ctx.confidenceThreshold ?? 0,
     ctx, vault, sessionId, hits, itemIndex, fieldPath,
   };
   denyListStage(pass);
   builtInStage(pass);
   nameStage(pass);
   customStage(pass);
-  return pass.result;
+  recordLocked(ctx, itemIndex, fieldPath, pass.segs);
+  return pass.segs.map((s) => s.text).join('');
 }
 
 /** Single pass over the source string, so an inserted original is never rescanned as a token. */
@@ -991,6 +1056,19 @@ function resolveOverlaps(spans: Span[]): Span[] {
   return kept.sort((a, b) => b.start - a.start);
 }
 
+/** Spans above the threshold that do not touch a replacement the regex pass produced. */
+function presidioSpans(
+  value: string,
+  entities: Array<{ entity_type: string; start: number; end: number; score: number }>,
+  ctx: RedactionContext,
+  key: string,
+): Span[] {
+  const threshold = ctx.confidenceThreshold ?? 0;
+  const locked = ctx.lockedSpans?.get(key) ?? [];
+  const free = (s: Span) => !locked.some(([start, end]) => s.start < end && start < s.end);
+  return resolveOverlaps(toUtf16Spans(value, entities).filter((s) => s.score >= threshold && free(s)));
+}
+
 async function presidioRedactString(
   value: string,
   ctx: RedactionContext,
@@ -1004,8 +1082,7 @@ async function presidioRedactString(
   const entities = await analyzeWithPresidio(
     ctx.presidioUrl!, value, ctx.presidioLanguage || 'en', 0.4, 10000, ctx.presidioRequest,
   );
-  const threshold = ctx.confidenceThreshold ?? 0;
-  const spans = resolveOverlaps(toUtf16Spans(value, entities).filter((s) => s.score >= threshold));
+  const spans = presidioSpans(value, entities, ctx, lockKey(itemIndex, path));
   let text = value;
   for (const span of spans) {
     const matchedText = value.slice(span.start, span.end);
@@ -1013,7 +1090,7 @@ async function presidioRedactString(
     if (isAllowListed(matchedText, ctx.allowList)) continue;
     const label = getRedactorLabel(span.entityType);
     const category = getRedactorCategory(span.entityType) as PiiCategory;
-    const replacement = applyRedaction(matchedText, { label, category }, ctx.mode, vault, sessionId, ctx.dedup, ctx.reservedTokens);
+    const replacement = applyRedaction(matchedText, { label, category }, ctx, vault, sessionId);
     text = text.slice(0, span.start) + replacement + text.slice(span.end);
     hits.push({
       token: replacement, original: '***',
