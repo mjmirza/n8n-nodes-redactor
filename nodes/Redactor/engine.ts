@@ -409,7 +409,9 @@ function recordNewToken(vault: IVault, sessionId: string, token: string): void {
   if (!entries || Object.prototype.hasOwnProperty.call(entries, token)) return;
   const index = tokenAutomata.get(entries);
   if (!index) return;
-  extendTokenDelta(index, token);
+  // Defer matcher work to the next lookup. Past the rebuild threshold, drop the cache instead.
+  index.pending.push(token);
+  if (deltaOverLimit(index)) tokenAutomata.delete(entries);
 }
 
 function addMapping(vault: IVault, sessionId: string, entry: VaultEntry): void {
@@ -1498,6 +1500,7 @@ interface TokenIndex {
   base: TokenState[];
   baseSize: number;
   deltaSize: number;
+  pending: string[];
   levels: TokenLevel[];
 }
 
@@ -1562,13 +1565,19 @@ function extendTokenDelta(index: TokenIndex, token: string): void {
   index.deltaSize++;
 }
 
+function deltaOverLimit(index: TokenIndex): boolean {
+  return index.deltaSize + index.pending.length > Math.max(MIN_TOKEN_DELTA, index.baseSize * TOKEN_DELTA_FRACTION);
+}
+
 function tokenAutomaton(entries: Record<string, unknown>): TokenIndex {
   let index = tokenAutomata.get(entries);
-  if (!index || index.deltaSize > Math.max(MIN_TOKEN_DELTA, index.baseSize * TOKEN_DELTA_FRACTION)) {
+  if (!index || deltaOverLimit(index)) {
     const tokens = Object.keys(entries);
-    index = { base: buildTokenAutomaton(tokens), baseSize: tokens.length, deltaSize: 0, levels: [] };
+    index = { base: buildTokenAutomaton(tokens), baseSize: tokens.length, deltaSize: 0, levels: [], pending: [] };
     tokenAutomata.set(entries, index);
   }
+  for (const token of index.pending) extendTokenDelta(index, token);
+  index.pending.length = 0;
   return index;
 }
 
