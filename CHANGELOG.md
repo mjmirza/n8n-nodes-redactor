@@ -8,7 +8,7 @@ Planned: random scoped tokens.
 
 ## [7.0.0] - 2026-11-01
 
-Fixes every finding from a ninth adversarial review, run against 6.1.0. Each one has a regression test in `test/codex-review-61.test.ts` that fails on 6.1.0. This is a major release because saved workflows can produce different output: more values are redacted, booleans under sensitive keys are replaced, and some pseudonyms become bracketed tokens. `docs/MIGRATION.md` lists every change.
+Fixes every finding from a ninth adversarial review, run against 6.1.0. Each one has a regression test in `test/codex-review-61.test.ts` that fails on 6.1.0. This is a major release because saved workflows can produce different output: more values are redacted, booleans under sensitive keys are replaced, and some pseudonyms become bracketed tokens. `docs/MIGRATION.md` lists every change. The review rounds on the 7.0.0 branch that followed are listed, each finding with its pinning test, in [docs/RESOLVED-FINDINGS.md](docs/RESOLVED-FINDINGS.md).
 
 ### Security
 - **Restore could return the wrong value for pseudonyms.** Text next to a pseudonym could spell another stored pseudonym, so `1EMP309 EMP608` restored as `EMP608 EMP608`. Such a replacement now gets a bracketed token, which neighbouring text cannot extend.
