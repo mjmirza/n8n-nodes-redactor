@@ -6,6 +6,31 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 Planned: random scoped tokens, and numbers restored as numbers.
 
+## [4.1.0] - 2026-11-01
+
+Fixes every High and Medium finding from an adversarial security review of 4.0.0. Each one has a regression test in `test/codex-review.test.ts`.
+
+### Security
+- **The vault passphrase can now live in an n8n credential.** Attach a Redactor Vault credential to the node. n8n stores it encrypted, apart from the workflow JSON, and it takes priority. Previously the passphrase was a node parameter, saved in plain text next to the encrypted vault, so anyone who could read the workflow could decrypt it. The old field still works so saved workflows keep restoring, and it is marked deprecated. See [docs/MIGRATION.md](docs/MIGRATION.md#moving-the-passphrase-to-a-credential).
+- **In-Memory sessions no longer cross workflows.** The memory vault was one map for the whole n8n process, so a second workflow could list another workflow's session IDs with Stats, restore its tokens to the original values, and purge them. Sessions are now kept per workflow, including listing, eviction and purge.
+- **Prompt injection diagnostics no longer carry PII.** A Base64 payload was decoded and its text, including any email or name in it, was put into `_promptInjection` on the Data output. The decoded text is now withheld and every excerpt and field path is redacted before it is emitted.
+- **Presidio offsets now match JavaScript strings.** Presidio counts Unicode code points and the node sliced UTF-16 units, so an emoji before a name shifted the span and left the name in the output. Offsets are converted before any text is replaced.
+- **Presidio now analyzes strings inside arrays.** Values such as `notes: ["Call Xochitl Quispe"]` were never sent, so names in lists reached the model. One walker now handles objects and arrays alike.
+- **PII in JSON keys is redacted.** A key such as `alice@example.com` passed through to the output and appeared in report field paths. Keys are now scanned like values, report paths use the redacted key, and Restore puts the original key back.
+- **A different passphrase can no longer overwrite an encrypted session.** Redacting into a session ID that another passphrase wrote treated the record as missing and replaced it, so the first workflow lost its data. The node now stops with an error and leaves the record alone.
+- **Unsafe regexes are refused instead of run or silently skipped.** Tenant profiles accepted `^(a+)+$`, which could stall a run, while the runtime silently skipped valid patterns such as `EMP-[0-9]{6}?`. Profiles and the runtime now share one structural check that refuses nested or alternated repetition with a clear error, and accepts lazy quantifiers.
+
+### Fixed
+- **Restore rescanned the values it inserted.** An original that looked like a token, such as `[EMAIL_1]`, was replaced a second time. Restore is now a single pass over the source text.
+- **Two people could get the same pseudonym.** Different names that hashed to the same fake name overwrote each other, so Restore returned one person for both. Pseudonyms are now unique within a session, and the vault refuses a token that already maps to a different value.
+- **Overlapping Presidio spans corrupted tokens.** A PERSON and an ORGANIZATION span over the same text produced a broken token. The stronger span now wins and originals are read from the untouched source.
+- **Presidio ignored field exclusions.** An excluded field was still sent to Presidio. The same field rules, with full nested paths, now apply before the call.
+- **Verify passed numeric PII.** `{ "ssn": 123456789 }` and a numeric card number returned PASS. Detect and Verify now scan numbers as text.
+- **Read-only runs no longer rewrite workflow storage.** Stats, and Restore with Delete After Restore off, used to remove expired sessions, which made n8n save a full copy of the storage. Expired sessions are now skipped on read and removed on the next Redact, so fewer runs can write a stale copy. See the note on concurrent runs in the README.
+
+### Changed
+- Type declaration files are no longer shipped in the package. n8n loads the compiled JavaScript only.
+
 ## [4.0.0] - 2026-11-01
 
 The version skips to 4.0.0 because 2.0.0 and 3.0.0 to 3.0.2 were published in March 2026 and later withdrawn, and npm never reuses a version number.

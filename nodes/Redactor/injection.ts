@@ -335,7 +335,7 @@ export function detectPromptInjection(text: string): PromptInjectionResult {
           matches.push({
             category: 'encoded_payload',
             pattern: 'Base64-encoded injection payload detected',
-            matchedText: `Decoded: "${decoded.slice(0, 50)}..."`,
+            matchedText: `(decoded payload of ${decoded.length} characters withheld)`,
             severity: 'HIGH',
             score: 0.35,
           });

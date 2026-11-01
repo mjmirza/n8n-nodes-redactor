@@ -1,6 +1,7 @@
 import * as crypto from 'crypto';
 import { getPatternsByNames } from './patterns';
 import { IVault } from './vault';
+import { checkRegex } from './regexSafety';
 import {
   AllowDenyEntry,
   PiiCategory,
@@ -97,64 +98,77 @@ function hashValue(value: string): string {
   return crypto.createHash('sha256').update(value).digest('hex').slice(0, 12);
 }
 
+type RedactionPattern = PiiPattern | { label: string; category: PiiCategory };
+
+/** Stores a reversible replacement in the vault, reusing an existing one when dedup is on. */
+function storeReversible(
+  match: string,
+  pattern: RedactionPattern,
+  vault: IVault,
+  sessionId: string,
+  dedup: boolean,
+  makeToken: () => string,
+): string {
+  if (dedup) {
+    const existing = vault.findByOriginal(sessionId, match);
+    if (existing) return existing.token;
+  }
+  const token = makeToken();
+  vault.addEntry(sessionId, {
+    token,
+    original: match,
+    patternLabel: pattern.label,
+    category: ('category' in pattern ? pattern.category : 'identity') as PiiCategory,
+    createdAt: new Date().toISOString(),
+  });
+  return token;
+}
+
+const IRREVERSIBLE: Record<string, (match: string, label: string) => string> = {
+  mask: (match, label) => maskValue(match, label),
+  hash: (match, label) => `[${label}:${hashValue(match)}]`,
+  redact: () => '[REDACTED]',
+  blackout: (match) => '\u2588'.repeat(match.length), // visual black bars
+  remove: () => '', // Complete removal, no trace left
+};
+
 /**
  * Apply redaction with proper category on the vault entry.
  */
 function applyRedaction(
   match: string,
-  pattern: PiiPattern | { label: string; category: PiiCategory },
+  pattern: RedactionPattern,
   mode: RedactionMode,
   vault: IVault,
   sessionId: string,
   dedup: boolean,
 ): string {
-  switch (mode) {
-    case 'token': {
-      if (dedup) {
-        const existing = vault.findByOriginal(sessionId, match);
-        if (existing) return existing.token;
-      }
+  if (mode === 'token') {
+    return storeReversible(match, pattern, vault, sessionId, dedup, () => {
       const session = vault.getSession(sessionId);
-      const index = session ? Object.keys(session.entries).length : 0;
-      const token = generateToken(pattern.label, index);
-      vault.addEntry(sessionId, {
-        token,
-        original: match,
-        patternLabel: pattern.label,
-        category: ('category' in pattern ? pattern.category : 'identity') as PiiCategory,
-        createdAt: new Date().toISOString(),
-      });
-      return token;
-    }
-    case 'mask':
-      return maskValue(match, pattern.label);
-    case 'hash':
-      return `[${pattern.label}:${hashValue(match)}]`;
-    case 'redact':
-      return `[REDACTED]`;
-    case 'blackout':
-      return '\u2588'.repeat(match.length); // █████ visual black bars
-    case 'remove':
-      return ''; // Complete removal, no trace left
-    case 'pseudonymize': {
-      if (dedup) {
-        const existing = vault.findByOriginal(sessionId, match);
-        if (existing) return existing.token;
-      }
-      const pseudonym = generatePseudonym(sessionId, match, pattern.label);
-      // Store pseudonym as 'token' in vault for restoration
-      vault.addEntry(sessionId, {
-        token: pseudonym,
-        original: match,
-        patternLabel: pattern.label,
-        category: ('category' in pattern ? pattern.category : 'identity') as PiiCategory,
-        createdAt: new Date().toISOString(),
-      });
-      return pseudonym;
-    }
-    default:
-      return match;
+      return generateToken(pattern.label, session ? Object.keys(session.entries).length : 0);
+    });
   }
+  if (mode === 'pseudonymize') {
+    // The pseudonym is stored as the token so Restore can map it back.
+    return storeReversible(match, pattern, vault, sessionId, dedup, () =>
+      uniquePseudonym(vault, sessionId, match, pattern.label),
+    );
+  }
+  const irreversible = IRREVERSIBLE[mode];
+  return irreversible ? irreversible(match, pattern.label) : match;
+}
+
+/** Retries deterministically until the pseudonym is free in this session. */
+function uniquePseudonym(vault: IVault, sessionId: string, original: string, label: string): string {
+  const entries = vault.getSession(sessionId)?.entries ?? {};
+  for (let attempt = 0; attempt < 32; attempt++) {
+    const seed = attempt === 0 ? original : `${original}\u0000${attempt}`;
+    const candidate = generatePseudonym(sessionId, seed, label);
+    const taken = entries[candidate];
+    if (!taken || taken.original === original) return candidate;
+  }
+  return generateToken(label, Object.keys(entries).length);
 }
 
 /**
@@ -201,22 +215,9 @@ function fieldPathMatches(actual: string, pattern: string): boolean {
   }
 }
 
-/**
- * Validate a user-supplied regex for safety (prevent ReDoS).
- * Rejects nested quantifiers and other dangerous patterns.
- */
+/** Shared with profile parsing so both accept and refuse the same patterns. */
 function isSafeRegex(regexStr: string): boolean {
-  // Reject nested quantifiers like (a+)+, (a*)+, (a?)+, (a{1,})+
-  if (/(\+|\*|\?|\{[^}]+\})\s*(\+|\*|\?|\{)/.test(regexStr)) return false;
-  // Reject patterns longer than 500 chars
-  if (regexStr.length > 500) return false;
-  // Try to compile it
-  try {
-    new RegExp(regexStr);
-    return true;
-  } catch {
-    return false;
-  }
+  return checkRegex(regexStr) === null;
 }
 
 /**
@@ -594,10 +595,104 @@ function getSemanticLabel(fieldKey: string, siblingKeys?: string[]): { label: st
   return null;
 }
 
-/**
- * Main redaction engine - recursively walks JSON and applies redaction.
- * Uses BOTH semantic field-name detection AND regex pattern matching.
- */
+/** Replaces a whole value whose field name says what it is. Returns null when not applicable. */
+function redactSemantic(
+  raw: string,
+  ctx: RedactionContext,
+  vault: IVault,
+  sessionId: string,
+  hits: RedactionHit[],
+  itemIndex: number,
+  path: string,
+  display: string,
+  siblingKeys?: string[],
+): string | null {
+  const semantic = getSemanticLabel(path, siblingKeys);
+  if (!semantic || !semantic.label || raw.trim().length === 0) return null;
+  if (isAllowListed(raw, ctx.allowList)) return null;
+  const semConf = semantic.label === 'IDENTIFIER' ? AMBIGUOUS_FIELD_CONFIDENCE : SEMANTIC_CONFIDENCE;
+  if (semConf < (ctx.confidenceThreshold ?? 0)) return null;
+  const replacement = applyRedaction(
+    raw, { label: semantic.label, category: semantic.category }, ctx.mode, vault, sessionId, ctx.dedup,
+  );
+  hits.push({
+    token: replacement, original: '***',
+    patternName: `semantic_${semantic.label}`,
+    patternLabel: semantic.label,
+    category: semantic.category,
+    field: display, itemIndex,
+    confidence: semConf,
+  });
+  return replacement;
+}
+
+/** Numbers keep their type unless a semantic field or, when scanning numbers, a pattern claims them. */
+function redactNumber(
+  value: number,
+  ctx: RedactionContext,
+  vault: IVault,
+  sessionId: string,
+  hits: RedactionHit[],
+  itemIndex: number,
+  path: string,
+  display: string,
+  siblingKeys?: string[],
+): unknown {
+  const text = String(value);
+  if (!ctx.skipSemantic) {
+    const semantic = redactSemantic(text, ctx, vault, sessionId, hits, itemIndex, path, display, siblingKeys);
+    if (semantic !== null) return semantic;
+  }
+  if (!ctx.scanNumbers) return value;
+  const scanned = redactText(text, ctx, vault, sessionId, hits, itemIndex, display);
+  return scanned === text ? value : scanned;
+}
+
+/** Keys can carry PII too, so they are scanned like text and kept unique within the object. */
+function redactKey(
+  key: string,
+  taken: Record<string, unknown>,
+  ctx: RedactionContext,
+  vault: IVault,
+  sessionId: string,
+  itemIndex: number,
+  keyHits: RedactionHit[],
+): string {
+  let out = redactText(key, ctx, vault, sessionId, keyHits, itemIndex, '');
+  if (out === key) return key;
+  const base = out;
+  for (let n = 1; out === '' || out in taken; n++) out = `${base}_${n}`;
+  return out;
+}
+
+function redactObject(
+  value: Record<string, unknown>,
+  ctx: RedactionContext,
+  vault: IVault,
+  sessionId: string,
+  hits: RedactionHit[],
+  itemIndex: number,
+  path: string,
+  display: string,
+): Record<string, unknown> {
+  const entries = Object.entries(value);
+  const siblingKeys = entries.map(([k]) => k);
+  const obj: Record<string, unknown> = {};
+  for (const [k, v] of entries) {
+    const fieldPath = path ? `${path}.${k}` : k;
+    const keyHits: RedactionHit[] = [];
+    const outKey = shouldProcessField(fieldPath, ctx.fieldMode, ctx.fieldRules)
+      ? redactKey(k, obj, ctx, vault, sessionId, itemIndex, keyHits)
+      : k;
+    const childDisplay = display ? `${display}.${outKey}` : outKey;
+    for (const h of keyHits) hits.push({ ...h, field: childDisplay });
+    obj[outKey] = redactValue(v, ctx, vault, sessionId, hits, itemIndex, fieldPath, siblingKeys, childDisplay);
+  }
+  return obj;
+}
+
+/** Walks JSON and redacts with semantic field names and patterns. */
+// currentPath keeps original keys for field rules; displayPath is the redacted path for reports.
 export function redactValue(
   value: unknown,
   ctx: RedactionContext,
@@ -607,88 +702,31 @@ export function redactValue(
   itemIndex: number,
   currentPath: string = '',
   siblingKeys?: string[],
+  displayPath: string = currentPath,
 ): unknown {
+  const processed = shouldProcessField(currentPath, ctx.fieldMode, ctx.fieldRules);
   if (typeof value === 'string') {
-    if (!shouldProcessField(currentPath, ctx.fieldMode, ctx.fieldRules)) {
-      return value;
-    }
-
-    // Semantic field-name detection: if the field name tells us what this is,
-    // redact the ENTIRE value without needing regex to match.
-    // Skipped in verify mode (we only care about actual PII values, not field names).
+    if (!processed) return value;
     if (!ctx.skipSemantic) {
-    const semantic = getSemanticLabel(currentPath, siblingKeys);
-    if (semantic && semantic.label && value.trim().length > 0) {
-      // Allow list check
-      if (isAllowListed(value, ctx.allowList)) {
-        // Skip to regex detection
-      } else {
-        const semConf = semantic.label === 'IDENTIFIER' ? AMBIGUOUS_FIELD_CONFIDENCE : SEMANTIC_CONFIDENCE;
-        if (semConf >= (ctx.confidenceThreshold ?? 0)) {
-          const replacement = applyRedaction(
-            value, { label: semantic.label, category: semantic.category },
-            ctx.mode, vault, sessionId, ctx.dedup,
-          );
-          hits.push({
-            token: replacement, original: '***',
-            patternName: `semantic_${semantic.label}`,
-            patternLabel: semantic.label,
-            category: semantic.category,
-            field: currentPath, itemIndex,
-            confidence: semConf,
-          });
-          return replacement;
-        }
-      }
+      const semantic = redactSemantic(value, ctx, vault, sessionId, hits, itemIndex, currentPath, displayPath, siblingKeys);
+      if (semantic !== null) return semantic;
     }
-    } // end skipSemantic check
-
-    // Fall through to regex-based detection
-    return redactText(value, ctx, vault, sessionId, hits, itemIndex, currentPath);
+    return redactText(value, ctx, vault, sessionId, hits, itemIndex, displayPath);
   }
 
-  if (typeof value === 'number' && !ctx.skipSemantic) {
-    if (!shouldProcessField(currentPath, ctx.fieldMode, ctx.fieldRules)) {
-      return value;
-    }
-    const semantic = getSemanticLabel(currentPath, siblingKeys);
-    if (semantic && semantic.label) {
-      const semConf = semantic.label === 'IDENTIFIER' ? AMBIGUOUS_FIELD_CONFIDENCE : SEMANTIC_CONFIDENCE;
-      if (semConf >= (ctx.confidenceThreshold ?? 0)) {
-        const strValue = String(value);
-        const replacement = applyRedaction(
-          strValue, { label: semantic.label, category: semantic.category },
-          ctx.mode, vault, sessionId, ctx.dedup,
-        );
-        hits.push({
-          token: replacement, original: '***',
-          patternName: `semantic_${semantic.label}`,
-          patternLabel: semantic.label,
-          category: semantic.category,
-          field: currentPath, itemIndex,
-          confidence: semConf,
-        });
-        return replacement;
-      }
-    }
+  if (typeof value === 'number') {
+    if (!processed) return value;
+    return redactNumber(value, ctx, vault, sessionId, hits, itemIndex, currentPath, displayPath, siblingKeys);
   }
 
   if (Array.isArray(value)) {
     return value.map((v, i) =>
-      redactValue(v, ctx, vault, sessionId, hits, itemIndex, `${currentPath}[${i}]`),
+      redactValue(v, ctx, vault, sessionId, hits, itemIndex, `${currentPath}[${i}]`, undefined, `${displayPath}[${i}]`),
     );
   }
 
   if (value !== null && typeof value === 'object') {
-    const entries = Object.entries(value as Record<string, unknown>);
-    // Collect sibling keys for context-aware detection
-    const siblingKeys = entries.map(([k]) => k);
-    const obj: Record<string, unknown> = {};
-    for (const [k, v] of entries) {
-      const fieldPath = currentPath ? `${currentPath}.${k}` : k;
-      obj[k] = redactValue(v, ctx, vault, sessionId, hits, itemIndex, fieldPath, siblingKeys);
-    }
-    return obj;
+    return redactObject(value as Record<string, unknown>, ctx, vault, sessionId, hits, itemIndex, currentPath, displayPath);
   }
 
   return value;
@@ -858,43 +896,130 @@ function redactText(
   return result;
 }
 
-/**
- * Restore redacted tokens back to original values.
- * Uses single-pass replacement to avoid infinite loops.
- */
-export function restoreValue(value: unknown, vault: IVault, sessionId: string): unknown {
-  const session = vault.getSession(sessionId);
-  if (!session) return value;
+/** Single pass over the source string, so an inserted original is never rescanned as a token. */
+function makeRestorer(entries: Record<string, { original: string }>): (text: string) => string {
+  const tokens = Object.keys(entries).filter((t) => t.length > 0).sort((a, b) => b.length - a.length);
+  if (tokens.length === 0) return (text) => text;
+  const re = new RegExp(tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g');
+  return (text) => text.replace(re, (token) => entries[token].original);
+}
 
-  if (typeof value === 'string') {
-    let result = value;
-    // Single-pass: replace each token exactly once per occurrence.
-    // Use split/join which is safe against infinite loops.
-    for (const [token, e] of Object.entries(session.entries)) {
-      result = result.split(token).join(e.original);
-    }
-    return result;
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((v) => restoreValue(v, vault, sessionId));
-  }
-
+function restoreWith(value: unknown, restore: (text: string) => string): unknown {
+  if (typeof value === 'string') return restore(value);
+  if (Array.isArray(value)) return value.map((v) => restoreWith(v, restore));
   if (value !== null && typeof value === 'object') {
     const obj: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      obj[k] = restoreValue(v, vault, sessionId);
+      obj[restore(k)] = restoreWith(v, restore);
     }
     return obj;
   }
-
   return value;
 }
 
 /**
- * Run Presidio NLP analysis on all string values in an item,
- * then redact the detected entities. Called AFTER regex-based redaction.
- * This catches entities that regex missed (especially PERSON names in free text).
+ * Restore redacted tokens back to original values, in values and in keys.
+ */
+export function restoreValue(value: unknown, vault: IVault, sessionId: string): unknown {
+  const session = vault.getSession(sessionId);
+  if (!session) return value;
+  return restoreWith(value, makeRestorer(session.entries));
+}
+
+interface Span {
+  start: number;
+  end: number;
+  score: number;
+  entityType: string;
+}
+
+/** Presidio reports Python code point offsets. JavaScript strings index UTF-16 units. */
+function toUtf16Spans(text: string, entities: Array<{ entity_type: string; start: number; end: number; score: number }>): Span[] {
+  const offsets = [0];
+  for (const ch of text) offsets.push(offsets[offsets.length - 1] + ch.length);
+  return entities
+    .filter((e) => Number.isInteger(e.start) && Number.isInteger(e.end) && e.start >= 0 && e.end > e.start && e.end < offsets.length)
+    .map((e) => ({ start: offsets[e.start], end: offsets[e.end], score: e.score, entityType: e.entity_type }));
+}
+
+/** Keeps the strongest span in each overlapping region: higher score, then longer. */
+function resolveOverlaps(spans: Span[]): Span[] {
+  const ranked = [...spans].sort((a, b) => b.score - a.score || (b.end - b.start) - (a.end - a.start) || a.start - b.start);
+  const kept: Span[] = [];
+  for (const span of ranked) {
+    if (!kept.some((k) => span.start < k.end && k.start < span.end)) kept.push(span);
+  }
+  return kept.sort((a, b) => b.start - a.start);
+}
+
+async function presidioRedactString(
+  value: string,
+  ctx: RedactionContext,
+  vault: IVault,
+  sessionId: string,
+  hits: RedactionHit[],
+  itemIndex: number,
+  path: string,
+): Promise<string> {
+  if (value.trim().length === 0 || TOKEN_RE.test(value)) return value;
+  const entities = await analyzeWithPresidio(
+    ctx.presidioUrl!, value, ctx.presidioLanguage || 'en', 0.4, 10000, ctx.presidioRequest,
+  );
+  const threshold = ctx.confidenceThreshold ?? 0;
+  const spans = resolveOverlaps(toUtf16Spans(value, entities).filter((s) => s.score >= threshold));
+  let text = value;
+  for (const span of spans) {
+    const matchedText = value.slice(span.start, span.end);
+    if (TOKEN_RE.test(matchedText) || (matchedText.startsWith('[') && matchedText.endsWith(']'))) continue;
+    if (isAllowListed(matchedText, ctx.allowList)) continue;
+    const label = getRedactorLabel(span.entityType);
+    const category = getRedactorCategory(span.entityType) as PiiCategory;
+    const replacement = applyRedaction(matchedText, { label, category }, ctx.mode, vault, sessionId, ctx.dedup);
+    text = text.slice(0, span.start) + replacement + text.slice(span.end);
+    hits.push({
+      token: replacement, original: '***',
+      patternName: `presidio_${span.entityType}`, patternLabel: label,
+      category, field: path, itemIndex, confidence: span.score,
+    });
+  }
+  return text;
+}
+
+async function presidioWalk(
+  value: unknown,
+  ctx: RedactionContext,
+  vault: IVault,
+  sessionId: string,
+  hits: RedactionHit[],
+  itemIndex: number,
+  path: string,
+): Promise<unknown> {
+  if (typeof value === 'string') {
+    if (!shouldProcessField(path, ctx.fieldMode, ctx.fieldRules)) return value;
+    try {
+      return await presidioRedactString(value, ctx, vault, sessionId, hits, itemIndex, path);
+    } catch {
+      return value; // Presidio failed for this field. Regex results stand.
+    }
+  }
+  if (Array.isArray(value)) {
+    const out: unknown[] = [];
+    for (let i = 0; i < value.length; i++) out.push(await presidioWalk(value[i], ctx, vault, sessionId, hits, itemIndex, `${path}[${i}]`));
+    return out;
+  }
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = await presidioWalk(v, ctx, vault, sessionId, hits, itemIndex, path ? `${path}.${k}` : k);
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Run Presidio NLP analysis on every string in an item, in objects and arrays alike,
+ * honouring the same field rules as regex redaction. Called AFTER regex-based redaction.
  */
 export async function enhanceWithPresidio(
   data: Record<string, unknown>,
@@ -905,100 +1030,7 @@ export async function enhanceWithPresidio(
   itemIndex: number,
 ): Promise<Record<string, unknown>> {
   if (!ctx.presidioUrl) return data;
-
-  const result: Record<string, unknown> = { ...data };
-
-  for (const [key, value] of Object.entries(result)) {
-    // Recurse into nested objects
-    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-      result[key] = await enhanceWithPresidio(
-        value as Record<string, unknown>, ctx, vault, sessionId, hits, itemIndex,
-      );
-      continue;
-    }
-    // Recurse into arrays
-    if (Array.isArray(value)) {
-      const arr = [];
-      for (const item of value) {
-        if (item !== null && typeof item === 'object') {
-          arr.push(await enhanceWithPresidio(
-            item as Record<string, unknown>, ctx, vault, sessionId, hits, itemIndex,
-          ));
-        } else {
-          arr.push(item);
-        }
-      }
-      result[key] = arr;
-      continue;
-    }
-    if (typeof value !== 'string') continue;
-    if (value.trim().length === 0) continue;
-    // Skip values that are already fully redacted (single token)
-    if (TOKEN_RE.test(value)) continue;
-
-    try {
-      const entities = await analyzeWithPresidio(
-        ctx.presidioUrl,
-        value,
-        ctx.presidioLanguage || 'en',
-        0.4,
-        10000,
-        ctx.presidioRequest,
-      );
-
-      if (entities.length === 0) continue;
-
-      // Sort entities by start position descending (replace from end to preserve positions)
-      const sorted = entities.sort((a, b) => b.start - a.start);
-      let text = value;
-
-      for (const entity of sorted) {
-        const matchedText = text.slice(entity.start, entity.end);
-
-        // Skip if already redacted by regex
-        if (TOKEN_RE.test(matchedText) || (matchedText.startsWith('[') && matchedText.endsWith(']'))) continue;
-
-        // Skip if allow-listed
-        if (isAllowListed(matchedText, ctx.allowList)) continue;
-
-        // Skip if below confidence threshold
-        if (entity.score < (ctx.confidenceThreshold ?? 0)) continue;
-
-        const label = getRedactorLabel(entity.entity_type);
-        const category = getRedactorCategory(entity.entity_type) as PiiCategory;
-
-        const replacement = applyRedaction(
-          matchedText,
-          { label, category },
-          ctx.mode,
-          vault,
-          sessionId,
-          ctx.dedup,
-        );
-
-        // Replace in text
-        text = text.slice(0, entity.start) + replacement + text.slice(entity.end);
-
-        hits.push({
-          token: replacement,
-          original: '***',
-          patternName: `presidio_${entity.entity_type}`,
-          patternLabel: label,
-          category,
-          field: key,
-          itemIndex,
-          confidence: entity.score,
-        });
-      }
-
-      result[key] = text;
-    } catch {
-      // Presidio call failed for this field — skip silently
-      continue;
-    }
-  }
-
-  return result;
+  return (await presidioWalk(data, ctx, vault, sessionId, hits, itemIndex, '')) as Record<string, unknown>;
 }
 
 /**

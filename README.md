@@ -110,7 +110,7 @@ Data source > Detect > Redact > LLM > Verify > Restore > Output > Purge
 | Deduplication | The same value gets the same token everywhere, so the model keeps relationships between fields |
 | Field targeting | Allowlist or denylist paths such as `user.email`, `*.phone` or `metadata.*` |
 | Vault | Workflow Storage by default, so Restore works in later production runs of the same workflow, or In-Memory. Sessions expire after 60 minutes by default |
-| Vault encryption | AES-256-GCM with scrypt key derivation, one passphrase per tenant |
+| Vault encryption | AES-256-GCM with scrypt key derivation, one passphrase per tenant, kept in a Redactor Vault credential. See [Vault encryption](#vault-encryption) |
 | Confidence threshold | Each match carries a 0.0 to 1.0 score. Checksum validated patterns score 0.95 |
 | Allow and deny lists | Values to never redact, such as your support address, and values to always redact, such as project codenames |
 | Prompt injection check | 25+ patterns, including instruction overrides, delimiter escapes, encoded payloads and zero width characters. Returns BLOCK, FLAG or CLEAN |
@@ -121,6 +121,20 @@ Data source > Detect > Redact > LLM > Verify > Restore > Output > Purge
 | Per-tenant profiles | Turn on Use Tenant Profile and paste JSON. Validated on every run. Fields are listed in [docs/MIGRATION.md](https://github.com/mjmirza/n8n-nodes-redactor/blob/master/docs/MIGRATION.md#tenant-profile-fields) |
 
 This node reduces what reaches a model. It is not legal advice and does not on its own make a workflow GDPR or HIPAA compliant.
+
+## Vault encryption
+
+Workflow Storage keeps sessions with the workflow. To encrypt them, create a **Redactor Vault** credential with a passphrase of at least 12 characters and attach it to both the Redact and the Restore node. n8n stores credentials encrypted and apart from the workflow, so the passphrase never sits next to the data it protects. Give each tenant its own credential.
+
+The older Vault Encryption Passphrase field still works so workflows saved with it keep restoring, but it is saved in plain text inside the workflow. When both are set, the credential wins.
+
+Restore needs the same passphrase that Redact used. If Redact meets a session ID that a different passphrase wrote, it stops with an error instead of overwriting it.
+
+### Concurrent runs
+
+n8n saves workflow storage as one block at the end of each production run and does not merge it. If two runs of the same workflow overlap, the one that finishes last wins. A session created by the other run can be lost, and a session purged by the other run can come back until its TTL expires. The node cannot prevent this from inside n8n. To stay safe, keep the Session TTL short, avoid overlapping runs of a workflow that uses Purge (for example by limiting production concurrency on your instance), or use In-Memory storage when Redact and Restore run in the same execution.
+
+In-Memory sessions are kept per workflow and are never visible to another workflow.
 
 ## For developers
 

@@ -1,6 +1,9 @@
 import {
+  ICredentialTestFunctions,
+  ICredentialsDecrypted,
   IDataObject,
   IExecuteFunctions,
+  INodeCredentialTestResult,
   INodeExecutionData,
   INodeType,
   INodeTypeDescription,
@@ -25,6 +28,7 @@ import { buildAuditEntry } from './audit';
 import { resetCircuitBreaker, PresidioRequester } from './presidio';
 import { parseTenantProfile } from './profiles';
 import { generateRopaRecord } from './ropa';
+import { assertUserRegexes, resolvePassphrase, sanitizeInjection, workflowNamespace } from './runtime';
 
 /**
  * Curated high-precision pattern set. These patterns have low false-positive
@@ -89,6 +93,19 @@ export class Redactor implements INodeType {
       name: 'Redactor',
     },
     inputs: [NodeConnectionTypes.Main],
+    credentials: [
+      {
+        name: 'redactorVaultApi',
+        required: false,
+        testedBy: 'redactorVaultPassphrase',
+        displayOptions: {
+          show: {
+            operation: ['redact', 'restore', 'stats', 'purge'],
+            vaultStorage: ['workflow', 'file'],
+          },
+        },
+      },
+    ],
     outputs: `={{((parameters) => (parameters["includeReport"] || parameters["auditLog"]) ? [{ type: "main", displayName: "Data" }, { type: "main", displayName: "Report" }] : [{ type: "main", displayName: "Data" }])($parameter)}}`,
 
     properties: [
@@ -702,7 +719,7 @@ export class Redactor implements INodeType {
           },
         },
         default: '',
-        description: 'Encrypt stored sessions at rest with AES-256-GCM. Leave empty for no encryption. When set, sessions cannot be read without this passphrase. Each tenant should use a different passphrase for complete isolation.',
+        description: 'Deprecated. This field is saved in plain text inside the workflow. Attach a Redactor Vault credential instead, which n8n stores encrypted and which takes priority. Kept so workflows saved with it still restore.',
       },
       {
         displayName: 'Session TTL (Minutes)',
@@ -858,6 +875,21 @@ export class Redactor implements INodeType {
     ],
   };
 
+  methods = {
+    credentialTest: {
+      async redactorVaultPassphrase(
+        this: ICredentialTestFunctions,
+        credential: ICredentialsDecrypted,
+      ): Promise<INodeCredentialTestResult> {
+        const passphrase = String(credential.data?.passphrase ?? '');
+        if (passphrase.length < 12) {
+          return { status: 'Error', message: 'Use a passphrase of at least 12 characters.' };
+        }
+        return { status: 'OK', message: 'Passphrase accepted.' };
+      },
+    },
+  };
+
   async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
     const items = this.getInputData();
     // Aggregate outputs (summaries, reports) link back to every input item.
@@ -889,6 +921,8 @@ export class Redactor implements INodeType {
         // Verify mode: skip semantic field-name detection.
         // Only check if actual PII VALUES leaked through (regex only).
         skipSemantic: operation === 'verify',
+        // Numbers reach the LLM as text too, so they are scanned as their string form.
+        scanNumbers: true,
       };
 
       const allHits: RedactionHit[] = [];
@@ -1001,18 +1035,18 @@ export class Redactor implements INodeType {
 
     // All other operations (redact, restore, stats, purge, classify) use vault
     const vaultStorage = this.getNodeParameter('vaultStorage', 0, 'workflow') as VaultStorage;
-    let vaultPassphrase = '';
-    try { vaultPassphrase = this.getNodeParameter('vaultPassphrase', 0, '') as string; } catch { /* not available */ }
+    const vaultPassphrase = vaultStorage === 'memory' ? '' : await resolvePassphrase(this);
     // Global static data so the Redact and Restore nodes of one workflow share sessions.
     const vault = createVault(
       vaultStorage,
       vaultStorage === 'memory' ? undefined : this.getWorkflowStaticData('global'),
       vaultPassphrase || undefined,
+      workflowNamespace(this),
     );
 
     // ─── STATS ───────────────────────────────
     if (operation === 'stats') {
-      vault.cleanup();
+      // Read only: expired sessions are skipped, never deleted, so no stale static data is written.
       const sessions = vault.listSessions();
       const totalEntries = sessions.reduce((sum, s) => sum + s.entryCount, 0);
       return [[
@@ -1149,8 +1183,17 @@ export class Redactor implements INodeType {
         if (profile.auditLog !== undefined) auditLog = profile.auditLog;
       }
 
+      assertUserRegexes(this, customPatterns, [
+        { name: 'Allow list', entries: allowList },
+        { name: 'Deny list', entries: denyList },
+      ]);
+
       // Initialize vault session
-      vault.getOrCreateSession(sessionId, sessionTtl * 60 * 1000);
+      try {
+        vault.getOrCreateSession(sessionId, sessionTtl * 60 * 1000);
+      } catch (error) {
+        throw new NodeOperationError(this.getNode(), (error as Error).message);
+      }
 
       const ctx: RedactionContext = {
         enabledPatterns,
@@ -1213,7 +1256,7 @@ export class Redactor implements INodeType {
           for (let i = 0; i < items.length; i++) {
             const result = scanForInjection(items[i].json as Record<string, unknown>);
             if (result.detected && (!injectionResult || result.score > injectionResult.score)) {
-              injectionResult = result;
+              injectionResult = sanitizeInjection(result);
             }
           }
         }
@@ -1266,7 +1309,7 @@ export class Redactor implements INodeType {
       if (!session) {
         throw new NodeOperationError(
           this.getNode(),
-          `No vault found for session "${sessionId}". Ensure a Redact node ran first with the same Session ID and vault storage type.`,
+          `No vault found for session "${sessionId}" that this passphrase can open. Ensure a Redact node ran first with the same Session ID, vault storage type and passphrase.`,
           {
             description:
               'Testing step by step? Each "Execute step" gets a new execution ID, and n8n saves workflow storage only after production runs of an active workflow. Run the whole workflow, or set the same fixed Session ID (for example "test-1") on both nodes. Restore only works in the workflow that ran Redact.',

@@ -32,6 +32,23 @@ npm install n8n-nodes-redactor@v1-legacy
 - Stored sessions keep their TTL. Expired sessions are removed on the next run, with or without the passphrase.
 - At most 500 sessions are kept per workflow. The oldest are removed first.
 
+## Moving the passphrase to a credential
+
+From 4.1 the vault passphrase belongs in a Redactor Vault credential. The old Vault Encryption Passphrase field is saved in plain text with the workflow, next to the encrypted sessions.
+
+1. Create a Redactor Vault credential and enter the same passphrase you use today.
+2. Attach it to every Redact and Restore node that shares sessions.
+3. Clear the Vault Encryption Passphrase field on those nodes and save the workflow.
+
+Sessions written before the change keep working, because the passphrase is the same. If you leave the old field filled in, the credential still takes priority.
+
+## Other behaviour changes in 4.1
+
+- Custom patterns, allow list and deny list regexes that repeat a group containing a quantifier or an alternation, such as `(a+)+` or `(a|b)+`, now stop the run with an error. Rewrite them without the nested repetition, for example `[ab]+`. Tenant profiles refuse them the same way.
+- Keys that contain PII are redacted in the output and in report paths. Restore puts them back.
+- Detect and Verify scan numeric values, so a card number stored as a number is reported.
+- In-Memory sessions are kept per workflow. A workflow can no longer list, restore or purge another workflow's sessions.
+
 ## Tenant profile fields
 
 All fields are optional. Unknown fields are rejected so a typo never passes silently.

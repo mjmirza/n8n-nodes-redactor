@@ -101,6 +101,8 @@ export interface RedactionContext {
   fieldRules: FieldRule[];
   fieldMode: 'all' | 'allowlist' | 'denylist';
   skipSemantic?: boolean;
+  /** Scan numeric values as text (Detect and Verify) */
+  scanNumbers?: boolean;
   /** Values to NEVER redact (bypass) */
   allowList?: AllowDenyEntry[];
   /** Values to ALWAYS redact even if no pattern matches */
