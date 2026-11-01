@@ -44,7 +44,7 @@
       "id": "r1",
       "name": "Redact + Injection Check",
       "type": "n8n-nodes-redactor.redactor",
-      "typeVersion": 1,
+      "typeVersion": 2,
       "position": [
         640,
         300
@@ -57,7 +57,7 @@
       "id": "v1",
       "name": "Verify Clean",
       "type": "n8n-nodes-redactor.redactor",
-      "typeVersion": 1,
+      "typeVersion": 2,
       "position": [
         860,
         200
@@ -70,7 +70,7 @@
       "id": "r2",
       "name": "Restore",
       "type": "n8n-nodes-redactor.redactor",
-      "typeVersion": 1,
+      "typeVersion": 2,
       "position": [
         860,
         420

@@ -80,6 +80,35 @@ const RECOMMENDED_PATTERNS = [
   'uuid', 'imei', 'iccid',
 ];
 
+/** Whether a saved parameter value holds an n8n expression anywhere inside it. */
+function hasExpression(value: unknown): boolean {
+  if (typeof value === 'string') return value.startsWith('=');
+  if (Array.isArray(value)) return value.some(hasExpression);
+  if (value !== null && typeof value === 'object') return Object.values(value).some(hasExpression);
+  return false;
+}
+
+/**
+ * A setting the whole run uses, such as the session or the tenant profile. An expression is evaluated for every item,
+ * and the run stops when items disagree, so a mixed batch never silently runs with the first item's settings.
+ */
+function runSetting(fx: IExecuteFunctions, name: string, fallback?: unknown): unknown {
+  const read = (i: number) => (fallback === undefined ? fx.getNodeParameter(name, i) : fx.getNodeParameter(name, i, fallback));
+  const first = read(0);
+  const saved = (fx.getNode().parameters as Record<string, unknown> | undefined)?.[name];
+  if (saved !== undefined && !hasExpression(saved)) return first;
+  const expected = JSON.stringify(first);
+  const count = fx.getInputData().length;
+  for (let i = 1; i < count; i++) {
+    if (JSON.stringify(read(i)) !== expected) {
+      throw new NodeOperationError(fx.getNode(), `The setting "${name}" has a different value for item ${i} than for item 0`, {
+        description: 'One run uses one session and one set of settings. Split the batch first, for example with Loop Over Items, so each run sees one tenant or session.',
+      });
+    }
+  }
+  return first;
+}
+
 function verifyMessage(leaks: number, attachments: number): string {
   if (leaks === 0 && attachments === 0) return 'No PII detected in values. Data appears properly redacted.';
   const parts: string[] = [];
@@ -636,6 +665,30 @@ export class Redactor implements INodeType {
         description: 'Whether to scan input for prompt injection attempts (jailbreaks, instruction overrides, delimiter escapes, encoded payloads) before it reaches an LLM. Detected injections are flagged in the output.',
       },
       {
+        displayName: 'Verify Output',
+        name: 'verifyOutput',
+        type: 'options',
+        displayOptions: {
+          show: {
+            operation: ['verify'],
+          },
+        },
+        options: [
+          {
+            name: 'Report',
+            value: 'report',
+            description: 'Return one report with PASS or FAIL',
+          },
+          {
+            name: 'Items, Stop on FAIL',
+            value: 'gate',
+            description: 'Pass the checked items on unchanged when they pass, and stop the run when they fail. Place it before the LLM.',
+          },
+        ],
+        default: 'report',
+        description: 'What Verify returns',
+      },
+      {
         displayName: 'Binary Attachments',
         name: 'binaryAttachments',
         type: 'options',
@@ -945,7 +998,7 @@ export class Redactor implements INodeType {
     const items = this.getInputData();
     // Aggregate outputs (summaries, reports) link back to every input item.
     const allPaired = items.map((_, i) => ({ item: i }));
-    const operation = this.getNodeParameter('operation', 0) as string;
+    const operation = runSetting(this, 'operation') as string;
     const startTime = Date.now();
 
     // Reset Presidio circuit breaker at start of each execution
@@ -1003,9 +1056,9 @@ export class Redactor implements INodeType {
         };
 
         let includeReport = false;
-        try { includeReport = this.getNodeParameter('includeReport', 0, false) as boolean; } catch { /* parameter hidden for this operation */ }
+        try { includeReport = runSetting(this, 'includeReport', false) as boolean; } catch { /* parameter hidden for this operation */ }
         let auditLog = false;
-        try { auditLog = this.getNodeParameter('auditLog', 0, false) as boolean; } catch { /* parameter hidden for this operation */ }
+        try { auditLog = runSetting(this, 'auditLog', false) as boolean; } catch { /* parameter hidden for this operation */ }
 
         if (includeReport || auditLog) {
           const reportJson: IDataObject = includeReport
@@ -1030,6 +1083,14 @@ export class Redactor implements INodeType {
       const unscannedAttachments = items.reduce((n, item) => n + Object.keys(item.binary ?? {}).length, 0);
       const passed = allHits.length === 0 && unscannedAttachments === 0;
       const verifyReport = buildReport(tempSessionId, allHits);
+      if (runSetting(this, 'verifyOutput', 'report') === 'gate') {
+        if (!passed) {
+          throw new NodeOperationError(this.getNode(), verifyMessage(allHits.length, unscannedAttachments), {
+            description: 'Verify stopped the run before the data reached the next node. Fix the redaction settings and run again.',
+          });
+        }
+        return [items.map((item, i) => ({ ...item, pairedItem: { item: i } }))];
+      }
       return [[{
         json: {
           verified: passed,
@@ -1088,7 +1149,7 @@ export class Redactor implements INodeType {
     }
 
     // All other operations (redact, restore, stats, purge, classify) use vault
-    const vaultStorage = this.getNodeParameter('vaultStorage', 0, 'workflow') as VaultStorage;
+    const vaultStorage = runSetting(this, 'vaultStorage', 'workflow') as VaultStorage;
     const vaultPassphrase = vaultStorage === 'memory' ? '' : await resolvePassphrase(this);
     // Global static data so the Redact and Restore nodes of one workflow share sessions.
     const vault = createVault(
@@ -1126,7 +1187,7 @@ export class Redactor implements INodeType {
     // Only Redact and Restore are bound to a session. Purge and Stats are not.
     let sessionId = '';
     if (operation === 'redact' || operation === 'restore') {
-      sessionId = this.getNodeParameter('sessionId', 0) as string;
+      sessionId = runSetting(this, 'sessionId') as string;
       if (!sessionId) {
         throw new NodeOperationError(this.getNode(), 'Session ID is required');
       }
@@ -1134,27 +1195,27 @@ export class Redactor implements INodeType {
 
     // ─── REDACT ──────────────────────────────
     if (operation === 'redact') {
-      let mode = this.getNodeParameter('redactionMode', 0, 'token') as RedactionMode;
-      const detectionScope = this.getNodeParameter('detectionScope', 0, 'recommended') as string;
+      let mode = runSetting(this, 'redactionMode', 'token') as RedactionMode;
+      const detectionScope = runSetting(this, 'detectionScope', 'recommended') as string;
       let enabledPatterns: string[];
       if (detectionScope === 'all') {
         enabledPatterns = getPatternOptions().map((p) => p.value);
       } else if (detectionScope === 'recommended') {
         enabledPatterns = RECOMMENDED_PATTERNS;
       } else {
-        enabledPatterns = this.getNodeParameter('piiTypes', 0) as string[];
+        enabledPatterns = runSetting(this, 'piiTypes') as string[];
       }
-      let dedup = this.getNodeParameter('dedup', 0, true) as boolean;
-      let fieldMode = this.getNodeParameter('fieldMode', 0, 'all') as 'all' | 'allowlist' | 'denylist';
-      let sessionTtl = this.getNodeParameter('sessionTtl', 0, 60) as number;
-      const includeReport = this.getNodeParameter('includeReport', 0, false) as boolean;
+      let dedup = runSetting(this, 'dedup', true) as boolean;
+      let fieldMode = runSetting(this, 'fieldMode', 'all') as 'all' | 'allowlist' | 'denylist';
+      let sessionTtl = runSetting(this, 'sessionTtl', 60) as number;
+      const includeReport = runSetting(this, 'includeReport', false) as boolean;
 
-      const customPatternsRaw = this.getNodeParameter('customPatterns', 0, {}) as {
+      const customPatternsRaw = runSetting(this, 'customPatterns', {}) as {
         patterns?: CustomPattern[];
       };
       let customPatterns = customPatternsRaw.patterns ?? [];
 
-      const fieldRulesRaw = this.getNodeParameter('fieldRules', 0, {}) as {
+      const fieldRulesRaw = runSetting(this, 'fieldRules', {}) as {
         rules?: Array<{ field: string }>;
       };
       let fieldRules = (fieldRulesRaw.rules ?? []).map((r) => ({
@@ -1175,19 +1236,19 @@ export class Redactor implements INodeType {
         });
         return { statusCode: response.statusCode as number, body: response.body as unknown };
       };
-      const binaryAttachments = this.getNodeParameter('binaryAttachments', 0, 'remove') as string;
+      const binaryAttachments = runSetting(this, 'binaryAttachments', 'remove') as string;
       // Absent settings fall back to their defaults. An expression that fails stops the run, so a broken setting
       // never turns NLP detection off silently.
-      const enablePresidio = this.getNodeParameter('enablePresidio', 0, false) as boolean;
+      const enablePresidio = runSetting(this, 'enablePresidio', false) as boolean;
       let presidioUrl = '';
       let presidioLanguage = 'en';
       if (enablePresidio) {
-        presidioUrl = this.getNodeParameter('presidioUrl', 0, 'http://localhost:5002') as string;
-        presidioLanguage = this.getNodeParameter('presidioLanguage', 0, 'en') as string;
+        presidioUrl = runSetting(this, 'presidioUrl', 'http://localhost:5002') as string;
+        presidioLanguage = runSetting(this, 'presidioLanguage', 'en') as string;
       }
 
       // Parse allow list
-      const allowListRaw = this.getNodeParameter('allowList', 0, {}) as {
+      const allowListRaw = runSetting(this, 'allowList', {}) as {
         entries?: Array<{ value: string; type: string }>;
       };
       let allowList = (allowListRaw.entries ?? []).map((e) => ({
@@ -1196,7 +1257,7 @@ export class Redactor implements INodeType {
       }));
 
       // Parse deny list
-      const denyListRaw = this.getNodeParameter('denyList', 0, {}) as {
+      const denyListRaw = runSetting(this, 'denyList', {}) as {
         entries?: Array<{ value: string; type: string }>;
       };
       let denyList = (denyListRaw.entries ?? []).map((e) => ({
@@ -1205,14 +1266,14 @@ export class Redactor implements INodeType {
       }));
 
       // Confidence threshold
-      let confidenceThreshold = this.getNodeParameter('confidenceThreshold', 0, 0) as number;
+      let confidenceThreshold = runSetting(this, 'confidenceThreshold', 0) as number;
       // The Report output exists only when the node itself turns it on (see outputs).
-      const hasReportOutput = includeReport || (this.getNodeParameter('auditLog', 0, false) as boolean);
-      let auditLog = this.getNodeParameter('auditLog', 0, false) as boolean;
+      const hasReportOutput = includeReport || (runSetting(this, 'auditLog', false) as boolean);
+      let auditLog = runSetting(this, 'auditLog', false) as boolean;
 
       // Tenant profile overrides the node settings it names
-      const useTenantProfile = this.getNodeParameter('useTenantProfile', 0, false) as boolean;
-      const profileRaw = useTenantProfile ? (this.getNodeParameter('tenantProfile', 0, '') as unknown) : '';
+      const useTenantProfile = runSetting(this, 'useTenantProfile', false) as boolean;
+      const profileRaw = useTenantProfile ? (runSetting(this, 'tenantProfile', '') as unknown) : '';
       if (profileRaw !== '' && profileRaw !== undefined && profileRaw !== null) {
         let profile;
         try {
@@ -1316,7 +1377,7 @@ export class Redactor implements INodeType {
       });
 
       // An absent setting means off. A setting whose expression fails stops the run before anything is saved.
-      const promptInjection = this.getNodeParameter('promptInjection', 0, false) as boolean;
+      const promptInjection = runSetting(this, 'promptInjection', false) as boolean;
 
       // Persist vault
       vault.save(sessionId);
@@ -1353,8 +1414,8 @@ export class Redactor implements INodeType {
       if (hasReportOutput) {
         const report: IDataObject = includeReport ? (buildReport(sessionId, allHits) as unknown as IDataObject) : {};
         if (auditEntry) report.audit = auditEntry as unknown as IDataObject;
-        if (includeReport && (this.getNodeParameter('includeRopa', 0, false) as boolean)) {
-          const d = this.getNodeParameter('ropa', 0, {}) as IDataObject;
+        if (includeReport && (runSetting(this, 'includeRopa', false) as boolean)) {
+          const d = runSetting(this, 'ropa', {}) as IDataObject;
           const list = (v: unknown) => String(v ?? '').split(',').map((x) => x.trim()).filter(Boolean);
           report.ropa = generateRopaRecord(
             allHits, classifyData(allHits), items.length, enabledPatterns.length, mode,
@@ -1371,7 +1432,7 @@ export class Redactor implements INodeType {
 
     // ─── RESTORE ─────────────────────────────
     if (operation === 'restore') {
-      const deleteAfterRestore = this.getNodeParameter('deleteAfterRestore', 0, true) as boolean;
+      const deleteAfterRestore = runSetting(this, 'deleteAfterRestore', true) as boolean;
 
       const session = vault.getSession(sessionId);
 
@@ -1402,10 +1463,10 @@ export class Redactor implements INodeType {
 
     // ─── PURGE (delete vault sessions) ──
     if (operation === 'purge') {
-      const purgeScope = this.getNodeParameter('purgeScope', 0, 'all') as string;
+      const purgeScope = runSetting(this, 'purgeScope', 'all') as string;
 
       if (purgeScope === 'specific') {
-        const purgeSessionId = this.getNodeParameter('purgeSessionId', 0, '') as string;
+        const purgeSessionId = runSetting(this, 'purgeSessionId', '') as string;
         if (!purgeSessionId) {
           throw new NodeOperationError(this.getNode(), 'Session ID is required for purging a specific session.');
         }

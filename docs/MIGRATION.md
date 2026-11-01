@@ -127,6 +127,9 @@ Every version:
 - Restore and Detect keep binary attachments. Redact removes them unless Binary Attachments is set to Keep Unscanned, because the node does not scan file content. Verify reports `FAIL` and counts `unscannedAttachments` when an item carries an attachment.
 - In Pseudonymize mode, a string or key that would not restore exactly, because a mapping made for another field spells text next to it, is replaced whole by a `[TEXT_n]` token.
 - A Prompt Injection or Presidio setting whose expression fails stops the run with that error.
+- A run-wide setting given by an expression, such as Session ID or Tenant Profile, must give the same value for every item. When items disagree the run stops. Split mixed batches first, for example with Loop Over Items, so each run sees one tenant.
+- More credentials and identifiers are redacted: OpenAI project, service-account and admin keys, GitHub fine-grained tokens, and nine-character German ID card serial numbers.
+- Verify has a new Verify Output option. The default, Report, is unchanged. Items, Stop on FAIL returns the checked items and stops the run on `FAIL`.
 - A tenant profile with a `NaN` confidence threshold is refused.
 - A built-in pattern match that overlaps an earlier replacement no longer causes a rescan from the next character. Its free parts are still redacted.
 

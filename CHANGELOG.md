@@ -26,7 +26,12 @@ Fixes every finding from a ninth adversarial review, run against 6.1.0. Each one
 - A boolean and the string `true` could share one pseudonym, so Restore returned both with one type. Each boolean gets its own mapping.
 - The run kept a copy of the input in memory after it finished, for the pseudonym collision search. The search index now lives only as long as the run.
 - Report and audit counters for an entity type named like a built-in object property, such as `constructor`, were malformed. They are now plain counts.
-- The README chain placed Verify between the LLM and Restore, where its report replaced the model reply. Verify now runs on a branch.
+- The README chain placed Verify between the LLM and Restore, where its report replaced the model reply. Verify gains a Verify Output option: Items, Stop on FAIL passes the checked items on and stops the run on `FAIL`, so it can sit between Redact and the LLM and gate what the model receives.
+- The restorability check introduced in this release paired properties by position, so a redacted integer-like key such as `"1"` swapped values. Properties now pair by their original key.
+- Session ID, Tenant Profile and every other run-wide setting were read from the first item only, so a mixed-tenant batch ran with the first tenant's settings. A setting given by an expression is now read for every item, and the run stops when items disagree.
+- OpenAI `sk-proj-`, `sk-svcacct-` and `sk-admin-` keys, GitHub fine-grained `github_pat_` tokens, and nine-character German ID card serial numbers were missed. They are detected now.
+- The Presidio setup guide published the analyzer port on every host interface. It now binds to `127.0.0.1`.
+- The example workflows used node version 1, so an imported Verify missed names. Every Redactor node in the examples uses version 2.
 - A Prompt Injection setting whose expression failed silently turned scanning off. The error now stops the run before the vault is saved.
 - Presidio was asked for scores of 0.4 and up even when the threshold was lower. The configured threshold is sent.
 - Pseudonym generation, URL redaction next to deny-list matches, and Presidio key traversal took quadratic time. Each is now linear.

@@ -1526,19 +1526,27 @@ function wholeToken(original: string, vault: IVault, sessionId: string, ctx: Red
   return token;
 }
 
-/** Pairs an input value with its redacted output and replaces any string or key that would not restore exactly. */
-function restorablePair(input: unknown, output: unknown, check: (input: string, output: string) => string): unknown {
+type RestoreCheck = (input: string, output: string) => string;
+
+/**
+ * Pairs an input value with its redacted output and replaces any string or key that would not restore exactly.
+ * Properties pair by the original key recorded during redaction, never by position, because a redacted integer-like
+ * key moves within the object.
+ */
+function restorablePair(input: unknown, output: unknown, check: RestoreCheck, ctx: RedactionContext): unknown {
   if (typeof input === 'string' && typeof output === 'string') return check(input, output);
-  if (Array.isArray(input) && Array.isArray(output)) return output.map((o, i) => restorablePair(input[i], o, check));
+  if (Array.isArray(input) && Array.isArray(output)) return output.map((o, i) => restorablePair(input[i], o, check, ctx));
   if (!isPlainRecord(input) || !isPlainRecord(output)) return output;
-  const inEntries = Object.entries(input);
-  const outEntries = Object.entries(output);
-  if (inEntries.length !== outEntries.length) return output;
+  const origins = ctx.keyOrigins?.get(output);
   const fixed: Record<string, unknown> = {};
-  outEntries.forEach(([key, value], i) => {
-    const [inKey, inValue] = inEntries[i];
-    setOwn(fixed, check(inKey, key), restorablePair(inValue, value, check));
-  });
+  for (const [key, value] of Object.entries(output)) {
+    const inKey = origins?.get(key) ?? key;
+    if (!Object.prototype.hasOwnProperty.call(input, inKey)) {
+      setOwn(fixed, key, value);
+      continue;
+    }
+    setOwn(fixed, check(inKey, key), restorablePair(input[inKey], value, check, ctx));
+  }
   return fixed;
 }
 
@@ -1557,7 +1565,7 @@ export function ensureRestorable(inputs: unknown[], outputs: unknown[], ctx: Red
     if (input === output) return output;
     return restoreString(output, restore, session.entries) === input ? output : wholeToken(input, vault, sessionId, ctx);
   };
-  return outputs.map((out, i) => restorablePair(inputs[i], out, check));
+  return outputs.map((out, i) => restorablePair(inputs[i], out, check, ctx));
 }
 
 /**
@@ -1847,6 +1855,7 @@ async function presidioObject(
   const origins = ctx.keyOrigins?.get(source);
   const out: Record<string, unknown> = {};
   const sourceKeys = new Set(Object.keys(source));
+  const finalOrigins = new Map<string, string>();
   const join = (base: string, k: string) => (base ? `${base}.${k}` : k);
   for (const [k, v] of Object.entries(source)) {
     const original = origins?.get(k) ?? k;
@@ -1858,7 +1867,9 @@ async function presidioObject(
     for (const h of keyHits) hits.push({ ...h, field: finalChild });
     const lock = ctx.lockedSpans?.get(source)?.get(k);
     setOwn(out, key, await presidioWalk(v, ctx, vault, sessionId, hits, itemIndex, finalChild, childPolicy, lock, join(regexPath, k), paths));
+    finalOrigins.set(key, original);
   }
+  ctx.keyOrigins?.set(out, finalOrigins);
   return out;
 }
 

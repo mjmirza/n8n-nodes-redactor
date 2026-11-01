@@ -18,6 +18,8 @@ export interface RunOptions {
   binary?: Array<IDataObject | undefined>;
   /** Parameters whose expression fails to evaluate. */
   failingParams?: string[];
+  /** Parameters whose expression gives a different value per item, by item index. */
+  perItem?: Record<string, unknown[]>;
 }
 
 export function run(params: Record<string, unknown>, items: IDataObject[], opts: RunOptions = {}): Promise<INodeExecutionData[][]> {
@@ -44,6 +46,7 @@ export function run(params: Record<string, unknown>, items: IDataObject[], opts:
     }),
     getNodeParameter: (name: string, _i: number, fallback?: unknown) => {
       if (opts.failingParams?.includes(name)) throw new Error('Could not evaluate expression: missing node');
+      if (opts.perItem && name in opts.perItem) return opts.perItem[name][_i];
       if (name in params) return params[name];
       if (fallback !== undefined) return fallback;
       throw new Error(`Could not get parameter: ${name}`);

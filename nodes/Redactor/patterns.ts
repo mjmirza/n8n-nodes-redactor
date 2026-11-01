@@ -589,8 +589,9 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'nationalIdDE',
     label: 'NATIONAL_ID_DE',
     category: 'identity',
-    regex: /\b[CFGHJKLMNPRTVWXYZ0-9]{9}\d\b/g,
-    description: 'German ID card number (10 chars)',
+    // The serial number has nine characters, starting with a letter since 2010, and may be followed by its check digit.
+    regex: /\b(?:[CFGHJKLMNPRTVWXYZ][CFGHJKLMNPRTVWXYZ0-9]{8}\d?|[CFGHJKLMNPRTVWXYZ0-9]{9}\d)\b/g,
+    description: 'German ID card serial number (9 characters, or 10 with the check digit)',
   },
   {
     name: 'nhsNumber',
@@ -1302,15 +1303,16 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'openaiKey',
     label: 'OPENAI_KEY',
     category: 'enterprise',
-    regex: /\bsk-[A-Za-z0-9]{20,}\b/g,
-    description: 'OpenAI API keys',
+    // Project, service-account and admin keys carry hyphens and underscores, as in sk-proj-...
+    regex: /\bsk-[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])/g,
+    description: 'OpenAI API keys, including sk-proj-, sk-svcacct- and sk-admin- keys',
   },
   {
     name: 'githubToken',
     label: 'GITHUB_TOKEN',
     category: 'enterprise',
-    regex: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,}\b/g,
-    description: 'GitHub personal access tokens',
+    regex: /\b(?:(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,}|github_pat_[A-Za-z0-9_]{22,})\b/g,
+    description: 'GitHub tokens, including fine-grained github_pat_ tokens',
   },
   {
     name: 'slackToken',

@@ -20,7 +20,7 @@ Presidio is an **optional upgrade** for users who need NLP-level accuracy in fre
 ## Quick Setup (One Command)
 
 ```bash
-docker run -d --name presidio -p 5002:3000 mcr.microsoft.com/presidio-analyzer
+docker run -d --name presidio -p 127.0.0.1:5002:3000 mcr.microsoft.com/presidio-analyzer
 ```
 
 Verify it's running:
@@ -45,7 +45,7 @@ services:
   presidio:
     image: mcr.microsoft.com/presidio-analyzer
     ports:
-      - "5002:3000"
+      - "127.0.0.1:5002:3000"
     restart: unless-stopped
 
 volumes:
@@ -132,7 +132,7 @@ For non-English languages, you may need to build a custom Presidio Docker image 
 | Issue | Solution |
 |-------|---------|
 | "Enhanced detection not working" | Check if Presidio container is running: `docker ps` |
-| "Connection refused" | Verify port mapping: `docker run -p 5002:3000 ...` |
+| "Connection refused" | Verify port mapping: `docker run -p 127.0.0.1:5002:3000 ...` |
 | "No entities detected" | Check language setting matches text language |
 | "Slow processing" | Presidio adds latency; for speed, use regex-only mode |
 | "Node works without Presidio" | Correct! Presidio is optional. Node falls back silently. |
