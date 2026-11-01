@@ -2,6 +2,8 @@
  * One structural regex check, shared by profile parsing and runtime matching.
  * It rejects patterns whose backtracking can grow exponentially with input length.
  */
+import { atomCharset, Charset, emptySet, overlaps, union } from './regexCharset';
+
 const MAX_REGEX_LENGTH = 500;
 
 interface Quantifier {
@@ -13,7 +15,15 @@ interface Quantifier {
 interface GroupFrame {
   hasVariableQuantifier: boolean;
   hasAlternation: boolean;
+  // Characters the variable repetitions since the last disjoint required atom can absorb.
+  run: Charset | null;
+  chars: Charset;
+  zeroWidth: boolean;
 }
+
+const newFrame = (zeroWidth = false): GroupFrame => ({
+  hasVariableQuantifier: false, hasAlternation: false, run: null, chars: emptySet(), zeroWidth,
+});
 
 function readBraces(src: string, i: number): Quantifier | null {
   const m = /^\{(\d+)(,(\d*))?\}/.exec(src.slice(i));
@@ -66,11 +76,12 @@ function readToken(src: string, i: number, stack: GroupFrame[]): Step {
   }
   if (c === '[') return { atomEnd: skipClass(src, i), closed: null };
   if (c === '(') {
-    stack.push({ hasVariableQuantifier: false, hasAlternation: false });
+    stack.push(newFrame(/^\(\?(?:=|!|<=|<!)/.test(src.slice(i))));
     return { atomEnd: i, closed: null, next: i + groupPrefixLength(src, i) };
   }
   if (c === '|') {
     stack[stack.length - 1].hasAlternation = true;
+    stack[stack.length - 1].run = null;
     return { atomEnd: i, closed: null, next: i + 1 };
   }
   const closed = c === ')' && stack.length > 1 ? stack.pop()! : null;
@@ -83,7 +94,7 @@ function isRisky(frame: GroupFrame | null): boolean {
   return !!frame && (frame.hasVariableQuantifier || frame.hasAlternation);
 }
 
-const NO_GROUP: GroupFrame = { hasVariableQuantifier: false, hasAlternation: false };
+const NO_GROUP: GroupFrame = newFrame();
 const repeats = (q: Quantifier | null): boolean => q !== null && q.max > 1;
 const isVariable = (q: Quantifier | null): boolean => q !== null && q.min !== q.max;
 
@@ -97,9 +108,37 @@ function applyQuantifier(q: Quantifier | null, closed: GroupFrame | null, top: G
   return null;
 }
 
+const SEQUENTIAL = 'two repetitions in a row can match the same characters (catastrophic backtracking)';
+
+/** Refuses a variable repetition that can absorb what an earlier one in the same sequence can. */
+function applySequence(chars: Charset | null, variable: boolean, required: boolean, top: GroupFrame): string | null {
+  if (chars === null) return null;
+  top.chars = union(top.chars, chars);
+  const shared = top.run !== null && overlaps(top.run, chars);
+  if (variable) {
+    if (shared) return SEQUENTIAL;
+    top.run = top.run ? union(top.run, chars) : chars;
+  } else if (required && !shared) top.run = null;
+  return null;
+}
+
+/** The characters an atom or closed group can match, or null when it is zero-width. */
+function stepChars(src: string, i: number, step: Step): Charset | null {
+  const closed = step.closed;
+  if (!closed) return atomCharset(src, i, step.atomEnd);
+  return closed.zeroWidth ? null : closed.chars;
+}
+
+function stepProblem(src: string, i: number, step: Step, q: Quantifier | null, top: GroupFrame): string | null {
+  const problem = applyQuantifier(q, step.closed, top);
+  if (problem || q?.max === 0) return problem;
+  const variable = isVariable(q) || step.closed?.hasVariableQuantifier === true;
+  return applySequence(stepChars(src, i, step), variable, (q?.min ?? 1) >= 1, top);
+}
+
 /** Returns why the pattern was refused, or null when it is safe to run. */
 function structuralProblem(src: string): string | null {
-  const stack: GroupFrame[] = [{ hasVariableQuantifier: false, hasAlternation: false }];
+  const stack: GroupFrame[] = [newFrame()];
   let i = 0;
   while (i < src.length) {
     const step = readToken(src, i, stack);
@@ -109,7 +148,7 @@ function structuralProblem(src: string): string | null {
       continue;
     }
     const q = readQuantifier(src, step.atomEnd);
-    const problem = applyQuantifier(q, step.closed, stack[stack.length - 1]);
+    const problem = stepProblem(src, i, step, q, stack[stack.length - 1]);
     if (problem) return problem;
     i = step.atomEnd + (q ? q.length : 0);
   }

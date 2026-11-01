@@ -6,6 +6,20 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 Planned: random scoped tokens.
 
+## [4.3.0] - 2026-11-01
+
+Fixes every finding from a third adversarial security review, run against 4.2.0. Each one has a regression test in `test/codex-review-42.test.ts`.
+
+### Security
+- **A pseudonym could hide another person's original name.** If the pseudonym for one name equalled another name in the same text, the second name was treated as already replaced and stayed in the output. Replacements are now tracked by position, not by text, and a pseudonym never equals text already present in the input.
+- **A failed legacy passphrase stored originals in plain text.** When the legacy passphrase expression could not be evaluated, the node continued without encryption. Only an absent or empty legacy setting means no encryption now. A failed evaluation stops the run before anything is stored.
+- **Regexes with repeated parts in a row could stall a run.** `^a+a+a+a+a+!$` passed the safety check. Two repetitions in a row that can match the same characters are now refused, and user regexes run on bounded windows of long text.
+
+### Fixed
+- Confidence scoring used the wrong text position after an earlier replacement, so an SSN with its `SSN` label could fall below the threshold. Scoring now uses the original position.
+- Presidio could pseudonymize a pseudonym the regex pass had produced, so Restore returned the first pseudonym. Presidio now skips every replacement the regex pass produced.
+- A string and a number with the same digits could share one vault entry, so the string restored as a number. Their mappings are now separate. A number that a pattern matched only in part, such as `123456` with `[0-9]{3}`, now restores as a number.
+
 ## [4.2.0] - 2026-11-01
 
 Fixes every finding from a second adversarial security review, run against 4.1.0. Each one has a regression test in `test/codex-review-41.test.ts`.
