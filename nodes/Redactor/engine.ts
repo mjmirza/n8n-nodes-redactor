@@ -403,7 +403,14 @@ function findTyped(vault: IVault, sessionId: string, original: string, ctx: Reda
   return entry && reusable(entry, original, ctx) ? entry : undefined;
 }
 
+/** Only a new token changes the matcher language. Mapping an existing token needs no rebuild. */
+function invalidateTokenAutomaton(vault: IVault, sessionId: string, token: string): void {
+  const entries = vault.getSession(sessionId)?.entries;
+  if (entries && !Object.prototype.hasOwnProperty.call(entries, token)) tokenAutomata.delete(entries);
+}
+
 function addMapping(vault: IVault, sessionId: string, entry: VaultEntry): void {
+  invalidateTokenAutomaton(vault, sessionId, entry.token);
   vault.addEntry(sessionId, entry);
   const entries = vault.getSession(sessionId)?.entries;
   const typed = entries ? typedIndex.get(entries) : undefined;
@@ -1472,22 +1479,88 @@ function lockChild(ctx: RedactionContext, container: object, key: string, comput
   return out;
 }
 
-/**
- * Scan once per distinct token length, checking only lengths with the current first character. The session's
- * cached shape grows with addMapping, so neither a suffix array nor a pattern over the whole history is needed.
- */
+interface TokenState {
+  next: Map<number, number>;
+  fail: number;
+  output: number;
+  token?: string;
+}
+
+// Session tables are stable across memory runs and replaced when workflow storage is reloaded.
+// addMapping invalidates only after a new token is inserted. No run enumerates an unchanged table again.
+const tokenAutomata = new WeakMap<object, TokenState[]>();
+const tokenState = (): TokenState => ({ next: new Map(), fail: 0, output: 0 });
+
+function insertToken(states: TokenState[], token: string): void {
+  if (token.length === 0) return;
+  let at = 0;
+  for (let i = 0; i < token.length; i++) {
+    const code = token.charCodeAt(i);
+    let next = states[at].next.get(code);
+    if (next === undefined) {
+      next = states.length;
+      states[at].next.set(code, next);
+      states.push(tokenState());
+    }
+    at = next;
+  }
+  states[at].token = token;
+}
+
+/** Failure transitions preserve the longest suffix that is also a token prefix. */
+function tokenStep(states: TokenState[], at: number, code: number): number {
+  while (at !== 0 && !states[at].next.has(code)) at = states[at].fail;
+  return states[at].next.get(code) ?? 0;
+}
+
+function linkTokenStates(states: TokenState[]): void {
+  const queue = [...states[0].next.values()];
+  for (let i = 0; i < queue.length; i++) {
+    const at = queue[i];
+    for (const [code, next] of states[at].next) {
+      const fail = tokenStep(states, states[at].fail, code);
+      states[next].fail = fail;
+      // Output links avoid copying suffix match lists into every trie state.
+      states[next].output = states[fail].token ? fail : states[fail].output;
+      queue.push(next);
+    }
+  }
+}
+
+function tokenAutomaton(entries: Record<string, unknown>): TokenState[] {
+  let states = tokenAutomata.get(entries);
+  if (!states) {
+    states = [tokenState()];
+    for (const token of Object.keys(entries)) insertToken(states, token);
+    linkTokenStates(states);
+    tokenAutomata.set(entries, states);
+  }
+  return states;
+}
+
+function collectTokenOutputs(states: TokenState[], at: number, found: Set<string>): void {
+  for (let out = at; out !== 0; out = states[out].output) {
+    const token = states[out].token;
+    if (token !== undefined) found.add(token);
+  }
+}
+
+/** Aho-Corasick scans each UTF-16 code unit once, plus failure transitions and reported matches. */
 function priorTokensPresent(input: string, entries: Record<string, unknown>): string[] {
   const shape = tokenShape(entries);
   if (shape.byFirst.size === 0) return [];
   const found = new Set<string>();
-  for (let at = 0; at < input.length; at++) {
-    const lengths = shape.byFirst.get(input.charCodeAt(at));
-    if (!lengths) continue;
-    for (const length of lengths) {
-      if (at + length > input.length) break;
-      const token = input.slice(at, at + length);
-      if (Object.prototype.hasOwnProperty.call(entries, token)) found.add(token);
+  let states = tokenAutomata.get(entries);
+  let at = 0;
+  for (let i = 0; i < input.length; i++) {
+    const code = input.charCodeAt(i);
+    // A run with no possible token start needs no automaton construction, even in a large growing session.
+    if (!states) {
+      if (!shape.byFirst.has(code)) continue;
+      states = tokenAutomaton(entries);
     }
+    at = tokenStep(states, at, code);
+    collectTokenOutputs(states, at, found);
   }
   return [...found].sort((a, b) => b.length - a.length);
 }
