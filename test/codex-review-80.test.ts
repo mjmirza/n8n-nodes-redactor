@@ -162,6 +162,23 @@ describe('re-review 80-session-growth: a long-lived session keeps each run cheap
     expect(big).toBeLessThan(5 * Math.max(empty, 20));
   });
 
+  it('bracketed notes stay cheap while each run adds a new email', async () => {
+    const many = Array.from({ length: 15_000 }, (_, i) => `user${i}@example.com`).join(' ');
+    const [first] = await run({ operation: 'redact', sessionId: 'growth-bracketed-big', vaultStorage: 'memory' }, [{ note: many }]);
+    expect((first[0].json.note as string).match(/\[EMAIL_\d+\]/g)).toHaveLength(15_000);
+    const time = async (sessionId: string) => {
+      const started = cpuNow();
+      for (let i = 0; i < 20; i++) {
+        await run({ operation: 'redact', sessionId, vaultStorage: 'memory' }, [{ note: `[mail fresh${i}@example.com today]` }]);
+      }
+      return cpuNow() - started;
+    };
+    await time('growth-bracketed-warm');
+    const empty = await time('growth-bracketed-empty');
+    const big = await time('growth-bracketed-big');
+    expect(big).toBeLessThan(5 * Math.max(empty, 20));
+  });
+
   it('still protects input text that equals an earlier token', async () => {
     const [first] = await run({ operation: 'redact', sessionId: 'growth-literal', vaultStorage: 'memory' }, [{ note: 'a@example.com' }]);
     const token = first[0].json.note as string;

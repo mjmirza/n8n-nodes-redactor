@@ -403,14 +403,17 @@ function findTyped(vault: IVault, sessionId: string, original: string, ctx: Reda
   return entry && reusable(entry, original, ctx) ? entry : undefined;
 }
 
-/** Only a new token changes the matcher language. Mapping an existing token needs no rebuild. */
-function invalidateTokenAutomaton(vault: IVault, sessionId: string, token: string): void {
+/** Only a new token changes the matcher language. Extend the delta without rebuilding the base. */
+function recordNewToken(vault: IVault, sessionId: string, token: string): void {
   const entries = vault.getSession(sessionId)?.entries;
-  if (entries && !Object.prototype.hasOwnProperty.call(entries, token)) tokenAutomata.delete(entries);
+  if (!entries || Object.prototype.hasOwnProperty.call(entries, token)) return;
+  const index = tokenAutomata.get(entries);
+  if (!index) return;
+  extendTokenDelta(index, token);
 }
 
 function addMapping(vault: IVault, sessionId: string, entry: VaultEntry): void {
-  invalidateTokenAutomaton(vault, sessionId, entry.token);
+  recordNewToken(vault, sessionId, entry.token);
   vault.addEntry(sessionId, entry);
   const entries = vault.getSession(sessionId)?.entries;
   const typed = entries ? typedIndex.get(entries) : undefined;
@@ -1486,9 +1489,23 @@ interface TokenState {
   token?: string;
 }
 
+interface TokenLevel {
+  tokens: string[];
+  states: TokenState[];
+}
+
+interface TokenIndex {
+  base: TokenState[];
+  baseSize: number;
+  deltaSize: number;
+  levels: TokenLevel[];
+}
+
 // Session tables are stable across memory runs and replaced when workflow storage is reloaded.
-// addMapping invalidates only after a new token is inserted. No run enumerates an unchanged table again.
-const tokenAutomata = new WeakMap<object, TokenState[]>();
+// Binary delta levels amortize small builds. Geometric base growth amortizes full-table rebuilds.
+const tokenAutomata = new WeakMap<object, TokenIndex>();
+const MIN_TOKEN_DELTA = 64;
+const TOKEN_DELTA_FRACTION = 0.25;
 const tokenState = (): TokenState => ({ next: new Map(), fail: 0, output: 0 });
 
 function insertToken(states: TokenState[], token: string): void {
@@ -1527,15 +1544,32 @@ function linkTokenStates(states: TokenState[]): void {
   }
 }
 
-function tokenAutomaton(entries: Record<string, unknown>): TokenState[] {
-  let states = tokenAutomata.get(entries);
-  if (!states) {
-    states = [tokenState()];
-    for (const token of Object.keys(entries)) insertToken(states, token);
-    linkTokenStates(states);
-    tokenAutomata.set(entries, states);
-  }
+function buildTokenAutomaton(tokens: Iterable<string>): TokenState[] {
+  const states = [tokenState()];
+  for (const token of tokens) insertToken(states, token);
+  linkTokenStates(states);
   return states;
+}
+
+/** Newest levels are smallest. Equal sizes carry like a binary counter, rebuilding only the resulting level. */
+function extendTokenDelta(index: TokenIndex, token: string): void {
+  let tokens = [token];
+  const { levels } = index;
+  while (levels.length > 0 && levels[levels.length - 1].tokens.length === tokens.length) {
+    tokens = levels.pop()!.tokens.concat(tokens);
+  }
+  levels.push({ tokens, states: buildTokenAutomaton(tokens) });
+  index.deltaSize++;
+}
+
+function tokenAutomaton(entries: Record<string, unknown>): TokenIndex {
+  let index = tokenAutomata.get(entries);
+  if (!index || index.deltaSize > Math.max(MIN_TOKEN_DELTA, index.baseSize * TOKEN_DELTA_FRACTION)) {
+    const tokens = Object.keys(entries);
+    index = { base: buildTokenAutomaton(tokens), baseSize: tokens.length, deltaSize: 0, levels: [] };
+    tokenAutomata.set(entries, index);
+  }
+  return index;
 }
 
 function collectTokenOutputs(states: TokenState[], at: number, found: Set<string>): void {
@@ -1545,23 +1579,32 @@ function collectTokenOutputs(states: TokenState[], at: number, found: Set<string
   }
 }
 
-/** Aho-Corasick scans each UTF-16 code unit once, plus failure transitions and reported matches. */
+function scanTokenAutomaton(input: string, start: number, states: TokenState[], found: Set<string>): void {
+  let at = 0;
+  for (let i = start; i < input.length; i++) {
+    at = tokenStep(states, at, input.charCodeAt(i));
+    collectTokenOutputs(states, at, found);
+  }
+}
+
+/** A run with no possible token start needs no automaton construction, even in a large growing session. */
+function firstTokenStart(input: string, shape: TokenShape): number {
+  for (let i = 0; i < input.length; i++) {
+    if (shape.byFirst.has(input.charCodeAt(i))) return i;
+  }
+  return input.length;
+}
+
+/** Each Aho-Corasick matcher scans linearly in UTF-16 code units plus reported matches. */
 function priorTokensPresent(input: string, entries: Record<string, unknown>): string[] {
   const shape = tokenShape(entries);
   if (shape.byFirst.size === 0) return [];
+  const start = firstTokenStart(input, shape);
+  if (start === input.length) return [];
+  const index = tokenAutomaton(entries);
   const found = new Set<string>();
-  let states = tokenAutomata.get(entries);
-  let at = 0;
-  for (let i = 0; i < input.length; i++) {
-    const code = input.charCodeAt(i);
-    // A run with no possible token start needs no automaton construction, even in a large growing session.
-    if (!states) {
-      if (!shape.byFirst.has(code)) continue;
-      states = tokenAutomaton(entries);
-    }
-    at = tokenStep(states, at, code);
-    collectTokenOutputs(states, at, found);
-  }
+  scanTokenAutomaton(input, start, index.base, found);
+  for (const level of index.levels) scanTokenAutomaton(input, start, level.states, found);
   return [...found].sort((a, b) => b.length - a.length);
 }
 

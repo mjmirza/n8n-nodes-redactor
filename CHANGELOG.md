@@ -6,6 +6,11 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 Planned: random scoped tokens.
 
+## [7.0.3] - 2026-11-01
+
+### Fixed
+- Growing sessions retain a cached base token matcher and store new tokens in binary delta levels. Previously, each new token made the next bracketed note rebuild the entire delta matcher. Equal-sized levels now merge like a binary counter, giving amortized logarithmic rebuild work per token and one scan per level. The base still rebuilds only when the delta exceeds the greater of 64 tokens or a quarter of the base size. Earlier token literals remain protected through level merges and base rebuilds.
+
 ## [7.0.2] - 2026-11-01
 
 ### Fixed
