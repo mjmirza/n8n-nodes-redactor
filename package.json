@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-redactor",
-  "version": "1.11.0",
+  "version": "1.11.1",
   "description": "Redact, mask and anonymize PII before it reaches an LLM, then restore it. 216 patterns for emails, phones, addresses, IBAN, cards, names, SSN, passport and tax IDs. Reversible vault, GDPR Art.30 ROPA record, prompt-injection check. Runs locally. For n8n 2.x.",
   "keywords": [
     "n8n-community-node-package",

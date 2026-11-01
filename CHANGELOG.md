@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.11.1] - 2026-11-01
+
+### Documentation
+- README rewritten to the project standard. It previously opened with fear framing, carried a duplicated redaction-modes table, an unverified "up to 50%" false-positive claim and a hardcoded test-count badge (437, the suite has 438). It now leads with outcomes, states plainly that the node is self-hosted only because the vault and audit log use the local disk, and adds a developer section.
+
+### Changed
+- `.nvmrc` pins Node 24, matching CI. Node 26 has no prebuilt `isolated-vm`, so `test/execute.test.ts` could not load there.
+
 ## [Unreleased]
 
 Planned for 2.0.0: node version 2 with a filesystem-free vault (so it can run on n8n Cloud), a converter for existing vault files, per-client profiles as JSON, random scoped tokens, and numbers restored as numbers.
