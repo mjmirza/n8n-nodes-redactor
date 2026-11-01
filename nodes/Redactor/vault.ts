@@ -1,8 +1,7 @@
-import * as fs from 'fs';
-import * as path from 'path';
+// CODE_DELETE_OK: FileVault removed in 2.0 because n8n verification bans fs; it stays on release/1.x.
 import * as crypto from 'crypto';
 import { VaultEntry, VaultSession } from './types';
-import { encryptVaultData, decryptVaultData, isEncryptedVault, isPlaintextVault } from './encryption';
+import { encryptVaultData, decryptVaultData } from './encryption';
 
 /**
  * Abstract vault interface — storage backend for token ↔ original mappings.
@@ -18,9 +17,12 @@ export interface IVault {
   cleanup(): number; // returns number of expired sessions removed
 }
 
-// ═══════════════════════════════════════════════════════════
-// In-memory vault
-// ═══════════════════════════════════════════════════════════
+function isExpired(createdAt: string, ttl: number, now = Date.now()): boolean {
+  if (!(ttl > 0)) return false;
+  return now - new Date(createdAt).getTime() > ttl;
+}
+
+// ── In-memory vault ──
 
 const memoryStore: Map<string, VaultSession> = new Map();
 const reverseIndex: Map<string, Map<string, VaultEntry>> = new Map();
@@ -53,13 +55,10 @@ export class MemoryVault implements IVault {
   getSession(sessionId: string): VaultSession | null {
     const session = memoryStore.get(sessionId);
     if (!session) return null;
-    // Check expiry
-    if (session.ttl > 0) {
-      const created = new Date(session.createdAt).getTime();
-      if (Date.now() - created > session.ttl) {
-        memoryStore.delete(sessionId);
-        return null;
-      }
+    if (isExpired(session.createdAt, session.ttl)) {
+      memoryStore.delete(sessionId);
+      reverseIndex.delete(sessionId);
+      return null;
     }
     return session;
   }
@@ -111,96 +110,95 @@ export class MemoryVault implements IVault {
     let removed = 0;
     const now = Date.now();
     for (const [id, session] of memoryStore.entries()) {
-      if (session.ttl > 0) {
-        const created = new Date(session.createdAt).getTime();
-        if (now - created > session.ttl) {
-          memoryStore.delete(id);
-          reverseIndex.delete(id);
-          removed++;
-        }
+      if (isExpired(session.createdAt, session.ttl, now)) {
+        memoryStore.delete(id);
+        reverseIndex.delete(id);
+        removed++;
       }
     }
     return removed;
   }
 }
 
-// ═══════════════════════════════════════════════════════════
-// File-based vault (JSON files in a directory)
-// ═══════════════════════════════════════════════════════════
+// ── Workflow vault (n8n workflow static data) ──
 
-export class FileVault implements IVault {
-  private dir: string;
+/** createdAt and ttl stay readable so expired sessions go without the passphrase. */
+interface StoredSession {
+  createdAt: string;
+  ttl: number;
+  session?: VaultSession;
+  cipher?: string; // base64 of the encrypted vault format
+}
+
+/** The JSON-serializable object the vault reads and writes, normally workflow static data. */
+export type VaultStore = Record<string, unknown>;
+
+const STORE_KEY = 'redactorVault';
+const MAX_STORED_SESSIONS = 500;
+
+/** Persists in workflow static data. n8n saves it after production executions only. */
+export class WorkflowVault implements IVault {
   private cache: Map<string, VaultSession> = new Map();
-  private passphrase: string;
 
-  constructor(dir?: string, passphrase?: string) {
-    this.passphrase = passphrase || '';
-    this.dir = dir || path.join(process.env.HOME || '/tmp', '.n8n', 'pii-vault');
-    if (!fs.existsSync(this.dir)) {
-      fs.mkdirSync(this.dir, { recursive: true });
+  constructor(
+    private store: VaultStore,
+    private passphrase = '',
+  ) {
+    const existing = store[STORE_KEY];
+    if (!existing || typeof existing !== 'object' || Array.isArray(existing)) {
+      store[STORE_KEY] = {};
     }
-    // Auto-cleanup expired files on every instantiation
     this.cleanup();
   }
 
-  private filePath(sessionId: string): string {
-    // Hash session ID for safe filenames — use 32 hex chars (128 bits) to avoid collisions
-    const hash = crypto.createHash('sha256').update(sessionId).digest('hex').slice(0, 32);
-    return path.join(this.dir, `vault_${hash}.json`);
+  private get sessions(): Record<string, StoredSession> {
+    return this.store[STORE_KEY] as Record<string, StoredSession>;
+  }
+
+  private key(sessionId: string): string {
+    return crypto.createHash('sha256').update(sessionId).digest('hex').slice(0, 32);
+  }
+
+  private decode(stored: StoredSession): VaultSession | null {
+    try {
+      if (stored.session) return stored.session;
+      if (stored.cipher) {
+        if (!this.passphrase) return null;
+        return JSON.parse(decryptVaultData(Buffer.from(stored.cipher, 'base64'), this.passphrase)) as VaultSession;
+      }
+    } catch {
+      // Wrong passphrase or tampered data. Treated as not found.
+    }
+    return null;
   }
 
   private load(sessionId: string): VaultSession | null {
-    if (this.cache.has(sessionId)) {
-      return this.cache.get(sessionId)!;
-    }
-    const fp = this.filePath(sessionId);
-    if (!fs.existsSync(fp)) return null;
-    try {
-      const raw = fs.readFileSync(fp);
-      let jsonStr: string;
-
-      if (isEncryptedVault(raw)) {
-        // Encrypted file — decrypt with passphrase
-        if (!this.passphrase) {
-          // Encrypted but no passphrase — cannot read
-          return null;
-        }
-        jsonStr = decryptVaultData(raw, this.passphrase);
-      } else if (isPlaintextVault(raw)) {
-        // Plaintext JSON — read directly
-        jsonStr = raw.toString('utf-8');
-      } else {
-        // Unknown format
+    const cached = this.cache.get(sessionId);
+    if (cached) {
+      if (isExpired(cached.createdAt, cached.ttl)) {
+        this.deleteSession(sessionId);
         return null;
       }
-
-      const data = JSON.parse(jsonStr) as VaultSession;
-      // Check expiry
-      if (data.ttl > 0) {
-        const created = new Date(data.createdAt).getTime();
-        if (Date.now() - created > data.ttl) {
-          try { fs.unlinkSync(fp); } catch { /* ignore */ }
-          return null;
-        }
-      }
-      this.cache.set(sessionId, data);
-      return data;
-    } catch {
+      return cached;
+    }
+    const k = this.key(sessionId);
+    const stored = this.sessions[k];
+    if (!stored) return null;
+    if (isExpired(stored.createdAt, stored.ttl)) {
+      delete this.sessions[k];
       return null;
     }
+    const session = this.decode(stored);
+    if (!session || session.sessionId !== sessionId) return null;
+    this.cache.set(sessionId, session);
+    return session;
   }
 
   getOrCreateSession(sessionId: string, ttl: number): VaultSession {
-    // Auto-cleanup expired files before creating new sessions
     this.cleanup();
     const existing = this.load(sessionId);
     if (existing) return existing;
-    const session: VaultSession = {
-      sessionId,
-      entries: {},
-      createdAt: new Date().toISOString(),
-      ttl,
-    };
+    const session: VaultSession = { sessionId, entries: {}, createdAt: new Date().toISOString(), ttl };
     this.cache.set(sessionId, session);
     return session;
   }
@@ -211,9 +209,7 @@ export class FileVault implements IVault {
 
   addEntry(sessionId: string, entry: VaultEntry): void {
     const session = this.cache.get(sessionId);
-    if (session) {
-      session.entries[entry.token] = entry;
-    }
+    if (session) session.entries[entry.token] = entry;
   }
 
   findByOriginal(sessionId: string, original: string): VaultEntry | undefined {
@@ -224,115 +220,67 @@ export class FileVault implements IVault {
 
   deleteSession(sessionId: string): void {
     this.cache.delete(sessionId);
-    try {
-      const fp = this.filePath(sessionId);
-      if (fs.existsSync(fp)) {
-        fs.unlinkSync(fp);
-      }
-    } catch {
-      // Ignore file deletion errors (read-only FS, already deleted, etc.)
-    }
+    delete this.sessions[this.key(sessionId)];
   }
 
   listSessions(): Array<{ sessionId: string; entryCount: number; createdAt: string; ttl: number }> {
-    // List all vault files
-    const files = fs.readdirSync(this.dir).filter((f) => f.startsWith('vault_') && f.endsWith('.json'));
-    const sessions: Array<{ sessionId: string; entryCount: number; createdAt: string; ttl: number }> = [];
-    for (const file of files) {
-      try {
-        const fp = path.join(this.dir, file);
-        const raw = fs.readFileSync(fp);
-        let jsonStr: string;
-
-        if (isEncryptedVault(raw)) {
-          if (!this.passphrase) continue; // Can't read without passphrase
-          try {
-            jsonStr = decryptVaultData(raw, this.passphrase);
-          } catch {
-            continue; // Wrong passphrase or corrupted
-          }
-        } else if (isPlaintextVault(raw)) {
-          jsonStr = raw.toString('utf-8');
-        } else {
-          continue;
-        }
-
-        const data = JSON.parse(jsonStr) as VaultSession;
-        sessions.push({
-          sessionId: data.sessionId,
-          entryCount: Object.keys(data.entries).length,
-          createdAt: data.createdAt,
-          ttl: data.ttl,
-        });
-      } catch {
-        // Skip corrupt files
-      }
+    const out: Array<{ sessionId: string; entryCount: number; createdAt: string; ttl: number }> = [];
+    for (const stored of Object.values(this.sessions)) {
+      const session = this.decode(stored);
+      if (!session) continue; // Encrypted with another passphrase, or corrupt
+      out.push({
+        sessionId: session.sessionId,
+        entryCount: Object.keys(session.entries).length,
+        createdAt: session.createdAt,
+        ttl: session.ttl,
+      });
     }
-    return sessions;
+    return out;
   }
 
   save(sessionId: string): void {
     const session = this.cache.get(sessionId);
-    if (session) {
-      try {
-        const fp = this.filePath(sessionId);
-        const tmpFp = fp + '.tmp';
-        const jsonData = JSON.stringify(session, null, 2);
-
-        if (this.passphrase) {
-          // Encrypt vault data before writing
-          const encrypted = encryptVaultData(jsonData, this.passphrase);
-          fs.writeFileSync(tmpFp, encrypted);
-        } else {
-          // Write plaintext JSON
-          fs.writeFileSync(tmpFp, jsonData, 'utf-8');
-        }
-        fs.renameSync(tmpFp, fp);
-      } catch {
-        // Write failed (read-only FS, permissions, disk full).
-        // Session stays in memory cache — restore will still work
-        // for this execution, just won't persist across restarts.
-      }
+    if (!session) return;
+    const k = this.key(sessionId);
+    if (!this.sessions[k]) this.evictIfFull();
+    const stored: StoredSession = { createdAt: session.createdAt, ttl: session.ttl };
+    if (this.passphrase) {
+      stored.cipher = encryptVaultData(JSON.stringify(session), this.passphrase).toString('base64');
+    } else {
+      stored.session = session;
     }
+    this.sessions[k] = stored;
+  }
+
+  private evictIfFull(): void {
+    const keys = Object.keys(this.sessions);
+    if (keys.length < MAX_STORED_SESSIONS) return;
+    keys
+      .sort((a, b) => new Date(this.sessions[a].createdAt).getTime() - new Date(this.sessions[b].createdAt).getTime())
+      .slice(0, keys.length - MAX_STORED_SESSIONS + 1)
+      .forEach((k) => delete this.sessions[k]);
   }
 
   cleanup(): number {
     let removed = 0;
     const now = Date.now();
-    const files = fs.readdirSync(this.dir).filter((f) => f.startsWith('vault_') && f.endsWith('.json'));
-    for (const file of files) {
-      try {
-        const fp = path.join(this.dir, file);
-        const data = JSON.parse(fs.readFileSync(fp, 'utf-8')) as VaultSession;
-        if (data.ttl > 0) {
-          const created = new Date(data.createdAt).getTime();
-          if (now - created > data.ttl) {
-            fs.unlinkSync(fp);
-            this.cache.delete(data.sessionId);
-            removed++;
-          }
-        }
-      } catch {
-        // Skip
+    for (const [k, stored] of Object.entries(this.sessions)) {
+      if (!stored || typeof stored !== 'object' || isExpired(stored.createdAt, stored.ttl, now)) {
+        delete this.sessions[k];
+        removed++;
       }
+    }
+    for (const [id, session] of this.cache.entries()) {
+      if (isExpired(session.createdAt, session.ttl, now)) this.cache.delete(id);
     }
     return removed;
   }
 }
 
-/**
- * Factory to get the right vault implementation.
- * If file vault fails (read-only filesystem, no permissions, Docker, cloud),
- * automatically falls back to memory vault so the node never crashes.
- */
-export function createVault(storage: string, vaultDir?: string, passphrase?: string): IVault {
-  if (storage === 'file') {
-    try {
-      return new FileVault(vaultDir, passphrase);
-    } catch {
-      // Filesystem not writable — fall back to memory vault silently
-      return new MemoryVault();
-    }
+/** 'workflow' and the 1.x value 'file' persist in the store; anything else is in memory. */
+export function createVault(storage: string, store?: VaultStore, passphrase?: string): IVault {
+  if ((storage === 'workflow' || storage === 'file') && store) {
+    return new WorkflowVault(store, passphrase || '');
   }
   return new MemoryVault();
 }

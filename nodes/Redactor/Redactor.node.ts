@@ -4,6 +4,7 @@ import {
   INodeExecutionData,
   INodeType,
   INodeTypeDescription,
+  IHttpRequestMethods,
   NodeConnectionTypes,
   NodeOperationError,
 } from 'n8n-workflow';
@@ -20,8 +21,9 @@ import {
 } from './types';
 import { classifyData } from './classification';
 import { scanForInjection } from './injection';
-import { writeAuditLog } from './audit';
-import { resetCircuitBreaker } from './presidio';
+import { buildAuditEntry } from './audit';
+import { resetCircuitBreaker, PresidioRequester } from './presidio';
+import { parseTenantProfile } from './profiles';
 import { generateRopaRecord } from './ropa';
 
 /**
@@ -87,14 +89,26 @@ export class Redactor implements INodeType {
       name: 'Redactor',
     },
     inputs: [NodeConnectionTypes.Main],
-    outputs: `={{((parameters) => parameters["includeReport"] ? [{ type: "main", displayName: "Data" }, { type: "main", displayName: "Report" }] : [{ type: "main", displayName: "Data" }])($parameter)}}`,
+    outputs: `={{((parameters) => (parameters["includeReport"] || parameters["auditLog"]) ? [{ type: "main", displayName: "Data" }, { type: "main", displayName: "Report" }] : [{ type: "main", displayName: "Data" }])($parameter)}}`,
 
     properties: [
       // ═══════════════════════════════════════
       // OPERATION
       // ═══════════════════════════════════════
-      // Resources would change the saved parameter shape; they arrive with node v2 in 2.0.0.
-      // eslint-disable-next-line @n8n/community-nodes/resource-operation-pattern
+      // A single resource keeps saved 1.x workflows valid: its default fills in for them.
+      {
+        displayName: 'Resource',
+        name: 'resource',
+        type: 'options',
+        noDataExpression: true,
+        options: [
+          {
+            name: 'Data',
+            value: 'data',
+          },
+        ],
+        default: 'data',
+      },
       {
         displayName: 'Operation',
         name: 'operation',
@@ -591,7 +605,7 @@ export class Redactor implements INodeType {
           },
         },
         default: false,
-        description: 'Whether to write a persistent JSONL audit log of all redaction activity to ~/.n8n/pii-audit/. Self-hosted n8n only. Supports GDPR Art.30, HIPAA, SOX and PCI DSS record-keeping.',
+        description: 'Whether to add an audit record (counts, labels, severity, timing, no PII values) to the Report output. Store it with any node, for example a database or a file. Supports GDPR Art.30, HIPAA, SOX and PCI DSS record-keeping.',
       },
 
       // ═══════════════════════════════════════
@@ -661,31 +675,17 @@ export class Redactor implements INodeType {
         },
         options: [
           {
-            name: 'File-Based (Recommended, Persistent)',
-            value: 'file',
-          },
-          {
             name: 'In-Memory (Fast, Lost on Restart)',
             value: 'memory',
           },
-        ],
-        default: 'file',
-        description:
-          'File-based (recommended): Persists to disk, survives restarts, no memory bloat. Stored in ~/.n8n/pii-vault/. In-memory: Faster but lost on restart, capped at 1000 sessions to prevent memory bloat.',
-      },
-      {
-        displayName: 'Vault Directory',
-        name: 'vaultDir',
-        type: 'string',
-        displayOptions: {
-          show: {
-            operation: ['redact', 'restore', 'stats', 'purge'],
-            vaultStorage: ['file'],
+          {
+            name: 'Workflow Storage (Recommended, Persistent)',
+            value: 'workflow',
           },
-        },
-        default: '',
-        placeholder: '/path/to/vault (default: ~/.n8n/pii-vault/)',
-        description: 'Custom directory for file-based vault storage',
+        ],
+        default: 'workflow',
+        description:
+          'Workflow storage keeps sessions with the workflow, so Redact and Restore nodes in the same workflow share them and they survive restarts. n8n saves it after production runs of an active workflow. In-memory is faster but lost on restart and capped at 1000 sessions.',
       },
       {
         displayName: 'Vault Encryption Passphrase',
@@ -697,11 +697,12 @@ export class Redactor implements INodeType {
         displayOptions: {
           show: {
             operation: ['redact', 'restore', 'stats', 'purge'],
-            vaultStorage: ['file'],
+            // 'file' is the 1.x value; keeping it visible preserves a saved passphrase.
+            vaultStorage: ['workflow', 'file'],
           },
         },
         default: '',
-        description: 'Encrypt vault files at rest with AES-256-GCM. Leave empty for no encryption. When set, vault files cannot be read without this passphrase. Each tenant should use a different passphrase for complete isolation.',
+        description: 'Encrypt stored sessions at rest with AES-256-GCM. Leave empty for no encryption. When set, sessions cannot be read without this passphrase. Each tenant should use a different passphrase for complete isolation.',
       },
       {
         displayName: 'Session TTL (Minutes)',
@@ -715,6 +716,33 @@ export class Redactor implements INodeType {
         default: 60,
         description:
           'Auto-expire vault sessions after this many minutes. Set to 0 for no expiry. Prevents vault from growing unbounded.',
+      },
+      {
+        displayName: 'Use Tenant Profile',
+        name: 'useTenantProfile',
+        type: 'boolean',
+        displayOptions: {
+          show: {
+            operation: ['redact'],
+          },
+        },
+        default: false,
+        description: 'Whether to apply per-client settings from a JSON profile on top of this node',
+      },
+      {
+        displayName: 'Tenant Profile (JSON)',
+        name: 'tenantProfile',
+        type: 'json',
+        required: true,
+        displayOptions: {
+          show: {
+            operation: ['redact'],
+            useTenantProfile: [true],
+          },
+        },
+        default: '{}',
+        description:
+          'Optional per-client settings that override this node: enabledPatterns, customPatterns, confidenceThreshold, redactionMode, dedup, fieldMode, fieldRules, allowList, denyList, retentionMinutes, auditLog. Unknown fields are rejected.',
       },
 
       // ═══════════════════════════════════════
@@ -835,6 +863,7 @@ export class Redactor implements INodeType {
     // Aggregate outputs (summaries, reports) link back to every input item.
     const allPaired = items.map((_, i) => ({ item: i }));
     const operation = this.getNodeParameter('operation', 0) as string;
+    const startTime = Date.now();
 
     // Reset Presidio circuit breaker at start of each execution
     resetCircuitBreaker();
@@ -888,10 +917,21 @@ export class Redactor implements INodeType {
 
         let includeReport = false;
         try { includeReport = this.getNodeParameter('includeReport', 0, false) as boolean; } catch { /* parameter hidden for this operation */ }
+        let auditLog = false;
+        try { auditLog = this.getNodeParameter('auditLog', 0, false) as boolean; } catch { /* parameter hidden for this operation */ }
 
-        if (includeReport) {
-          // Full report on second output
-          return [returnData, [{ json: { ...summary, hits: report.hits } as unknown as IDataObject, pairedItem: allPaired }]];
+        if (includeReport || auditLog) {
+          const reportJson: IDataObject = includeReport
+            ? ({ ...summary, hits: report.hits } as unknown as IDataObject)
+            : {};
+          if (auditLog) {
+            reportJson.audit = buildAuditEntry(
+              'DETECT', 'token', allHits, items.length, Date.now() - startTime,
+              enabledPatterns.length, false, classifyData(allHits),
+            ) as unknown as IDataObject;
+          }
+          if (!includeReport) returnData.push({ json: summary as unknown as IDataObject, pairedItem: allPaired });
+          return [returnData, [{ json: reportJson, pairedItem: allPaired }]];
         }
 
         // Append summary as last item in single output
@@ -960,11 +1000,15 @@ export class Redactor implements INodeType {
     }
 
     // All other operations (redact, restore, stats, purge, classify) use vault
-    const vaultStorage = this.getNodeParameter('vaultStorage', 0, 'file') as VaultStorage;
-    const vaultDir = this.getNodeParameter('vaultDir', 0, '') as string;
+    const vaultStorage = this.getNodeParameter('vaultStorage', 0, 'workflow') as VaultStorage;
     let vaultPassphrase = '';
     try { vaultPassphrase = this.getNodeParameter('vaultPassphrase', 0, '') as string; } catch { /* not available */ }
-    const vault = createVault(vaultStorage, vaultDir || undefined, vaultPassphrase || undefined);
+    // Global static data so the Redact and Restore nodes of one workflow share sessions.
+    const vault = createVault(
+      vaultStorage,
+      vaultStorage === 'memory' ? undefined : this.getWorkflowStaticData('global'),
+      vaultPassphrase || undefined,
+    );
 
     // ─── STATS ───────────────────────────────
     if (operation === 'stats') {
@@ -1002,7 +1046,7 @@ export class Redactor implements INodeType {
 
     // ─── REDACT ──────────────────────────────
     if (operation === 'redact') {
-      const mode = this.getNodeParameter('redactionMode', 0, 'token') as RedactionMode;
+      let mode = this.getNodeParameter('redactionMode', 0, 'token') as RedactionMode;
       const detectionScope = this.getNodeParameter('detectionScope', 0, 'recommended') as string;
       let enabledPatterns: string[];
       if (detectionScope === 'all') {
@@ -1012,25 +1056,37 @@ export class Redactor implements INodeType {
       } else {
         enabledPatterns = this.getNodeParameter('piiTypes', 0) as string[];
       }
-      const dedup = this.getNodeParameter('dedup', 0, true) as boolean;
-      const fieldMode = this.getNodeParameter('fieldMode', 0, 'all') as 'all' | 'allowlist' | 'denylist';
-      const sessionTtl = this.getNodeParameter('sessionTtl', 0, 60) as number;
+      let dedup = this.getNodeParameter('dedup', 0, true) as boolean;
+      let fieldMode = this.getNodeParameter('fieldMode', 0, 'all') as 'all' | 'allowlist' | 'denylist';
+      let sessionTtl = this.getNodeParameter('sessionTtl', 0, 60) as number;
       const includeReport = this.getNodeParameter('includeReport', 0, false) as boolean;
 
       const customPatternsRaw = this.getNodeParameter('customPatterns', 0, {}) as {
         patterns?: CustomPattern[];
       };
-      const customPatterns = customPatternsRaw.patterns ?? [];
+      let customPatterns = customPatternsRaw.patterns ?? [];
 
       const fieldRulesRaw = this.getNodeParameter('fieldRules', 0, {}) as {
         rules?: Array<{ field: string }>;
       };
-      const fieldRules = (fieldRulesRaw.rules ?? []).map((r) => ({
+      let fieldRules = (fieldRulesRaw.rules ?? []).map((r) => ({
         field: r.field,
         mode: fieldMode === 'allowlist' ? ('include' as const) : ('exclude' as const),
       }));
 
-      // Presidio NLP integration (optional)
+      // Presidio NLP integration (optional), over n8n's HTTP helper
+      const presidioRequester: PresidioRequester = async ({ method, url, body, timeout }) => {
+        const response = await this.helpers.httpRequest({
+          method: method as IHttpRequestMethods,
+          url,
+          body,
+          json: true,
+          timeout,
+          returnFullResponse: true,
+          ignoreHttpStatusErrors: true,
+        });
+        return { statusCode: response.statusCode as number, body: response.body as unknown };
+      };
       let enablePresidio = false;
       let presidioUrl = '';
       let presidioLanguage = 'en';
@@ -1048,7 +1104,7 @@ export class Redactor implements INodeType {
       const allowListRaw = this.getNodeParameter('allowList', 0, {}) as {
         entries?: Array<{ value: string; type: string }>;
       };
-      const allowList = (allowListRaw.entries ?? []).map((e) => ({
+      let allowList = (allowListRaw.entries ?? []).map((e) => ({
         value: e.value,
         type: (e.type || 'contains') as 'exact' | 'contains' | 'regex',
       }));
@@ -1057,13 +1113,41 @@ export class Redactor implements INodeType {
       const denyListRaw = this.getNodeParameter('denyList', 0, {}) as {
         entries?: Array<{ value: string; type: string }>;
       };
-      const denyList = (denyListRaw.entries ?? []).map((e) => ({
+      let denyList = (denyListRaw.entries ?? []).map((e) => ({
         value: e.value,
         type: (e.type || 'exact') as 'exact' | 'contains' | 'regex',
       }));
 
       // Confidence threshold
-      const confidenceThreshold = this.getNodeParameter('confidenceThreshold', 0, 0) as number;
+      let confidenceThreshold = this.getNodeParameter('confidenceThreshold', 0, 0) as number;
+      // The Report output exists only when the node itself turns it on (see outputs).
+      const hasReportOutput = includeReport || (this.getNodeParameter('auditLog', 0, false) as boolean);
+      let auditLog = this.getNodeParameter('auditLog', 0, false) as boolean;
+
+      // Tenant profile overrides the node settings it names
+      const useTenantProfile = this.getNodeParameter('useTenantProfile', 0, false) as boolean;
+      const profileRaw = useTenantProfile ? (this.getNodeParameter('tenantProfile', 0, '') as unknown) : '';
+      if (profileRaw !== '' && profileRaw !== undefined && profileRaw !== null) {
+        let profile;
+        try {
+          profile = parseTenantProfile(profileRaw, getPatternOptions().map((o) => o.value));
+        } catch (error) {
+          throw new NodeOperationError(this.getNode(), (error as Error).message, {
+            description: 'Fix the Tenant Profile (JSON) field, or leave it empty to use the node settings.',
+          });
+        }
+        if (profile.enabledPatterns) enabledPatterns = profile.enabledPatterns;
+        if (profile.customPatterns) customPatterns = profile.customPatterns;
+        if (profile.confidenceThreshold !== undefined) confidenceThreshold = profile.confidenceThreshold;
+        if (profile.redactionMode) mode = profile.redactionMode;
+        if (profile.dedup !== undefined) dedup = profile.dedup;
+        if (profile.fieldMode) fieldMode = profile.fieldMode;
+        if (profile.fieldRules) fieldRules = profile.fieldRules;
+        if (profile.allowList) allowList = profile.allowList;
+        if (profile.denyList) denyList = profile.denyList;
+        if (profile.retentionMinutes !== undefined) sessionTtl = profile.retentionMinutes;
+        if (profile.auditLog !== undefined) auditLog = profile.auditLog;
+      }
 
       // Initialize vault session
       vault.getOrCreateSession(sessionId, sessionTtl * 60 * 1000);
@@ -1080,6 +1164,7 @@ export class Redactor implements INodeType {
         confidenceThreshold,
         presidioUrl: enablePresidio ? presidioUrl : undefined,
         presidioLanguage: enablePresidio ? presidioLanguage : undefined,
+        presidioRequest: enablePresidio ? presidioRequester : undefined,
       };
 
       const allHits: RedactionHit[] = [];
@@ -1136,21 +1221,12 @@ export class Redactor implements INodeType {
         // Prompt injection parameter not available
       }
 
-      // Audit log (if enabled)
-      try {
-        const auditLog = this.getNodeParameter('auditLog', 0, false) as boolean;
-        if (auditLog) {
-          const startTime = Date.now();
-          const classification = classifyData(allHits);
-          writeAuditLog(
-            'REDACT', mode, allHits, items.length,
-            Date.now() - startTime, enabledPatterns.length,
-            !!ctx.presidioUrl, classification, sessionId,
-          );
-        }
-      } catch {
-        // Audit log parameter not available or write failed
-      }
+      const auditEntry = auditLog && hasReportOutput
+        ? buildAuditEntry(
+            'REDACT', mode, allHits, items.length, Date.now() - startTime,
+            enabledPatterns.length, !!ctx.presidioUrl, classifyData(allHits), sessionId,
+          )
+        : undefined;
 
       // Build output
       if (injectionResult && injectionResult.detected) {
@@ -1163,14 +1239,15 @@ export class Redactor implements INodeType {
         });
       }
 
-      if (includeReport) {
-        const report = buildReport(sessionId, allHits) as unknown as IDataObject;
-        if (this.getNodeParameter('includeRopa', 0, false) as boolean) {
+      if (hasReportOutput) {
+        const report: IDataObject = includeReport ? (buildReport(sessionId, allHits) as unknown as IDataObject) : {};
+        if (auditEntry) report.audit = auditEntry as unknown as IDataObject;
+        if (includeReport && (this.getNodeParameter('includeRopa', 0, false) as boolean)) {
           const d = this.getNodeParameter('ropa', 0, {}) as IDataObject;
           const list = (v: unknown) => String(v ?? '').split(',').map((x) => x.trim()).filter(Boolean);
           report.ropa = generateRopaRecord(
             allHits, classifyData(allHits), items.length, enabledPatterns.length, mode,
-            sessionTtl, !!vaultPassphrase, this.getNodeParameter('auditLog', 0, false) as boolean,
+            sessionTtl, !!vaultPassphrase, auditLog,
             { name: String(d.controllerName ?? ''), contactEmail: String(d.controllerContact ?? ''), dpo: d.dpo ? String(d.dpo) : undefined },
             list(d.purposes), String(d.legalBasis ?? 'legitimate_interest'), list(d.dataSubjects), list(d.recipients), [],
           ) as unknown as IDataObject;
@@ -1192,7 +1269,7 @@ export class Redactor implements INodeType {
           `No vault found for session "${sessionId}". Ensure a Redact node ran first with the same Session ID and vault storage type.`,
           {
             description:
-              'Testing step by step? Each "Execute step" gets a new execution ID, so Redact and Restore no longer share a session. Run the whole workflow, or set the same fixed Session ID (for example "test-1") on both nodes.',
+              'Testing step by step? Each "Execute step" gets a new execution ID, and n8n saves workflow storage only after production runs of an active workflow. Run the whole workflow, or set the same fixed Session ID (for example "test-1") on both nodes. Restore only works in the workflow that ran Redact.',
           },
         );
       }

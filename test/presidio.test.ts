@@ -4,7 +4,14 @@ import {
   getRedactorLabel,
   getRedactorCategory,
   getPresidioEntities,
+  resetCircuitBreaker,
+  PresidioRequester,
 } from '../nodes/Redactor/presidio';
+
+/** Models an unreachable Presidio: n8n's httpRequest rejects on connection errors. */
+const unreachable: PresidioRequester = async () => {
+  throw new Error('connect ECONNREFUSED');
+};
 import { MemoryVault } from '../nodes/Redactor/vault';
 import { enhanceWithPresidio } from '../nodes/Redactor/engine';
 import { RedactionContext, RedactionHit } from '../nodes/Redactor/types';
@@ -14,12 +21,12 @@ import { RedactionContext, RedactionHit } from '../nodes/Redactor/types';
 // ═══════════════════════════════════════════════════════
 describe('Presidio Client', () => {
   test('checkPresidioHealth returns false when unreachable', async () => {
-    const result = await checkPresidioHealth('http://localhost:99999');
+    const result = await checkPresidioHealth('http://localhost:99999', unreachable);
     expect(result).toBe(false);
   });
 
   test('analyzeWithPresidio returns empty array when unreachable', async () => {
-    const result = await analyzeWithPresidio('http://localhost:99999', 'John Smith called', 'en', 0.4, 2000);
+    const result = await analyzeWithPresidio('http://localhost:99999', 'John Smith called', 'en', 0.4, 2000, unreachable);
     expect(result).toEqual([]);
   });
 
@@ -34,8 +41,83 @@ describe('Presidio Client', () => {
   });
 
   test('getPresidioEntities returns empty when unreachable', async () => {
-    const result = await getPresidioEntities('http://localhost:99999');
+    const result = await getPresidioEntities('http://localhost:99999', unreachable);
     expect(result).toEqual([]);
+  });
+
+  test('returns empty without a transport', async () => {
+    expect(await analyzeWithPresidio('http://localhost:5002', 'John Smith', 'en')).toEqual([]);
+    expect(await checkPresidioHealth('http://localhost:5002')).toBe(false);
+  });
+
+  test('never calls non-http URLs', async () => {
+    const request = jest.fn(unreachable);
+    expect(await analyzeWithPresidio('file:///etc/passwd', 'John', 'en', 0.4, 1000, request)).toEqual([]);
+    expect(await analyzeWithPresidio('not a url', 'John', 'en', 0.4, 1000, request)).toEqual([]);
+    expect(request).not.toHaveBeenCalled();
+  });
+});
+
+describe('Presidio Client (mocked n8n transport)', () => {
+  beforeEach(() => resetCircuitBreaker());
+
+  const entity = { entity_type: 'PERSON', start: 0, end: 10, score: 0.85 };
+
+  test('POSTs the analyze request and returns entities', async () => {
+    const request = jest.fn<ReturnType<PresidioRequester>, Parameters<PresidioRequester>>(async () => ({ statusCode: 200, body: [entity] }));
+    const result = await analyzeWithPresidio('http://presidio:3000', 'John Smith called', 'de', 0.5, 4000, request);
+    expect(result).toEqual([entity]);
+    expect(request).toHaveBeenCalledWith({
+      method: 'POST',
+      url: 'http://presidio:3000/analyze',
+      body: { text: 'John Smith called', language: 'de', score_threshold: 0.5, return_decision_process: false },
+      timeout: 4000,
+    });
+  });
+
+  test('accepts a string body', async () => {
+    const result = await analyzeWithPresidio('http://p', 'x y', 'en', 0.4, 1000, async () => ({ statusCode: 200, body: JSON.stringify([entity]) }));
+    expect(result).toEqual([entity]);
+  });
+
+  test('non-200 and non-array bodies fall back to empty', async () => {
+    expect(await analyzeWithPresidio('http://p', 'x', 'en', 0.4, 1000, async () => ({ statusCode: 500, body: 'oops' }))).toEqual([]);
+    expect(await analyzeWithPresidio('http://p2', 'x', 'en', 0.4, 1000, async () => ({ statusCode: 200, body: { not: 'array' } }))).toEqual([]);
+  });
+
+  test('circuit breaker opens after 3 network failures for that URL', async () => {
+    const request = jest.fn(unreachable);
+    for (let i = 0; i < 5; i++) await analyzeWithPresidio('http://down', 'text', 'en', 0.4, 1000, request);
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  test('health check and supported entities use GET', async () => {
+    const request = jest.fn<ReturnType<PresidioRequester>, Parameters<PresidioRequester>>(async ({ url }) => ({
+      statusCode: 200,
+      body: url.endsWith('/supportedentities') ? ['PERSON', 'EMAIL_ADDRESS'] : 'ok',
+    }));
+    expect(await checkPresidioHealth('http://p', request)).toBe(true);
+    expect(await getPresidioEntities('http://p', request)).toEqual(['PERSON', 'EMAIL_ADDRESS']);
+    expect(request.mock.calls.map((c) => c[0].method)).toEqual(['GET', 'GET']);
+  });
+
+  test('enhanceWithPresidio redacts entities found by Presidio', async () => {
+    const vault = new MemoryVault();
+    vault.getOrCreateSession('pm', 0);
+    const hits: RedactionHit[] = [];
+    const request: PresidioRequester = async () => ({ statusCode: 200, body: [{ entity_type: 'PERSON', start: 11, end: 24, score: 0.9 }] });
+    const result = await enhanceWithPresidio(
+      { notes: 'Spoke with Sarah Johnson today' },
+      {
+        enabledPatterns: [], customPatterns: [], mode: 'token', dedup: true,
+        fieldRules: [], fieldMode: 'all', presidioUrl: 'http://p', presidioRequest: request,
+      },
+      vault, 'pm', hits, 0,
+    );
+    expect(result.notes).not.toContain('Sarah Johnson');
+    expect(result.notes).toMatch(/Spoke with \[PERSON_NAME_\d+\] today/);
+    expect(hits).toHaveLength(1);
+    expect(hits[0].patternName).toBe('presidio_PERSON');
   });
 });
 

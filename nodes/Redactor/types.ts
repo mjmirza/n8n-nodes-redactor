@@ -1,3 +1,4 @@
+import type { PresidioRequester } from './presidio';
 /** Shared type definitions for the PII Redactor node */
 
 export interface PiiPattern {
@@ -38,7 +39,7 @@ export type RedactionMode =
   | 'blackout'        // ████████ — visual black bars, NOT reversible
   | 'remove';         // (empty string) — complete removal, no trace, NOT reversible
 
-export type VaultStorage = 'memory' | 'file';
+export type VaultStorage = 'memory' | 'workflow' | 'file';
 
 export interface RedactionHit {
   token: string;
@@ -110,4 +111,6 @@ export interface RedactionContext {
   presidioUrl?: string;
   /** Language for Presidio analysis (default: en) */
   presidioLanguage?: string;
+  /** HTTP transport for Presidio, supplied by the node */
+  presidioRequest?: PresidioRequester;
 }

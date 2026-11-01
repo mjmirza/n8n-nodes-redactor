@@ -1,8 +1,8 @@
-import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
 import { encryptVaultData, decryptVaultData, isEncryptedVault, isPlaintextVault } from '../nodes/Redactor/encryption';
-import { FileVault } from '../nodes/Redactor/vault';
+import { WorkflowVault, VaultStore } from '../nodes/Redactor/vault';
+
+/** n8n persists static data as JSON, so a round trip models a later execution. */
+const persist = (store: VaultStore): VaultStore => JSON.parse(JSON.stringify(store));
 
 describe('Encryption Engine', () => {
   const testData = '{"sessionId":"test","entries":{},"createdAt":"2026-01-01T00:00:00Z","ttl":3600000}';
@@ -65,19 +65,15 @@ describe('Encryption Engine', () => {
   });
 });
 
-describe('FileVault with Encryption', () => {
-  let testDir: string;
+describe('WorkflowVault with Encryption', () => {
+  let store: VaultStore;
 
   beforeEach(() => {
-    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vault-enc-test-'));
-  });
-
-  afterEach(() => {
-    try { fs.rmSync(testDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    store = {};
   });
 
   test('encrypted vault: save and reload', () => {
-    const vault = new FileVault(testDir, 'my-secret');
+    const vault = new WorkflowVault(store, 'my-secret');
     vault.getOrCreateSession('enc-test', 0);
     vault.addEntry('enc-test', {
       token: '[EMAIL_0]',
@@ -88,15 +84,15 @@ describe('FileVault with Encryption', () => {
     });
     vault.save('enc-test');
 
-    // New vault instance with same passphrase should read it
-    const vault2 = new FileVault(testDir, 'my-secret');
+    // A later execution with the same passphrase reads it
+    const vault2 = new WorkflowVault(persist(store), 'my-secret');
     const session = vault2.getSession('enc-test');
     expect(session).not.toBeNull();
     expect(session!.entries['[EMAIL_0]'].original).toBe('secret@company.com');
   });
 
   test('wrong passphrase cannot read vault', () => {
-    const vault = new FileVault(testDir, 'correct-pass');
+    const vault = new WorkflowVault(store, 'correct-pass');
     vault.getOrCreateSession('secure', 0);
     vault.addEntry('secure', {
       token: '[SSN_0]',
@@ -107,37 +103,30 @@ describe('FileVault with Encryption', () => {
     });
     vault.save('secure');
 
-    // Different passphrase should NOT read the data
-    const vault2 = new FileVault(testDir, 'wrong-pass');
-    const session = vault2.getSession('secure');
-    expect(session).toBeNull();
+    const vault2 = new WorkflowVault(persist(store), 'wrong-pass');
+    expect(vault2.getSession('secure')).toBeNull();
   });
 
   test('no passphrase cannot read encrypted vault', () => {
-    const vault = new FileVault(testDir, 'my-secret');
+    const vault = new WorkflowVault(store, 'my-secret');
     vault.getOrCreateSession('protected', 0);
     vault.save('protected');
 
-    // No passphrase — cannot read encrypted file
-    const vault2 = new FileVault(testDir);
-    const session = vault2.getSession('protected');
-    expect(session).toBeNull();
+    const vault2 = new WorkflowVault(persist(store));
+    expect(vault2.getSession('protected')).toBeNull();
   });
 
-  test('vault without passphrase writes plaintext', () => {
-    const vault = new FileVault(testDir);
+  test('vault without passphrase stores plaintext and reloads', () => {
+    const vault = new WorkflowVault(store);
     vault.getOrCreateSession('plain', 0);
     vault.save('plain');
 
-    // Should be readable without passphrase
-    const vault2 = new FileVault(testDir);
-    const session = vault2.getSession('plain');
-    expect(session).not.toBeNull();
+    const vault2 = new WorkflowVault(persist(store));
+    expect(vault2.getSession('plain')).not.toBeNull();
   });
 
   test('tenant A cannot read tenant B vault (different passphrases)', () => {
-    // Tenant A
-    const vaultA = new FileVault(testDir, 'tenant-A-secret');
+    const vaultA = new WorkflowVault(store, 'tenant-A-secret');
     vaultA.getOrCreateSession('tenant-a-data', 0);
     vaultA.addEntry('tenant-a-data', {
       token: '[NAME_0]',
@@ -148,22 +137,17 @@ describe('FileVault with Encryption', () => {
     });
     vaultA.save('tenant-a-data');
 
-    // Tenant B tries to read Tenant A's vault
-    const vaultB = new FileVault(testDir, 'tenant-B-secret');
-    const sessionB = vaultB.getSession('tenant-a-data');
+    const vaultB = new WorkflowVault(persist(store), 'tenant-B-secret');
+    expect(vaultB.getSession('tenant-a-data')).toBeNull();
 
-    // MUST be null — cross-tenant isolation
-    expect(sessionB).toBeNull();
-
-    // Tenant A can still read their own vault
-    const vaultA2 = new FileVault(testDir, 'tenant-A-secret');
+    const vaultA2 = new WorkflowVault(persist(store), 'tenant-A-secret');
     const sessionA = vaultA2.getSession('tenant-a-data');
     expect(sessionA).not.toBeNull();
     expect(sessionA!.entries['[NAME_0]'].original).toBe('Alice Smith');
   });
 
-  test('encrypted vault file on disk is not human-readable', () => {
-    const vault = new FileVault(testDir, 'encrypt-me');
+  test('stored encrypted session is not human-readable', () => {
+    const vault = new WorkflowVault(store, 'encrypt-me');
     vault.getOrCreateSession('secret-session', 0);
     vault.addEntry('secret-session', {
       token: '[CC_0]',
@@ -174,18 +158,25 @@ describe('FileVault with Encryption', () => {
     });
     vault.save('secret-session');
 
-    // Read raw file from disk
-    const files = fs.readdirSync(testDir).filter((f) => f.startsWith('vault_'));
-    expect(files.length).toBe(1);
-    const rawContent = fs.readFileSync(path.join(testDir, files[0]));
-
-    // Raw content should NOT contain the original PII
-    const asString = rawContent.toString('utf-8');
+    const asString = JSON.stringify(store);
     expect(asString).not.toContain('4532-0151-1283-0366');
     expect(asString).not.toContain('secret-session');
     expect(asString).not.toContain('CREDIT_CARD');
 
-    // First byte should be the version marker
-    expect(rawContent[0]).toBe(0x01);
+    const sessions = (store.redactorVault as Record<string, { cipher?: string }>);
+    const cipher = Object.values(sessions)[0].cipher!;
+    expect(Buffer.from(cipher, 'base64')[0]).toBe(0x01);
+  });
+
+  test('tampered ciphertext is rejected, not decoded', () => {
+    const vault = new WorkflowVault(store, 'pw');
+    vault.getOrCreateSession('t', 0);
+    vault.save('t');
+    const sessions = store.redactorVault as Record<string, { cipher?: string }>;
+    const k = Object.keys(sessions)[0];
+    const raw = Buffer.from(sessions[k].cipher!, 'base64');
+    raw[raw.length - 1] ^= 0xff;
+    sessions[k].cipher = raw.toString('base64');
+    expect(new WorkflowVault(persist(store), 'pw').getSession('t')).toBeNull();
   });
 });

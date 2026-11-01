@@ -1,7 +1,7 @@
 import { classifyData } from '../nodes/Redactor/classification';
 import { detectPromptInjection, scanForInjection } from '../nodes/Redactor/injection';
 import { generatePseudonym } from '../nodes/Redactor/pseudonymize';
-import { writeAuditLog, readAuditLog } from '../nodes/Redactor/audit';
+import { buildAuditEntry } from '../nodes/Redactor/audit';
 import { RedactionHit } from '../nodes/Redactor/types';
 import { MemoryVault } from '../nodes/Redactor/vault';
 import { redactValue, restoreValue } from '../nodes/Redactor/engine';
@@ -276,48 +276,44 @@ describe('Pseudonymization', () => {
 // 3.2 AUDIT LOG
 // ═══════════════════════════════════════════════════════
 describe('Audit Log', () => {
-  const testDir = '/tmp/pii-audit-test-' + Date.now();
+  const hit = { token: '[E_0]', original: 'john@x.com', patternName: 'email', patternLabel: 'EMAIL', category: 'contact', field: 'e', itemIndex: 0, confidence: 0.9 } as RedactionHit;
 
-  test('writeAuditLog does not crash on empty hits', () => {
-    expect(() => {
-      writeAuditLog('REDACT', 'token', [], 0, 100, 90, false, undefined, 'test', testDir);
-    }).not.toThrow();
+  test('buildAuditEntry does not crash on empty hits', () => {
+    expect(() => buildAuditEntry('REDACT', 'token', [], 0, 100, 90, false, undefined, 'test')).not.toThrow();
   });
 
-  test('writeAuditLog creates log file', () => {
-    writeAuditLog('REDACT', 'token', [
-      { token: '[E_0]', original: '***', patternName: 'email', patternLabel: 'EMAIL', category: 'contact', field: 'e', itemIndex: 0, confidence: 0.9 },
-    ], 10, 150, 90, false, undefined, 'test-session', testDir);
-
-    const entries = readAuditLog(undefined, undefined, testDir);
-    // At least 2 entries (from this test and the previous one)
-    expect(entries.length).toBeGreaterThanOrEqual(1);
-    const redactEntry = entries.find((e) => e.action === 'REDACT' && e.totalHits === 1);
-    expect(redactEntry).toBeDefined();
-    expect(redactEntry!.totalHits).toBe(1);
+  test('buildAuditEntry counts hits by category and pattern', () => {
+    const entry = buildAuditEntry('REDACT', 'token', [hit, hit], 10, 150, 90, false, undefined, 'test-session');
+    expect(entry.totalHits).toBe(2);
+    expect(entry.hitsByCategory).toEqual({ contact: 2 });
+    expect(entry.hitsByPattern).toEqual({ EMAIL: 2 });
+    expect(entry.sessionId).toBe('test-session');
   });
 
-  test('readAuditLog returns empty for nonexistent dir', () => {
-    const entries = readAuditLog(undefined, undefined, '/tmp/nonexistent-' + Date.now());
-    expect(entries).toEqual([]);
-  });
-
-  test('audit log entry has all required fields', () => {
-    writeAuditLog('DETECT', 'token', [], 5, 200, 90, true, undefined, 'sess', testDir);
-    const entries = readAuditLog(undefined, undefined, testDir);
-    const last = entries[entries.length - 1];
-    expect(last.version).toBe('1.0');
+  test('audit entry has all required fields', () => {
+    const last = buildAuditEntry('DETECT', 'token', [], 5, 200, 90, true, undefined, 'sess');
+    expect(last.version).toBe('2.0');
     expect(last.timestamp).toBeDefined();
-    expect(last.eventId).toBeDefined();
-    expect(last.severity).toBeDefined();
+    expect(last.eventId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(last.severity).toBe('LOW');
     expect(last.action).toBe('DETECT');
     expect(last.presidioEnabled).toBe(true);
+    expect(last.processingTimeMs).toBe(200);
   });
 
-  afterAll(() => {
-    try {
-      const fs = require('fs');
-      fs.rmSync(testDir, { recursive: true, force: true });
-    } catch { /* ignore */ }
+  test('audit entry never carries the redacted values', () => {
+    const entry = buildAuditEntry('REDACT', 'token', [hit], 1, 1, 1, false);
+    expect(JSON.stringify(entry)).not.toContain('john@x.com');
+  });
+
+  test('severity escalates with classification and volume', () => {
+    expect(buildAuditEntry('R', 'token', [], 1, 1, 1, false, { level: 'RESTRICTED' } as any).severity).toBe('CRITICAL');
+    expect(buildAuditEntry('R', 'token', Array(20).fill(hit), 1, 1, 1, false).severity).toBe('HIGH');
+    expect(buildAuditEntry('R', 'token', Array(5).fill(hit), 1, 1, 1, false).severity).toBe('MEDIUM');
+  });
+
+  test('event IDs are unique', () => {
+    const ids = new Set(Array.from({ length: 50 }, () => buildAuditEntry('R', 'token', [], 0, 0, 0, false).eventId));
+    expect(ids.size).toBe(50);
   });
 });
