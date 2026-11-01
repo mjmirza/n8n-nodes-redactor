@@ -1472,10 +1472,20 @@ function lockChild(ctx: RedactionContext, container: object, key: string, comput
   return out;
 }
 
-/** Matches every token this session already maps, so input text equal to one can be protected. */
-export function priorTokenMatcher(entries: Record<string, unknown> | undefined): RegExp | undefined {
-  const tokens = Object.keys(entries ?? {}).filter((t) => t.length > 0).sort((a, b) => b.length - a.length);
+/**
+ * Matches every token this session already maps, so input text equal to one can be protected. With present, only
+ * tokens the input contains enter the pattern, so a long-lived session does not make every run scan its whole history.
+ */
+function priorTokenMatcher(
+  entries: Record<string, unknown> | undefined, present: (token: string) => boolean = () => true,
+): RegExp | undefined {
+  const tokens = Object.keys(entries ?? {}).filter((t) => t.length > 0 && present(t)).sort((a, b) => b.length - a.length);
   return tokens.length > 0 ? new RegExp(tokens.map(escapeRe).join('|'), 'g') : undefined;
+}
+
+/** The session's prior tokens that occur somewhere in this run's input. */
+export function priorTokensInInput(ctx: RedactionContext, entries: Record<string, unknown> | undefined): RegExp | undefined {
+  return priorTokenMatcher(entries, (token) => inputContains(ctx, token));
 }
 
 /** Input text equal to an earlier mapping gets its own mapping, so Restore returns it unchanged. */
