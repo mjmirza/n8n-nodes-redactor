@@ -1636,43 +1636,66 @@ for (const surname of ['Solangi','Ghaffar','Shaikh','Syed','Qureshi','Mirza','Ab
   LAST_NAMES.add(surname);
 }
 
+// One name word. Unicode letters, inner capitals such as McDonald, and inner apostrophes or hyphens such as O'Connor.
+const NAME_WORD = String.raw`\p{Lu}\p{Ll}*(?:\p{Lu}\p{Ll}+)*(?:['’-]\p{Lu}?\p{Ll}+(?:\p{Lu}\p{Ll}+)*)*`;
+const CAPITAL_RUN = new RegExp(String.raw`(?<![\p{L}\p{N}'’-])${NAME_WORD}(?:\s+${NAME_WORD})*(?![\p{L}\p{N}])`, 'gu');
+const MAX_NAME_WORDS = 4;
+
+type NameWord = { word: string; at: number };
+type NameSpan = { name: string; start: number; end: number };
+
+/** A word is known when it, a hyphen part, or its root after an O' or Mc prefix is in the name dictionaries. */
+function isKnownName(word: string): boolean {
+  const parts = word.split('-').flatMap((p) => [p, p.replace(/^(?:O['’]|Mc|Mac)(?=\p{Lu})/u, '')]);
+  return parts.some((p) => FIRST_NAMES.has(p) || LAST_NAMES.has(p));
+}
+
 /**
  * Detect person names in free text using the name dictionary.
  * Returns array of {name, startIndex, endIndex} matches.
  */
-export function detectNamesInText(text: string): Array<{name: string; start: number; end: number}> {
-  const results: Array<{name: string; start: number; end: number}> = [];
-
-  // Match sequences of 2-4 capitalized words
-  const capitalWordSeq = /\b([A-ZÀ-ÿ][a-zà-ÿ]{1,20}(?:\s+[A-ZÀ-ÿ][a-zà-ÿ]{1,20}){1,3})\b/g;
-
-  let match: RegExpExecArray | null;
-  while ((match = capitalWordSeq.exec(text)) !== null) {
-    for (const run of nameRuns(match[1], match.index)) results.push(run);
+export function detectNamesInText(text: string): NameSpan[] {
+  const results: NameSpan[] = [];
+  for (const match of text.matchAll(CAPITAL_RUN)) {
+    if (!/\p{Ll}/u.test(match[0])) continue;
+    const words = [...match[0].matchAll(/\S+/g)].map((w) => ({ word: w[0], at: (match.index ?? 0) + (w.index ?? 0) }));
+    for (const segment of nameSegments(words)) results.push(...chunkSegment(text, segment));
   }
-
   return results;
 }
 
-/** Splits a capitalized sequence at non-name words, so a leading "This" never hides the name after it. */
-function nameRuns(sequence: string, offset: number): Array<{name: string; start: number; end: number}> {
-  const runs: Array<{name: string; start: number; end: number}> = [];
-  let words: Array<{ word: string; at: number }> = [];
+/**
+ * Splits a capitalized run at non-name words. A word that is both a non-name and a name, such as May or West,
+ * stays only when a word that is only a name sits in the same segment.
+ */
+function nameSegments(words: NameWord[]): NameWord[][] {
+  const segments: NameWord[][] = [];
+  let current: NameWord[] = [];
   const flush = () => {
-    const known = words.some((w) => FIRST_NAMES.has(w.word) || LAST_NAMES.has(w.word));
-    if (words.length >= 2 && known) {
-      const start = offset + words[0].at;
-      const last = words[words.length - 1];
-      runs.push({ name: sequence.slice(words[0].at, last.at + last.word.length), start, end: offset + last.at + last.word.length });
-    }
-    words = [];
+    const anchored = current.some((w) => isKnownName(w.word) && !NOT_NAMES.has(w.word));
+    if (anchored) segments.push(current);
+    current = [];
   };
-  for (const m of sequence.matchAll(/\S+/g)) {
-    if (NOT_NAMES.has(m[0])) flush();
-    else words.push({ word: m[0], at: m.index ?? 0 });
+  for (const w of words) {
+    if (NOT_NAMES.has(w.word) && !isKnownName(w.word)) flush();
+    else current.push(w);
   }
   flush();
-  return runs;
+  return segments;
+}
+
+/** Splits a long segment into names of up to four words, each with at least two words and a known part. */
+function chunkSegment(text: string, segment: NameWord[]): NameSpan[] {
+  const spans: NameSpan[] = [];
+  for (let i = 0; i < segment.length; i += MAX_NAME_WORDS) {
+    const chunk = segment.slice(i, i + MAX_NAME_WORDS);
+    if (chunk.length < 2 || !chunk.some((w) => isKnownName(w.word))) continue;
+    const last = chunk[chunk.length - 1];
+    const start = chunk[0].at;
+    const end = last.at + last.word.length;
+    spans.push({ name: text.slice(start, end), start, end });
+  }
+  return spans;
 }
 
 /**

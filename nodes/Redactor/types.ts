@@ -115,6 +115,8 @@ export interface RedactionContext {
   fieldRules: FieldRule[];
   fieldMode: 'all' | 'allowlist' | 'denylist';
   skipSemantic?: boolean;
+  /** Overrides skipSemantic for the person-name stage only. */
+  skipNames?: boolean;
   /** Scan numeric values as text (Detect and Verify) */
   scanNumbers?: boolean;
   /** Values to NEVER redact (bypass) */

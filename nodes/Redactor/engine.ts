@@ -936,38 +936,44 @@ function redactMatch(pass: TextPass, match: string, decision: Decision): string 
   return replacement;
 }
 
-/** First segment index whose source end lies after pos. Segments are in source order. */
-function segmentAfter(segs: Segment[], pos: number): number {
-  let lo = 0;
-  let hi = segs.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (segs[mid].end <= pos) lo = mid + 1;
-    else hi = mid;
+/** The earliest pending detection covering pos, advancing the cursor past detections that end before it. */
+function coveringPending(pending: Pending[], cursor: { i: number }, pos: number): Pending | undefined {
+  while (cursor.i < pending.length && pending[cursor.i].end <= pos) cursor.i++;
+  for (let k = cursor.i; k < pending.length && pending[k].start <= pos; k++) {
+    if (pending[k].end > pos) return pending[k];
   }
-  return lo;
+  return undefined;
 }
 
-/** Redacts the free parts of a detection that overlapped earlier replacements, so no tail stays exposed. */
-function claimPending(pass: TextPass, pending: Pending[]): void {
-  for (const p of pending) {
-    let i = segmentAfter(pass.segs, p.start);
-    while (i < pass.segs.length && pass.segs[i].src < p.end) {
-      const seg = pass.segs[i];
-      if (seg.locked) {
-        i++;
-        continue;
-      }
-      const start = Math.max(seg.src, p.start);
+/** Splits one free segment into the parts pending detections cover and the parts they leave free. */
+function claimSegment(pass: TextPass, seg: Segment, pending: Pending[], cursor: { i: number }, into: Segment[]): void {
+  let pos = seg.src;
+  while (pos < seg.end) {
+    const p = coveringPending(pending, cursor, pos);
+    if (p) {
       const end = Math.min(seg.end, p.end);
-      const parts: Segment[] = [];
-      if (start > seg.src) parts.push(freeSlice(seg, seg.src, start));
-      parts.push({ text: redactMatch(pass, pass.source.slice(start, end), p.decision), locked: true, src: start, end });
-      if (end < seg.end) parts.push(freeSlice(seg, end, seg.end));
-      pass.segs.splice(i, 1, ...parts);
-      i += parts.length;
+      into.push({ text: redactMatch(pass, pass.source.slice(pos, end), p.decision), locked: true, src: pos, end });
+      pos = end;
+      continue;
     }
+    const next = cursor.i < pending.length ? Math.max(pos + 1, pending[cursor.i].start) : seg.end;
+    const end = Math.min(seg.end, next);
+    into.push(freeSlice(seg, pos, end));
+    pos = end;
   }
+}
+
+/** Redacts the free parts of detections that overlapped earlier replacements, in one ordered sweep. */
+function claimPending(pass: TextPass, pending: Pending[]): void {
+  if (pending.length === 0) return;
+  pending.sort((a, b) => a.start - b.start);
+  const next: Segment[] = [];
+  const cursor = { i: 0 };
+  for (const seg of pass.segs) {
+    if (seg.locked || seg.end <= pending[cursor.i]?.start || cursor.i >= pending.length) next.push(seg);
+    else claimSegment(pass, seg, pending, cursor, next);
+  }
+  pass.segs = next;
 }
 
 /** Claims one candidate. Returns false when it touched earlier replacements and was queued instead. */
@@ -1074,8 +1080,9 @@ function nameSpans(pass: TextPass): Array<{ start: number; end: number }> {
 
 /** Each occurrence is scored on its own context and redacted on its own, so Dedup applies per mention. */
 function nameStage(pass: TextPass): void {
-  if (pass.ctx.skipSemantic) return;
-  replaceSpans(pass, nameSpans(pass), (match, start) => {
+  if (pass.ctx.skipNames ?? pass.ctx.skipSemantic) return;
+  replaceSpans(pass, nameSpans(pass),
+ (match, start) => {
     if (isAllowListed(match, pass.ctx.allowList)) return null;
     const confidence = hasContextWords(pass.source, start, start + match.length, NAME_CONTEXT_WORDS) ? 0.8 : 0.65;
     if (confidence < pass.threshold) return null;
@@ -1240,17 +1247,52 @@ function toUtf16Spans(text: string, entities: Array<{ entity_type: string; start
     .map((e) => ({ start: offsets[e.start], end: offsets[e.end], score: e.score, entityType: e.entity_type }));
 }
 
-/** Keeps the strongest span in each overlapping region: higher score, then longer. */
-function resolveOverlaps(spans: Span[]): Span[] {
-  const ranked = [...spans].sort((a, b) => b.score - a.score || (b.end - b.start) - (a.end - a.start) || a.start - b.start);
+/** Keeps the strongest span in a cluster of overlapping spans: higher score, then longer. */
+function resolveCluster(cluster: Span[]): Span[] {
+  const ranked = [...cluster].sort((a, b) => b.score - a.score || (b.end - b.start) - (a.end - a.start) || a.start - b.start);
   const kept: Span[] = [];
   for (const span of ranked) {
     if (!kept.some((k) => span.start < k.end && k.start < span.end)) kept.push(span);
   }
-  return kept.sort((a, b) => b.start - a.start);
+  return kept;
 }
 
-/** Spans above the threshold that do not touch a replacement the regex pass produced. */
+/** Resolves overlaps cluster by cluster, so disjoint spans cost linear time. Returns spans in source order. */
+function resolveOverlaps(spans: Span[]): Span[] {
+  const sorted = [...spans].sort((a, b) => a.start - b.start);
+  const out: Span[] = [];
+  let cluster: Span[] = [];
+  let reach = -1;
+  for (const span of sorted) {
+    if (span.start >= reach && cluster.length > 0) {
+      out.push(...resolveCluster(cluster));
+      cluster = [];
+    }
+    cluster.push(span);
+    reach = Math.max(reach, span.end);
+  }
+  out.push(...resolveCluster(cluster));
+  return out.sort((a, b) => a.start - b.start);
+}
+
+/** The parts of each span that no regex replacement covers, so an overlapped entity still loses its free tail. */
+function subtractLocked(spans: Span[], locked: Array<[number, number]>): Span[] {
+  const sortedLocks = [...locked].sort((a, b) => a[0] - b[0]);
+  const out: Span[] = [];
+  let k = 0;
+  for (const span of spans) {
+    while (k < sortedLocks.length && sortedLocks[k][1] <= span.start) k++;
+    let pos = span.start;
+    for (let j = k; j < sortedLocks.length && sortedLocks[j][0] < span.end; j++) {
+      if (sortedLocks[j][0] > pos) out.push({ ...span, start: pos, end: sortedLocks[j][0] });
+      pos = Math.max(pos, sortedLocks[j][1]);
+    }
+    if (pos < span.end) out.push({ ...span, start: pos, end: span.end });
+  }
+  return out;
+}
+
+/** Spans above the threshold, with any part a regex replacement covers removed, in source order. */
 function presidioSpans(
   value: string,
   entities: Array<{ entity_type: string; start: number; end: number; score: number }>,
@@ -1258,8 +1300,7 @@ function presidioSpans(
   locked: Array<[number, number]>,
 ): Span[] {
   const threshold = ctx.confidenceThreshold ?? 0;
-  const free = (s: Span) => !locked.some(([start, end]) => s.start < end && start < s.end);
-  return resolveOverlaps(toUtf16Spans(value, entities).filter((s) => s.score >= threshold && free(s)));
+  return subtractLocked(resolveOverlaps(toUtf16Spans(value, entities).filter((s) => s.score >= threshold)), locked);
 }
 
 async function presidioRedactString(
@@ -1276,22 +1317,24 @@ async function presidioRedactString(
   const entities = await analyzeWithPresidio(
     ctx.presidioUrl!, value, ctx.presidioLanguage || 'en', 0.4, 10000, ctx.presidioRequest,
   );
-  const spans = presidioSpans(value, entities, ctx, locked);
-  let text = value;
-  for (const span of spans) {
+  const parts: string[] = [];
+  let last = 0;
+  for (const span of presidioSpans(value, entities, ctx, locked)) {
     const matchedText = value.slice(span.start, span.end);
     if (isAllowListed(matchedText, ctx.allowList)) continue;
     const label = getRedactorLabel(span.entityType);
     const category = getRedactorCategory(span.entityType) as PiiCategory;
     const replacement = applyRedaction(matchedText, { label, category }, ctx, vault, sessionId);
-    text = text.slice(0, span.start) + replacement + text.slice(span.end);
+    parts.push(value.slice(last, span.start), replacement);
+    last = span.end;
     hits.push({
       token: replacement, original: '***',
       patternName: `presidio_${span.entityType}`, patternLabel: label,
       category, field: path, itemIndex, confidence: span.score,
     });
   }
-  return text;
+  parts.push(value.slice(last));
+  return parts.join('');
 }
 
 // A one-word identifier such as "note" or "customer_id" is a schema name, so only free-text keys go to Presidio.
@@ -1301,6 +1344,7 @@ const IDENTIFIER_KEY = /^[\p{L}_$][\p{L}\p{N}_$-]*$/u;
 async function presidioKey(
   key: string,
   original: string,
+  source: Record<string, unknown>,
   taken: Record<string, unknown>,
   ctx: RedactionContext,
   vault: IVault,
@@ -1311,16 +1355,26 @@ async function presidioKey(
   policyPath: string,
 ): Promise<string> {
   if (IDENTIFIER_KEY.test(key) || !shouldProcessField(policyPath, ctx.fieldMode, ctx.fieldRules)) return key;
-  const locked = ctx.keyLocks?.get(taken)?.get(key) ?? [];
+  const locked = ctx.keyLocks?.get(source)?.get(key) ?? [];
   let out = key;
   try {
     out = await presidioRedactString(key, ctx, vault, sessionId, hits, itemIndex, path, locked);
   } catch {
     return key; // Presidio failed for this key. Regex results stand.
   }
-  const clashes = (k: string) => k === '' || Object.prototype.hasOwnProperty.call(taken, k);
+  // Keys not written yet count too, so a renamed key never overwrites a later property.
+  const others = new Set(Object.keys(source).filter((k) => k !== key));
+  const clashes = (k: string) => k === '' || Object.prototype.hasOwnProperty.call(taken, k) || others.has(k);
   if (out === key || !clashes(out)) return out;
-  return distinctKey(out, original, clashes, ctx, vault, sessionId, Object.keys(taken));
+  return distinctKey(out, original, clashes, ctx, vault, sessionId, [...others, ...Object.keys(taken)]);
+}
+
+/** Rewrites report paths under a key Presidio renamed, so no hit names the original key. */
+function renamePaths(hits: RedactionHit[], from: string, to: string): void {
+  for (const h of hits) {
+    if (h.field === from) h.field = to;
+    else if (h.field.startsWith(`${from}.`) || h.field.startsWith(`${from}[`)) h.field = to + h.field.slice(from.length);
+  }
 }
 
 async function presidioWalk(
@@ -1358,8 +1412,13 @@ async function presidioWalk(
       const child = path ? `${path}.${k}` : k;
       const childPolicy = policyPath ? `${policyPath}.${original}` : original;
       const lock = ctx.lockedSpans?.get(value)?.get(k);
-      const key = await presidioKey(k, original, out, ctx, vault, sessionId, hits, itemIndex, child, childPolicy);
-      setOwn(out, key, await presidioWalk(v, ctx, vault, sessionId, hits, itemIndex, child, childPolicy, lock));
+      const keyHits: RedactionHit[] = [];
+      const source = value as Record<string, unknown>;
+      const key = await presidioKey(k, original, source, out, ctx, vault, sessionId, keyHits, itemIndex, child, childPolicy);
+      const finalChild = path ? `${path}.${key}` : key;
+      if (key !== k) renamePaths(hits, child, finalChild);
+      for (const h of keyHits) hits.push({ ...h, field: finalChild });
+      setOwn(out, key, await presidioWalk(v, ctx, vault, sessionId, hits, itemIndex, finalChild, childPolicy, lock));
     }
     return out;
   }

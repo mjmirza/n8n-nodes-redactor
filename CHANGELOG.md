@@ -6,6 +6,24 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 Planned: random scoped tokens.
 
+## [6.1.0] - 2026-11-01
+
+Fixes every finding from an eighth adversarial review, run against 6.0.0. Each one has a regression test in `test/codex-review-60.test.ts` that fails on 6.0.0. The one output change that could surprise a saved workflow, Verify checking names, applies to node version 2 only.
+
+### Security
+- **A chain of overlapping alternatives stalled the regex check.** `(?:a|aa)` repeated 35 times passed the safety check and hung on 53 characters. Adjacent alternation groups whose branches overlap are now refused.
+- **Presidio broke Restore for pseudonymized keys and named original keys in the report.** Key locks are now read from the source object, report paths use the final key, and a renamed key never overwrites a property that appears later in the source.
+- **Presidio dropped an entity that overlapped an earlier replacement.** Its free remainder is now redacted with its own mapping.
+- **Common formats were missed.** Email now covers punycode TLDs, address literals such as `alice@[192.168.1.1]` and escaped quotes. IBANs follow each country's registered length, so 15 and 16 character IBANs are found. A valid card is kept when another number follows it. French, UK and Dutch phones with a leading `+` match. Compressed IPv6 forms such as `::1` and `2001:db8::1` are found whole. Names cover apostrophes, hyphens, `Mc` and `Mac`, accented letters, and words such as `West` and `May` next to a known name, and a long capitalized run is no longer cut before the name.
+- **Injection scanning ignored keys.** Keys are scanned now, and their text stays out of the diagnostics.
+
+### Fixed
+- Six built-in patterns (German address, .edu email, LDAP DN, connection strings, private keys, PGP private keys), the memory vault, overlap handling and Presidio spans took quadratic time. Each now runs in linear time.
+- The zero-width check depended on the previous call, the Base64 check could never match `DAN`, and a combined injection result kept the message of its strongest field. Each result is now independent and its message matches its score.
+- A Presidio VAT entity was filed as identity. Presidio categories now follow the built-in pattern with the same label.
+- ROPA reported the requested TTL even when the session already existed with another one. It now reports the TTL in force.
+- Verify skipped dictionary name detection. On node version 2 it now reports a leaked name.
+
 ## [6.0.0] - 2026-11-01
 
 Fixes every finding from a seventh adversarial review, run against 5.2.0. Each one has a regression test in `test/codex-review-52.test.ts`. The node gains version 2. New nodes use it, and saved workflows keep version 1, so the two output changes below never reach an existing workflow silently. Deliberate limits are recorded in `docs/DESIGN-DECISIONS.md`.

@@ -933,6 +933,8 @@ export class Redactor implements INodeType {
         // Verify mode: skip semantic field-name detection.
         // Only check if actual PII VALUES leaked through (regex only).
         skipSemantic: operation === 'verify',
+        // From version 2, Verify still checks free text for leaked person names.
+        skipNames: operation === 'verify' && this.getNode().typeVersion < 2,
         // Numbers reach the LLM as text too, so they are scanned as their string form.
         scanNumbers: true,
       };
@@ -1203,7 +1205,9 @@ export class Redactor implements INodeType {
 
       // Initialize vault session
       try {
-        vault.getOrCreateSession(sessionId, sessionTtl * 60 * 1000);
+        // A reused session keeps the TTL it was created with, so the ROPA reports that one.
+        const session = vault.getOrCreateSession(sessionId, sessionTtl * 60 * 1000);
+        sessionTtl = session.ttl / 60000;
       } catch (error) {
         throw new NodeOperationError(this.getNode(), (error as Error).message);
       }

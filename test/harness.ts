@@ -1,5 +1,7 @@
 /** Shared execute() harness for the node tests. Mirrors how n8n hands a node its context. */
 import type { IDataObject, IExecuteFunctions, INodeExecutionData } from 'n8n-workflow';
+import { MemoryVault } from '../nodes/Redactor/vault';
+import type { RedactionContext, RedactionHit } from '../nodes/Redactor/types';
 import { Redactor } from '../nodes/Redactor/Redactor.node';
 import { checkRegex } from '../nodes/Redactor/regexSafety';
 import { parseTenantProfile } from '../nodes/Redactor/profiles';
@@ -54,4 +56,16 @@ export const persist = (data: IDataObject): IDataObject => JSON.parse(JSON.strin
 export function expectRegexRefused(re: string): void {
   expect(checkRegex(re)).not.toBeNull();
   expect(() => parseTenantProfile({ customPatterns: [{ label: 'x', regex: re }] })).toThrow();
+}
+
+/** A fresh memory vault with session "s" and an engine context for direct engine tests. */
+export function engineSetup(overrides: Partial<RedactionContext>): { vault: MemoryVault; ctx: RedactionContext; hits: RedactionHit[] } {
+  const vault = new MemoryVault();
+  vault.getOrCreateSession('s', 0);
+  const ctx: RedactionContext = {
+    enabledPatterns: [], customPatterns: [], mode: 'token', dedup: true, fieldRules: [], fieldMode: 'all',
+    skipSemantic: true, scanNumbers: true, lockedSpans: new WeakMap(), keyLocks: new WeakMap(), keyOrigins: new WeakMap(),
+    ...overrides,
+  };
+  return { vault, ctx, hits: [] };
 }
