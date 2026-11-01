@@ -134,6 +134,10 @@ Every version:
 - Secrets such as `password=...` are matched with quoted values taken whole, spaces included, and passwords of any length.
 - An unknown word inside a name run that holds a known name, as in `Alice Beth Claire Xochitl Quispe`, is redacted with the rest of the name.
 - A Redact run whose session expires before it finishes stops with an error instead of returning tokens.
+- More names are redacted: every word after a title such as `Mr.` or `Dr.`, all-capitals names such as `JOHN SMITH`, and long labelled full names. A labelled name still stops at a lower-case word after its first four words.
+- Compact international phone numbers such as `+436641234567` are redacted by the new `phoneE164` pattern, which is part of the recommended set.
+- Secrets under quoted keys, as in `{"password":"..."}`, are redacted.
+- On Detect, a failed Include Audit Report or Audit Log expression stops the run instead of dropping the report.
 - A tenant profile with a `NaN` confidence threshold is refused.
 - A built-in pattern match that overlaps an earlier replacement no longer causes a rescan from the next character. Its free parts are still redacted.
 

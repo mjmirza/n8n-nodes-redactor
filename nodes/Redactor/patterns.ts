@@ -478,6 +478,26 @@ function scanConnStrings(text: string): Span[] {
 // The label is matched case-insensitively, so the word does not tell upper from lower case and nothing competes.
 const CTX_NAME_WORD = String.raw`\p{L}[\p{L}\p{M}]*(?:['’-]\p{L}[\p{L}\p{M}]*)*`;
 const FULL_NAME_LABELS = String.raw`full\s*name|first\s*name|last\s*name|surname|family\s*name|given\s*name|Vorname|Nachname|Familienname|nom\s*de\s*famille|prenom|nombre|apellido`;
+// A title-case or all-capitals name word, with inner capitals, apostrophes or hyphens.
+const TITLED_WORD = String.raw`(?:\p{Lu}{2,}(?:['’-]\p{Lu}+)*|\p{Lu}[\p{Ll}\p{M}]*(?:\p{Lu}[\p{Ll}\p{M}]+)*(?:['’-]\p{Lu}?[\p{Ll}\p{M}]+(?:\p{Lu}[\p{Ll}\p{M}]+)*)*)`;
+
+/** Makes the letters of a regex source match either case, leaving escapes such as \s alone. */
+function ci(source: string): string {
+  let out = '';
+  for (let i = 0; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === '\x5c') {
+      out += ch + (source[i + 1] ?? '');
+      i++;
+      continue;
+    }
+    const upper = ch.toUpperCase();
+    const lower = ch.toLowerCase();
+    out += upper !== lower ? `[${upper}${lower}]` : ch;
+  }
+  return out;
+}
+
 const MAIDEN_LABELS = String.raw`mother['’]?s?\s*maiden\s*name|Geburtsname|nom\s+de\s+jeune\s+fille`;
 
 export const PII_PATTERNS: PiiPattern[] = [
@@ -499,6 +519,14 @@ export const PII_PATTERNS: PiiPattern[] = [
     category: 'contact',
     regex: /(?:\+\d{1,3}[\s\-.])?(?:\(\d{2,4}\)|\d{2,4})[\s\-.]\d{3,4}[\s\-.]\d{3,8}/g,
     description: 'Phone numbers (international formats)',
+  },
+  {
+    name: 'phoneE164',
+    label: 'PHONE',
+    category: 'contact',
+    // A compact international number with no separators, as in +436641234567 (E.164: up to 15 digits).
+    regex: /(?<![\w+])\+[1-9]\d{7,14}(?!\d)/g,
+    description: 'Phone numbers in compact international form (+436641234567)',
   },
   {
     name: 'phoneUK',
@@ -550,8 +578,11 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'personName',
     label: 'PERSON',
     category: 'identity',
-    regex:
-      /(?<![\p{L}\p{N}])(?:Mr\.?|Mrs\.?|Ms\.?|Miss|Dr\.?|Prof\.?|Sr\.?|Jr\.?|Herr|Frau|Monsieur|Madame|Señor|Señora)\s+\p{Lu}\p{Ll}*(?:\p{Lu}\p{Ll}+)*(?:['’-]\p{Lu}?\p{Ll}+(?:\p{Lu}\p{Ll}+)*)*(?:\s+\p{Lu}\p{Ll}*(?:\p{Lu}\p{Ll}+)*(?:['’-]\p{Lu}?\p{Ll}+(?:\p{Lu}\p{Ll}+)*)*){0,3}(?![\p{L}\p{N}])/gu,
+    // Every name word after the title, of any number, in title case or all capitals as in Mr. JOHN SMITH.
+    regex: new RegExp(
+      String.raw`(?<![\p{L}\p{N}])(?:Mr\.?|Mrs\.?|Ms\.?|Miss|Dr\.?|Prof\.?|Sr\.?|Jr\.?|Herr|Frau|Monsieur|Madame|Señor|Señora)\s+${TITLED_WORD}(?:\s+${TITLED_WORD})*(?![\p{L}\p{N}])`,
+      'gu',
+    ),
 
     description: 'Person names with title prefixes (Mr., Mrs., Dr., etc.)',
   },
@@ -1362,7 +1393,8 @@ export const PII_PATTERNS: PiiPattern[] = [
     category: 'enterprise',
     // A quoted value is taken whole, spaces included. A password may be short, as in password=admin. Other keys need
     // eight characters unquoted, so prose such as "token: the" is left alone.
-    regex: /(?:(?:password|passwd|pwd|secret)\s*[=:]\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s'"]+)|(?:token|credential|auth_key|api_key|apikey|api_secret|api_token|access_token|secret_key|private_key|encryption_key)\s*[=:]\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s'"]{8,}))/gi,
+    // Keys may be quoted, as in JSON. Quoted values honour backslash escapes, so an escaped quote stays inside.
+    regex: /(?:["']?(?:password|passwd|pwd|secret)["']?\s*[=:]\s*(?:"(?:[^"\x5c\r\n]|\x5c.)*"|'(?:[^'\x5c\r\n]|\x5c.)*'|[^\s'"]+)|["']?(?:token|credential|auth_key|api_key|apikey|api_secret|api_token|access_token|secret_key|private_key|encryption_key)["']?\s*[=:]\s*(?:"(?:[^"\x5c\r\n]|\x5c.)*"|'(?:[^'\x5c\r\n]|\x5c.)*'|[^\s'"]{8,}))/gi,
     description: 'Secrets in config (password=, api_key=, secret=, token=, etc.), quoted values whole',
   },
   {
@@ -1725,7 +1757,12 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'fullNameCtx',
     label: 'FULL_NAME',
     category: 'identity',
-    regex: new RegExp(String.raw`(?:${FULL_NAME_LABELS})[:\s]+${CTX_NAME_WORD}(?:\s+${CTX_NAME_WORD}){0,3}`, 'giu'),
+    // Up to three more words in any case, then any number of capitalised words, so a long name is covered whole
+    // while a lower-case sentence after a short name is not.
+    regex: new RegExp(
+      String.raw`(?:${ci(FULL_NAME_LABELS)})[:\s]+${CTX_NAME_WORD}(?:\s+${CTX_NAME_WORD}){0,3}(?:\s+\p{Lu}[\p{L}\p{M}]*(?:['’-]\p{L}[\p{L}\p{M}]*)*)*`,
+      'gu',
+    ),
     description: 'Full name, first name, last name (labeled, multi-language)',
   },
   {

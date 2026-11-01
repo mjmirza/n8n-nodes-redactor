@@ -17,7 +17,7 @@ The answer with most tools is either "no" or "it's complicated." With Redactor, 
 | **Installation** | **One-click** | Built-in | Docker + config | One-click | One-click | Docker + code | Cloud setup | Container deploy | SaaS signup |
 | | | | | | | | | | |
 | **DETECTION** | | | | | | | | | |
-| PII types | **216+** | ~4 | ~40 (Presidio) | Unknown | Limited | ~40 | 150+ | 50+ | 100+ |
+| PII types | **217+** | ~4 | ~40 (Presidio) | Unknown | Limited | ~40 | 150+ | 50+ | 100+ |
 | Categories | **12** | 1 | 4 | Unknown | 2 | 4 | 10+ | 10+ | 10+ |
 | Countries covered | **35+** | US only | 4 | 60 langs | US only | 10+ | 40+ | 50+ | 30+ |
 | Person name detection | **Semantic + Dictionary + NLP** | No | Presidio NER | Unknown | No | spaCy NER | ML-based | ML-based | ML-based |
@@ -115,7 +115,7 @@ The answer with most tools is either "no" or "it's complicated." With Redactor, 
 
 | Metric | Redactor | Best Alternative |
 |--------|----------|-----------------|
-| PII pattern count | **216** | Google DLP: 150 |
+| PII pattern count | **217** | Google DLP: 150 |
 | Redaction modes | **7** | Google DLP: 8 |
 | Operations | **8** | Google DLP: 3 |
 | Countries | **35+** | Private AI: 50+ |
@@ -145,7 +145,7 @@ Strip PII before the LLM, restore it after, with the mapping encrypted at rest s
 Token, Mask, Hash, Redact, Pseudonymize (fake realistic data), Blackout (████████ visual bars), Remove (complete deletion). **No other n8n tool offers all 7.**
 
 ### 5. Prompt Injection + PII Protection in One Node
-Detect jailbreaks, instruction overrides, delimiter escapes, encoded payloads, AND 216+ PII types in a single node. **Guardrails does injection but not PII restoration. PromptLock does injection but needs an external API.**
+Detect jailbreaks, instruction overrides, delimiter escapes, encoded payloads, AND 217+ PII types in a single node. **Guardrails does injection but not PII restoration. PromptLock does injection but needs an external API.**
 
 ### 6. GDPR Art.30 ROPA Report Generation
 Auto-generates Records of Processing Activities covering all 8 fields required by Article 30(1). **No other n8n tool or even most enterprise tools do this.**

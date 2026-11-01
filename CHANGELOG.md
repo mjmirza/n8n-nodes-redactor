@@ -40,6 +40,11 @@ Fixes every finding from a ninth adversarial review, run against 6.1.0. Each one
 - Taproot and upper-case Bech32 Bitcoin addresses were missed. They are detected now.
 - A session whose TTL ran out during Redact returned tokens that could never be restored. The run now stops with an error instead.
 - The README placed Detect in the production chain, where its summary item reached Verify. Detect is now described as a dry run.
+- Secrets under a quoted key, as in JSON `{"password":"..."}`, were missed, and an escaped quote ended a quoted value early. Quoted keys are matched and escapes stay inside the value.
+- Names after a title stopped after four words and skipped all-capitals names such as `Mr. JOHN SMITH`. Every name word after a title is covered, all-capitals runs are looked up in the name dictionary, and a labelled full name takes any number of capitalised words.
+- Compact international phone numbers such as `+436641234567` were missed. A new `phoneE164` pattern finds them and is part of the recommended set, bringing the total to 217 patterns.
+- A text holding hundreds of thousands of names overflowed the call stack. Name spans are collected one at a time.
+- Detect swallowed a failed Include Audit Report or Audit Log expression, and silently dropped the report. Both now stop the run.
 - A Prompt Injection setting whose expression failed silently turned scanning off. The error now stops the run before the vault is saved.
 - Presidio was asked for scores of 0.4 and up even when the threshold was lower. The configured threshold is sent.
 - Pseudonym generation, URL redaction next to deny-list matches, and Presidio key traversal took quadratic time. Each is now linear.

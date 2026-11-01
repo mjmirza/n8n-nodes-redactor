@@ -39,7 +39,7 @@ import { assertUserRegexes, resolvePassphrase, runSetting, sanitizeInjection, wo
  */
 const RECOMMENDED_PATTERNS = [
   // Contact
-  'email', 'phone', 'phoneDE', 'phoneUK', 'phoneAT', 'phoneCH', 'phoneFR',
+  'email', 'phone', 'phoneE164', 'phoneDE', 'phoneUK', 'phoneAT', 'phoneCH', 'phoneFR',
   'phoneNL', 'phoneES', 'phoneIT', 'phoneAU', 'phoneIN', 'phoneBR',
   // Identity - high precision
   'personName', 'ssn', 'itinUS', 'sinCA', 'ninoUK', 'passportUS', 'passportEU',
@@ -977,7 +977,7 @@ export class Redactor implements INodeType {
 
     // ─── DETECT / VERIFY (zero-config, scans everything) ──
     if (operation === 'detect' || operation === 'verify') {
-      // Detect and Verify always scan ALL 216 patterns.
+      // Detect and Verify always scan ALL 217 patterns.
       // No parameters needed. Simple, reliable, no "Could not get parameter".
       const enabledPatterns = getPatternOptions().map((p) => p.value);
       const customPatterns: CustomPattern[] = [];
@@ -1026,10 +1026,10 @@ export class Redactor implements INodeType {
           timestamp: report.timestamp,
         };
 
-        let includeReport = false;
-        try { includeReport = runSetting(this, 'includeReport', false) as boolean; } catch { /* parameter hidden for this operation */ }
-        let auditLog = false;
-        try { auditLog = runSetting(this, 'auditLog', false) as boolean; } catch { /* parameter hidden for this operation */ }
+        // Both settings default to off. A failed expression or items that disagree stop the run, so a requested
+        // report or audit entry is never dropped silently.
+        const includeReport = runSetting(this, 'includeReport', false) as boolean;
+        const auditLog = runSetting(this, 'auditLog', false) as boolean;
 
         if (includeReport || auditLog) {
           const reportJson: IDataObject = includeReport

@@ -1646,9 +1646,14 @@ const PARTICLE = `(?:${PARTICLES.join('|')})`;
 const CAPITAL_RUN = new RegExp(
   String.raw`(?<![\p{L}\p{N}'’-])${NAME_WORD}(?:\s+(?:${PARTICLE}\s+){0,3}${NAME_WORD})*(?![\p{L}\p{N}])`, 'gu',
 );
+const CAPITALS_WORD = String.raw`\p{Lu}{2,}(?:['’-]\p{Lu}+)*`;
+const CAPITALS_RUN = new RegExp(
+  String.raw`(?<![\p{L}\p{N}'’-])${CAPITALS_WORD}(?:\s+${CAPITALS_WORD})+(?![\p{L}\p{N}])`, 'gu',
+);
 const MAX_NAME_WORDS = 4;
 
-type NameWord = { word: string; at: number };
+// word is the form used for dictionary lookups. len is the length in the text, which a lookup form may not keep.
+type NameWord = { word: string; at: number; len: number };
 type NameSpan = { name: string; start: number; end: number };
 
 /** A word is known when it, a hyphen part, or its root after an O' or Mc prefix is in the name dictionaries. */
@@ -1664,13 +1669,26 @@ function isKnownName(word: string): boolean {
  */
 export function detectNamesInText(text: string): NameSpan[] {
   const results: NameSpan[] = [];
+  const collect = (words: NameWord[]) => {
+    // One span at a time, so a huge run never spreads more arguments than a call can take.
+    for (const segment of nameSegments(words)) for (const span of chunkSegment(text, segment)) results.push(span);
+  };
   for (const match of text.matchAll(CAPITAL_RUN)) {
-    if (!/\p{Ll}/u.test(match[0])) continue;
-    const words = [...match[0].matchAll(/\S+/g)].map((w) => ({ word: w[0], at: (match.index ?? 0) + (w.index ?? 0) }));
-    for (const segment of nameSegments(words)) results.push(...chunkSegment(text, segment));
+    if (/\p{Ll}/u.test(match[0])) collect(runWords(match, (w) => w));
   }
+  // All-capitals runs, as in JOHN SMITH, are looked up in title case.
+  for (const match of text.matchAll(CAPITALS_RUN)) collect(runWords(match, titleCase));
   return results;
 }
+
+/** The words of a run, with their offsets and length in the text, under the form used for lookups. */
+function runWords(match: RegExpMatchArray, form: (word: string) => string): NameWord[] {
+  return [...match[0].matchAll(/\S+/g)].map((w) => ({
+    word: form(w[0]), at: (match.index ?? 0) + (w.index ?? 0), len: w[0].length,
+  }));
+}
+
+const titleCase = (word: string): string => word.toLowerCase().replace(/(^|['’-])(\p{L})/gu, (_, sep: string, ch: string) => sep + ch.toUpperCase());
 
 /**
  * Splits a capitalized run at non-name words. A word that is both a non-name and a name, such as May or West,
@@ -1701,7 +1719,7 @@ function nameUnits(segment: NameWord[]): Array<{ start: number; end: number }> {
       if (particleStart < 0) particleStart = w.at;
       continue;
     }
-    units.push({ start: particleStart >= 0 ? particleStart : w.at, end: w.at + w.word.length });
+    units.push({ start: particleStart >= 0 ? particleStart : w.at, end: w.at + w.len });
     particleStart = -1;
   }
   return units;
