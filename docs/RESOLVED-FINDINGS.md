@@ -1,12 +1,12 @@
 # Resolved findings
 
-Every finding from the reviews of 6.1.0 (round 0) and of the 7.0.0 branch (rounds 1 to 9, then the final scoped round 10) and of published 7.0.0 (round 11) is fixed and pinned by a
+Every finding from the reviews of 6.1.0 (round 0) and of the 7.0.0 branch (rounds 1 to 9, then the final scoped round 10) and of published 7.0.0 and 7.0.1 (rounds 11 to 13) is fixed and pinned by a
 regression test that fails on the code before its fix. Reviewers should not re-raise a finding listed here unless they
 show that its pinned test is wrong.
 
 The test column names the `describe` block. Unless the column names another file, it lives in
-`test/codex-review-<NN>.test.ts`, where `<NN>` is the number in the block name (round 0 is `61`, rounds 1 to 11 are
-`70` to `80`). The location is where the reviewer found the defect, so line numbers refer to the code at that time.
+`test/codex-review-<NN>.test.ts`, where `<NN>` is the number in the block name (round 0 is `61`, rounds 1 to 13 are
+`70` to `81`). The location is where the reviewer found the defect, so line numbers refer to the code at that time.
 
 Maintainer decisions that are out of scope for review are listed in [DESIGN-DECISIONS.md](DESIGN-DECISIONS.md).
 
@@ -115,3 +115,5 @@ Maintainer decisions that are out of scope for review are listed in [DESIGN-DECI
 | R11-G | Medium | engine.ts:1476 | Each Redact run matched every token the session had ever stored, so long-lived sessions slowed every run | re-review 80-session-growth: a long-lived session keeps each run cheap | 181bea8 |
 | R12-1 | High | patterns.ts:653 | Prose with a key=value pair, such as User=guest., hid a later connection string | re-review 80-6 (codex-review-80) and the generated prose prefix in test/connstring-property.test.ts | 63d316a |
 | R12-2 | Medium | engine.ts:1488 | Prior-token filtering built a suffix array, so long inputs cost far more than in 7.0.0 | re-review 80-7 (codex-review-80) | 63d316a |
+| R13-1 | High | patterns.ts:639 | Embedded equals signs and quotes in unquoted values hid later credentials | re-review 81-1 (codex-review-81) and unquoted-value generation in test/connstring-property.test.ts | b931b3f |
+| R13-2 | Medium | engine.ts:1486 | Prior-token filtering did one check per position per token length | re-review 81-2 (codex-review-81) | b931b3f |
