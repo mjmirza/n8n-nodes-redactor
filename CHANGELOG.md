@@ -53,6 +53,11 @@ Fixes every finding from a ninth adversarial review, run against 6.1.0. Each one
 - Basic credentials stored as a header value, as in `{"headers":{"Authorization":"Basic ..."}}`, or inside serialized JSON were not redacted, and Verify passed them. A new `httpBasicCredential` pattern and `authorization` as a credential key catch both, bringing the total to 218 patterns. The Basic header pattern now replaces only the credential, so `Authorization:` and the JSON around it stay intact.
 - The Presidio circuit breaker was shared by every execution, so failures in one run turned Presidio off for another. Each execution now has its own breaker.
 - The Presidio setup notice in the node still published port 5002 on every network interface. It binds to `127.0.0.1`, like the setup guide.
+- Quoted environment secrets such as `DB_PASS='azure zebra'` were redacted only up to the first space, and Verify passed the rest. Quoted values, including ones that span lines, are taken whole.
+- Email addresses with a domain in an Indic script or with decomposed accents, such as `alice@उदाहरण.भारत`, were missed by Redact and Verify. Domains may hold combining marks and characters outside the basic plane.
+- A tenant profile that changed only the field mode kept the node's rules in their old mode, so a denylist turned allowlist excluded every field. The node's rules now follow the profile's mode.
+- Restore checked the session once and then looked it up again per item, so a session expiring mid-batch returned some items with unresolved tokens and no error. The whole batch is restored from the session it checked.
+- A negative Session TTL kept the vault forever. It is refused.
 
 ## [6.1.0] - 2026-11-01
 

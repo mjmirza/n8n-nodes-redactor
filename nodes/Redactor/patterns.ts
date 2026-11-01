@@ -45,9 +45,9 @@ function luhnCheck(num: string): boolean {
  */
 // SMTPUTF8 local parts may hold any letter, digit or combining mark, as in josé or 用户.
 const EMAIL_LOCAL = /^[\p{L}\p{N}\p{M}._%+'!#$&*/=?^`{|}~-]$/u;
-const EMAIL_DOMAIN = /[\p{L}\p{N}.-]/u;
+const EMAIL_DOMAIN = /[\p{L}\p{N}\p{M}.-]/u;
 // A TLD is letters, or an IDNA A-label such as xn--p1ai.
-const EMAIL_DOMAIN_SHAPE = /^[\p{L}\p{N}-]+(?:[.][\p{L}\p{N}-]+)*[.](?:\p{L}{2,}|xn--[a-z0-9-]{2,59})$/iu;
+const EMAIL_DOMAIN_SHAPE = /^[\p{L}\p{N}\p{M}-]+(?:[.][\p{L}\p{N}\p{M}-]+)*[.](?:\p{L}[\p{L}\p{M}]+|xn--[a-z0-9-]{2,59})$/iu;
 const QUOTED_LOCAL_MAX = 128;
 
 /** Index of the opening quote of a quoted local part ending at close, honouring backslash escapes. */
@@ -84,6 +84,13 @@ function addressLiteralEnd(text: string, at: number, nextClose: CloseFinder): nu
 }
 
 /** Whether the two code units before end form one astral character. */
+/** Whether a surrogate pair starts at index at. */
+function surrogatePairAt(text: string, at: number): boolean {
+  const high = text.charCodeAt(at);
+  const low = text.charCodeAt(at + 1);
+  return high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff;
+}
+
 function surrogatePairBefore(text: string, end: number): boolean {
   if (end < 2) return false;
   const low = text.charCodeAt(end - 1);
@@ -111,7 +118,11 @@ function emailDomainEnd(text: string, at: number, nextClose: CloseFinder): numbe
   if (text[at + 1] === '[') return addressLiteralEnd(text, at, nextClose);
   let end = at + 1;
 
-  while (end < text.length && EMAIL_DOMAIN.test(text[end])) end++;
+  while (end < text.length) {
+    const width = surrogatePairAt(text, end) ? 2 : 1;
+    if (!EMAIL_DOMAIN.test(text.slice(end, end + width))) break;
+    end += width;
+  }
   while (end > at + 1 && /[.-]/.test(text[end - 1])) end--;
   return EMAIL_DOMAIN_SHAPE.test(text.slice(at + 1, end)) ? end : -1;
 }
@@ -2083,8 +2094,8 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'envSecrets',
     label: 'ENV_SECRET',
     category: 'enterprise',
-    regex: /\b(?:DATABASE_URL|DB_PASSWORD|DB_PASS|REDIS_URL|MONGO_URI|SECRET_KEY|ENCRYPTION_KEY|MASTER_KEY|SMTP_PASSWORD|MAIL_PASSWORD)=[^\s]+/g,
-    description: 'Environment variable secrets (DATABASE_URL, DB_PASSWORD, etc.)',
+    regex: /\b(?:DATABASE_URL|DB_PASSWORD|DB_PASS|REDIS_URL|MONGO_URI|SECRET_KEY|ENCRYPTION_KEY|MASTER_KEY|SMTP_PASSWORD|MAIL_PASSWORD)[ \t]*=[ \t]*(?:'[^']*'|"(?:[^"\\]|\\[^])*"|[^\s]+)/g,
+    description: 'Environment variable secrets (DATABASE_URL, DB_PASSWORD, etc.), quoted values taken whole',
   },
   {
     name: 'googleAnalyticsId',

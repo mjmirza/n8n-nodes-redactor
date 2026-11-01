@@ -8,6 +8,7 @@ import {
   PiiPattern,
   RedactionContext,
   RedactionHit,
+  VaultSession,
   RedactionReport,
   VaultEntry,
   isPiiCategory,
@@ -1575,6 +1576,11 @@ export function ensureRestorable(inputs: unknown[], outputs: unknown[], ctx: Red
 export function restoreValue(value: unknown, vault: IVault, sessionId: string): unknown {
   const session = vault.getSession(sessionId);
   if (!session) return value;
+  return restoreFromSession(value, session);
+}
+
+/** Restores with a session already fetched, so a whole batch uses one snapshot even if the session expires meanwhile. */
+export function restoreFromSession(value: unknown, session: VaultSession): unknown {
   return restoreWith(value, makeRestorer(session.entries), session.entries);
 }
 

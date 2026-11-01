@@ -143,6 +143,9 @@ Every version:
 - A Redaction Mode expression must give one of the listed modes. An unknown value stops the run instead of passing data through.
 - Basic credentials are redacted wherever they appear: as a header value, under an `authorization` or `proxy_authorization` key, and inside serialized JSON. The Basic header pattern replaces only the `Basic ...` part, so `Authorization: Basic abc` becomes `Authorization: [HTTP_BASIC_AUTH_0]` where 6.x replaced the whole line.
 - Any value under an `authorization` key, including a bearer token, is redacted as a credential.
+- Quoted environment values such as `DB_PASS='azure zebra'` are replaced whole, quotes included, where 6.x stopped at the first space.
+- A tenant profile that sets `fieldMode` without `fieldRules` applies that mode to the node's own field rules.
+- A negative Session TTL stops the run. Use 0 to keep the session until it is purged.
 
 ## Tenant profile fields
 

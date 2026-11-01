@@ -15,7 +15,7 @@ import {
 import { getPatternOptions } from './patterns';
 import { createVault } from './vault';
 import {
-  redactValue, restoreValue, buildReport, enhanceWithPresidio, collectTokenLike, collectInputText, priorTokenMatcher, ensureRestorable,
+  redactValue, restoreFromSession, buildReport, enhanceWithPresidio, collectTokenLike, collectInputText, priorTokenMatcher, ensureRestorable,
 } from './engine';
 import {
   CustomPattern,
@@ -1267,6 +1267,19 @@ export class Redactor implements INodeType {
         if (profile.denyList) denyList = profile.denyList;
         if (profile.retentionMinutes !== undefined) sessionTtl = profile.retentionMinutes;
         if (profile.auditLog !== undefined) auditLog = profile.auditLog;
+        // A profile that changes only the field mode re-targets the node's own rules.
+        if (profile.fieldMode && !profile.fieldRules) {
+          fieldRules = fieldRules.map((rule) => ({
+            field: rule.field,
+            mode: fieldMode === 'allowlist' ? ('include' as const) : ('exclude' as const),
+          }));
+        }
+      }
+
+      if (typeof sessionTtl !== 'number' || !Number.isFinite(sessionTtl) || sessionTtl < 0) {
+        throw new NodeOperationError(this.getNode(), `Session TTL must be 0 or more minutes, got ${String(sessionTtl)}`, {
+          description: 'Use 0 to keep the session until it is purged.',
+        });
       }
 
       assertUserRegexes(this, customPatterns, [
@@ -1430,7 +1443,7 @@ export class Redactor implements INodeType {
       const returnData: INodeExecutionData[] = [];
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
-        const restored = restoreValue(item.json, vault, sessionId) as IDataObject;
+        const restored = restoreFromSession(item.json, session) as IDataObject;
         returnData.push(withBinary({ json: restored, pairedItem: { item: i } }, item));
       }
 
