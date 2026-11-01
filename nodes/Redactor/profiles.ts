@@ -1,27 +1,14 @@
+// CODE_DELETE_OK: disk profile load/save/list/delete removed in 2.0 (n8n bans fs); 1.x keeps them on release/1.x.
 /**
- * Per-Tenant Profile Management
- *
- * Profiles allow agencies to define different redaction rules per client/tenant.
- * Each profile is a JSON config containing: enabled patterns, allow/deny lists,
- * redaction mode, field rules, confidence threshold, and compliance settings.
- *
- * Storage: ~/.n8n/pii-profiles/profile_{profileId}.json
- * Loading: By profileId parameter in node settings
- * Isolation: Each profile has its own vault passphrase recommendation
+ * Per-tenant profiles. Supplied as JSON in the node, so they work on n8n Cloud.
+ * parseTenantProfile validates the shape and throws a readable Error on bad input.
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
-import {
-  RedactionMode,
-  CustomPattern,
-  AllowDenyEntry,
-  FieldRule,
-} from './types';
+import { RedactionMode, CustomPattern, AllowDenyEntry, FieldRule } from './types';
 
 export interface TenantProfile {
-  profileId: string;
-  displayName: string;
+  profileId?: string;
+  displayName?: string;
 
   // Detection config
   enabledPatterns?: string[];
@@ -46,100 +33,139 @@ export interface TenantProfile {
   auditLog?: boolean;
 
   // Metadata
-  createdAt: string;
-  updatedAt: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
-const DEFAULT_PROFILE_DIR = path.join(process.env.HOME || '/tmp', '.n8n', 'pii-profiles');
+const MODES: RedactionMode[] = ['token', 'mask', 'hash', 'redact', 'pseudonymize', 'blackout', 'remove'];
+const FIELD_MODES = ['all', 'allowlist', 'denylist'];
+const MATCH_TYPES = ['exact', 'contains', 'regex'];
 
-/**
- * Load a tenant profile by ID.
- * Returns null if not found.
- */
-export function loadProfile(profileId: string, profileDir?: string): TenantProfile | null {
-  if (!profileId || profileId.trim().length === 0) return null;
+function fail(message: string): never {
+  throw new Error(`Invalid tenant profile: ${message}`);
+}
 
-  try {
-    const dir = profileDir || DEFAULT_PROFILE_DIR;
-    // Sanitize profileId to prevent path traversal
-    const safeId = profileId.replace(/[^a-zA-Z0-9_-]/g, '_');
-    const fp = path.join(dir, `profile_${safeId}.json`);
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
 
-    if (!fs.existsSync(fp)) return null;
+function stringArray(value: unknown, name: string): string[] {
+  if (!Array.isArray(value) || value.some((v) => typeof v !== 'string')) fail(`${name} must be an array of strings`);
+  return value as string[];
+}
 
-    const data = JSON.parse(fs.readFileSync(fp, 'utf-8')) as TenantProfile;
-    return data;
-  } catch {
-    return null;
+function entries(value: unknown, name: string, defaultType: AllowDenyEntry['type']): AllowDenyEntry[] {
+  if (!Array.isArray(value)) fail(`${name} must be an array`);
+  return value.map((e, i) => {
+    if (!isObject(e) || typeof e.value !== 'string') fail(`${name}[${i}].value must be a string`);
+    const type = e.type ?? defaultType;
+    if (typeof type !== 'string' || !MATCH_TYPES.includes(type)) fail(`${name}[${i}].type must be one of ${MATCH_TYPES.join(', ')}`);
+    return { value: e.value, type: type as AllowDenyEntry['type'] };
+  });
+}
+
+type FieldParser = (value: unknown, knownPatterns?: string[]) => unknown;
+
+function str(name: string): FieldParser {
+  return (v) => (typeof v === 'string' ? v : fail(`${name} must be a string`));
+}
+
+function bool(name: string): FieldParser {
+  return (v) => (typeof v === 'boolean' ? v : fail(`${name} must be true or false`));
+}
+
+function oneOf(name: string, allowed: string[]): FieldParser {
+  return (v) => (typeof v === 'string' && allowed.includes(v) ? v : fail(`${name} must be one of ${allowed.join(', ')}`));
+}
+
+function parseEnabledPatterns(value: unknown, knownPatterns?: string[]): string[] {
+  const names = stringArray(value, 'enabledPatterns');
+  if (knownPatterns) {
+    const known = new Set(knownPatterns);
+    const bad = names.filter((n) => !known.has(n));
+    if (bad.length) fail(`unknown pattern name(s) ${bad.join(', ')}`);
   }
+  return names;
 }
 
-/**
- * Save a tenant profile.
- */
-export function saveProfile(profile: TenantProfile, profileDir?: string): boolean {
-  try {
-    const dir = profileDir || DEFAULT_PROFILE_DIR;
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+function parseCustomPatterns(value: unknown): CustomPattern[] {
+  if (!Array.isArray(value)) fail('customPatterns must be an array');
+  return value.map((c, i) => {
+    if (!isObject(c) || typeof c.label !== 'string' || typeof c.regex !== 'string') {
+      fail(`customPatterns[${i}] needs string label and regex`);
     }
-
-    const safeId = profile.profileId.replace(/[^a-zA-Z0-9_-]/g, '_');
-    const fp = path.join(dir, `profile_${safeId}.json`);
-    const tmpFp = fp + '.tmp';
-
-    profile.updatedAt = new Date().toISOString();
-    fs.writeFileSync(tmpFp, JSON.stringify(profile, null, 2), 'utf-8');
-    fs.renameSync(tmpFp, fp);
-    return true;
-  } catch {
-    return false;
-  }
+    try {
+      new RegExp(c.regex);
+    } catch {
+      fail(`customPatterns[${i}].regex is not a valid regular expression`);
+    }
+    return { label: c.label, regex: c.regex, category: typeof c.category === 'string' ? c.category : undefined };
+  });
 }
 
-/**
- * List all available profiles.
- */
-export function listProfiles(profileDir?: string): TenantProfile[] {
-  try {
-    const dir = profileDir || DEFAULT_PROFILE_DIR;
-    if (!fs.existsSync(dir)) return [];
-
-    const files = fs.readdirSync(dir)
-      .filter((f) => f.startsWith('profile_') && f.endsWith('.json'));
-
-    const profiles: TenantProfile[] = [];
-    for (const file of files) {
-      try {
-        const data = JSON.parse(
-          fs.readFileSync(path.join(dir, file), 'utf-8'),
-        ) as TenantProfile;
-        profiles.push(data);
-      } catch {
-        // Skip corrupt profiles
-      }
-    }
-    return profiles;
-  } catch {
-    return [];
-  }
+function parseFieldRules(value: unknown): FieldRule[] {
+  if (!Array.isArray(value)) fail('fieldRules must be an array');
+  return value.map((r, i) => {
+    if (!isObject(r) || typeof r.field !== 'string') fail(`fieldRules[${i}].field must be a string`);
+    const mode = r.mode ?? 'exclude';
+    if (mode !== 'include' && mode !== 'exclude') fail(`fieldRules[${i}].mode must be include or exclude`);
+    return { field: r.field, mode };
+  });
 }
 
-/**
- * Delete a tenant profile.
- */
-export function deleteProfile(profileId: string, profileDir?: string): boolean {
-  try {
-    const dir = profileDir || DEFAULT_PROFILE_DIR;
-    const safeId = profileId.replace(/[^a-zA-Z0-9_-]/g, '_');
-    const fp = path.join(dir, `profile_${safeId}.json`);
+function parseThreshold(value: unknown): number {
+  if (typeof value !== 'number' || value < 0 || value > 1) fail('confidenceThreshold must be a number from 0 to 1');
+  return value;
+}
 
-    if (fs.existsSync(fp)) {
-      fs.unlinkSync(fp);
-      return true;
-    }
-    return false;
-  } catch {
-    return false;
+function parseRetention(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    fail('retentionMinutes must be a number of minutes, 0 or more');
   }
+  return value;
+}
+
+const PARSERS: Record<keyof TenantProfile, FieldParser> = {
+  profileId: str('profileId'),
+  displayName: str('displayName'),
+  enabledPatterns: parseEnabledPatterns,
+  customPatterns: parseCustomPatterns,
+  confidenceThreshold: parseThreshold,
+  redactionMode: oneOf('redactionMode', MODES),
+  dedup: bool('dedup'),
+  fieldMode: oneOf('fieldMode', FIELD_MODES),
+  fieldRules: parseFieldRules,
+  allowList: (v) => entries(v, 'allowList', 'contains'),
+  denyList: (v) => entries(v, 'denyList', 'exact'),
+  region: str('region'),
+  retentionMinutes: parseRetention,
+  auditLog: bool('auditLog'),
+  createdAt: str('createdAt'),
+  updatedAt: str('updatedAt'),
+};
+
+/**
+ * Parse and validate a profile from a JSON string or object.
+ * knownPatterns, when given, rejects unknown names in enabledPatterns.
+ */
+export function parseTenantProfile(input: unknown, knownPatterns?: string[]): TenantProfile {
+  let raw: unknown = input;
+  if (typeof input === 'string') {
+    if (input.trim() === '') return {};
+    try {
+      raw = JSON.parse(input);
+    } catch {
+      fail('not valid JSON');
+    }
+  }
+  if (!isObject(raw)) fail('must be a JSON object');
+
+  const unknown = Object.keys(raw).filter((k) => !(k in PARSERS));
+  if (unknown.length) fail(`unknown field(s) ${unknown.join(', ')}`);
+
+  const profile: Record<string, unknown> = {};
+  for (const [key, parse] of Object.entries(PARSERS)) {
+    if (raw[key] !== undefined) profile[key] = parse(raw[key], knownPatterns);
+  }
+  return profile as TenantProfile;
 }

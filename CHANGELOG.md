@@ -2,6 +2,32 @@
 
 All notable changes to this project are documented here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+Planned: random scoped tokens, and numbers restored as numbers.
+
+## [2.0.0] - 2026-11-01
+
+Runs on n8n Cloud and passes n8n's verification scanner with zero findings. 1.x stays available on the `v1-legacy` npm tag for self-hosted setups that need the disk vault. See [docs/MIGRATION.md](docs/MIGRATION.md).
+
+### BREAKING
+- **The vault no longer writes to disk.** Vault Storage now offers Workflow Storage (default) and In-Memory. Workflow Storage keeps sessions with the workflow through n8n's workflow static data, encrypted with the same AES-256-GCM passphrase. Previously sessions lived in files under `~/.n8n/pii-vault/`. A saved 1.x value of `file` is treated as Workflow Storage. Restore now works only in the workflow that ran Redact, and n8n saves the storage after production runs of an active workflow.
+- **The Vault Directory parameter is removed.** It only applied to the file vault.
+- **The audit log no longer writes JSONL files.** With Audit Log on, an `audit` record (counts, labels, severity, timing, never values) is added to the Report output, which now also appears when only Audit Log is on. Previously it appended to `~/.n8n/pii-audit/`. Store the record with any node.
+- **Tenant profiles come from the node, not from disk.** Turn on Use Tenant Profile and paste JSON. Profiles are validated and unknown fields are rejected. Previously profile files in `~/.n8n/pii-profiles/` could not be reached from the node at all.
+
+### Changed
+- A single resource (Data) sits above the seven operations, as n8n's resource and operation rule requires. Its default fills in for saved workflows and no operation value changed.
+- Presidio is called through n8n's HTTP helper instead of Node's `http` and `https` modules. Only `http` and `https` Presidio URLs are called.
+- Publishing picks the npm dist-tag from the git tag. `v1.*` publishes to `v1-legacy`, never `latest`, and `v2` or later to `latest`. The choice lives in `tools/npm-dist-tag.sh`, which has its own tests and fails closed on a malformed tag.
+- Lint now runs the exact rule set of n8n's verification scanner, and n8n-workflow 2.45.4, the stable release, is used for development.
+
+### Fixed
+- **The Presidio circuit breaker never opened on network errors.** A failed connection recorded the failure without a URL, so a down Presidio was retried for every field. It now stops after three failures per URL and execution.
+- **Detect ignored Audit Log.** The toggle was shown for Detect but no record was written. Detect now adds its audit record too.
+- **The audit `processingTimeMs` was always about zero.** The timer started one line before it was read. It now measures from the start of the execution.
+- **Encrypted vault sessions never expired without the passphrase.** Cleanup had to decrypt a session to read its TTL. Creation time and TTL are now stored next to the ciphertext, so expired sessions are removed either way.
+
 ## [1.11.1] - 2026-11-01
 
 ### Documentation
@@ -10,9 +36,6 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 ### Changed
 - `.nvmrc` pins Node 24, matching CI. Node 26 has no prebuilt `isolated-vm`, so `test/execute.test.ts` could not load there.
 
-## [Unreleased]
-
-Planned for 2.0.0: node version 2 with a filesystem-free vault (so it can run on n8n Cloud), a converter for existing vault files, per-client profiles as JSON, random scoped tokens, and numbers restored as numbers.
 
 ## [1.11.0] - 2026-10-19
 

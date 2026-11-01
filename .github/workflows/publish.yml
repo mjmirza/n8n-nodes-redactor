@@ -29,6 +29,11 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: tools/check-tarball.sh
-      - run: npm publish --provenance --access public
+      - name: Choose npm dist-tag (v1.* to v1-legacy, v2+ to latest)
+        id: disttag
+        run: |
+          tag="$(tools/npm-dist-tag.sh "${GITHUB_REF_NAME}")"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+      - run: npm publish --provenance --access public --tag "${{ steps.disttag.outputs.tag }}"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

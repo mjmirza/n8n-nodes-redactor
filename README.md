@@ -16,7 +16,7 @@
   <a href="https://www.npmjs.com/package/n8n-nodes-redactor#provenance"><img src="https://img.shields.io/badge/npm-provenance%20signed-brightgreen" alt="npm provenance" /></a>
   <a href="#license"><img src="https://img.shields.io/npm/l/n8n-nodes-redactor" alt="MIT License" /></a>
   <img src="https://img.shields.io/badge/PII%20patterns-216-blue" alt="216 PII patterns" />
-  <img src="https://img.shields.io/badge/n8n-self--hosted-FF6D5A" alt="Self-hosted n8n" />
+  <img src="https://img.shields.io/badge/n8n-Cloud%20%2B%20self--hosted-FF6D5A" alt="n8n Cloud and self-hosted" />
 </p>
 
 ## What you get
@@ -25,7 +25,7 @@
 - **The answer still makes sense.** After the model replies, the node puts the real values back, so your output reads naturally.
 - **Fewer false alarms.** Card numbers are Luhn checked, IBANs checksum verified, NHS numbers mod 11 validated, so random digits are left alone.
 - **Proof for your records.** An optional audit report, and a GDPR Article 30 processing record built from each run.
-- **No new vendor.** Everything runs inside your own n8n. No cloud service, no API key, no runtime dependency.
+- **No new vendor.** Everything runs inside your n8n, on n8n Cloud or self-hosted. No extra service, no API key, no runtime dependency.
 
 ## From install to first result
 
@@ -50,11 +50,11 @@ After Restore, your workflow gets the real values back.
 
 | Environment | Status |
 |---|---|
+| n8n Cloud | Supported from 2.0.0 |
 | Self-hosted n8n 1.x and 2.x | Supported |
-| n8n Cloud | Not available |
-| n8n verified community nodes | Not eligible |
+| n8n verified community nodes | Eligible from 2.0.0. Passes n8n's verification scanner with no findings |
 
-The persistent vault, encrypted vault files and JSONL audit log write to the local disk. n8n Cloud and n8n's verification program do not allow community nodes to use the file system, so this node is self-hosted only by design.
+Version 2.0.0 uses no local disk. The vault lives in workflow storage and audit records go to the Report output. Upgrading from 1.x? Read [docs/MIGRATION.md](https://github.com/mjmirza/n8n-nodes-redactor/blob/master/docs/MIGRATION.md). The 1.x line stays installable with `npm install n8n-nodes-redactor@v1-legacy`.
 
 ## Operations
 
@@ -65,7 +65,7 @@ The persistent vault, encrypted vault files and JSONL audit log write to the loc
 | Detect | Assessing data before deciding | Reports what personal data exists without changing anything |
 | Verify | After redaction | Rescans the output and returns PASS or FAIL with any leaked values |
 | Classify | Governance and routing | Labels data PUBLIC, INTERNAL, CONFIDENTIAL or RESTRICTED |
-| Purge | Erasure requests and cleanup | Deletes vault sessions from memory or disk, supporting GDPR Article 17 |
+| Purge | Erasure requests and cleanup | Deletes vault sessions from memory or workflow storage, supporting GDPR Article 17 |
 | Stats | Debugging | Lists active vault sessions with entry counts and TTL |
 
 The recommended production chain looks like this.
@@ -109,16 +109,16 @@ Data source > Detect > Redact > LLM > Verify > Restore > Output > Purge
 |---|---|
 | Deduplication | The same value gets the same token everywhere, so the model keeps relationships between fields |
 | Field targeting | Allowlist or denylist paths such as `user.email`, `*.phone` or `metadata.*` |
-| Vault | In memory, or file based in `~/.n8n/pii-vault/` so it survives restarts. Sessions expire after 60 minutes by default |
+| Vault | Workflow Storage by default, so Restore works in later production runs of the same workflow, or In-Memory. Sessions expire after 60 minutes by default |
 | Vault encryption | AES-256-GCM with scrypt key derivation, one passphrase per tenant |
 | Confidence threshold | Each match carries a 0.0 to 1.0 score. Checksum validated patterns score 0.95 |
 | Allow and deny lists | Values to never redact, such as your support address, and values to always redact, such as project codenames |
 | Prompt injection check | 25+ patterns, including instruction overrides, delimiter escapes, encoded payloads and zero width characters. Returns BLOCK, FLAG or CLEAN |
 | Audit report | A second output with hits by category and pattern |
-| Audit log | JSONL with daily rotation and a 100 MB cap, readable by Splunk, ELK and Datadog |
+| Audit log | Turn on Audit Log to get an `audit` record (counts, labels, timing, never values) on the Report output. Send it to any database, sheet or SIEM node |
 | ROPA record | Turn on Include Audit Report, then Include GDPR Art.30 ROPA Record, and fill in the controller details |
 | Presidio | Optional Microsoft Presidio container for names and organisations in free text. See [docs/PRESIDIO_SETUP.md](https://github.com/mjmirza/n8n-nodes-redactor/blob/master/docs/PRESIDIO_SETUP.md). Falls back to built-in patterns when unreachable |
-| Per-tenant profiles | Planned for 2.0.0 as JSON settings in the node |
+| Per-tenant profiles | Turn on Use Tenant Profile and paste JSON. Validated on every run. Fields are listed in [docs/MIGRATION.md](https://github.com/mjmirza/n8n-nodes-redactor/blob/master/docs/MIGRATION.md#tenant-profile-fields) |
 
 This node reduces what reaches a model. It is not legal advice and does not on its own make a workflow GDPR or HIPAA compliant.
 

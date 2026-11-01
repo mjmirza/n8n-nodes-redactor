@@ -22,8 +22,13 @@
  *       ports: ["5002:3000"]
  */
 
-import * as http from 'http';
-import * as https from 'https';
+/** HTTP transport supplied by the node (this.helpers.httpRequest). Keeps this module free of http/https. */
+export type PresidioRequester = (options: {
+  method: 'GET' | 'POST';
+  url: string;
+  body?: object;
+  timeout: number;
+}) => Promise<{ statusCode: number; body: unknown }>;
 
 /** Result from Presidio /analyze endpoint */
 export interface PresidioEntity {
@@ -147,9 +152,10 @@ export function resetCircuitBreaker(): void {
 /**
  * Check if Presidio is reachable at the given URL.
  */
-export async function checkPresidioHealth(baseUrl: string): Promise<boolean> {
+export async function checkPresidioHealth(baseUrl: string, request?: PresidioRequester): Promise<boolean> {
+  if (!request || !isHttpUrl(baseUrl)) return false;
   try {
-    const result = await httpGet(`${baseUrl}/health`, 3000);
+    const result = await request({ method: 'GET', url: `${baseUrl}/health`, timeout: 3000 });
     return result.statusCode === 200;
   } catch {
     return false;
@@ -166,8 +172,10 @@ export async function analyzeWithPresidio(
   language: string = 'en',
   scoreThreshold: number = 0.4,
   timeoutMs: number = 10000,
+  request?: PresidioRequester,
 ): Promise<PresidioEntity[]> {
   if (!text || text.trim().length === 0) return [];
+  if (!request || !isHttpUrl(baseUrl)) return [];
 
   // Circuit breaker: skip if too many consecutive failures for this URL
   if (circuitOpen(baseUrl)) return [];
@@ -180,18 +188,19 @@ export async function analyzeWithPresidio(
   };
 
   try {
-    const result = await httpPost(
-      `${baseUrl}/analyze`,
-      JSON.stringify(requestBody),
-      timeoutMs,
-    );
+    const result = await request({
+      method: 'POST',
+      url: `${baseUrl}/analyze`,
+      body: requestBody,
+      timeout: timeoutMs,
+    });
 
     if (result.statusCode !== 200) {
       recordFailure(baseUrl);
       return [];
     }
 
-    const entities: PresidioEntity[] = JSON.parse(result.body);
+    const entities = parseBody(result.body) as PresidioEntity[];
     if (!Array.isArray(entities)) {
       recordFailure(baseUrl);
       return [];
@@ -200,7 +209,7 @@ export async function analyzeWithPresidio(
     recordSuccess(baseUrl);
     return entities;
   } catch {
-    recordFailure();
+    recordFailure(baseUrl);
     return [];
   }
 }
@@ -222,67 +231,28 @@ export function getRedactorCategory(presidioEntityType: string): string {
 /**
  * Get all supported Presidio entity types.
  */
-export async function getPresidioEntities(baseUrl: string): Promise<string[]> {
+export async function getPresidioEntities(baseUrl: string, request?: PresidioRequester): Promise<string[]> {
+  if (!request || !isHttpUrl(baseUrl)) return [];
   try {
-    const result = await httpGet(`${baseUrl}/supportedentities`, 5000);
+    const result = await request({ method: 'GET', url: `${baseUrl}/supportedentities`, timeout: 5000 });
     if (result.statusCode !== 200) return [];
-    const entities = JSON.parse(result.body);
+    const entities = parseBody(result.body);
     return Array.isArray(entities) ? entities : [];
   } catch {
     return [];
   }
 }
 
-// ═══════════════════════════════════════════
-// HTTP utilities (no external dependencies)
-// ═══════════════════════════════════════════
-
-interface HttpResponse {
-  statusCode: number;
-  body: string;
+/** Only plain http(s) base URLs are called. Anything else is treated as Presidio being unavailable. */
+function isHttpUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
-function httpGet(url: string, timeoutMs: number): Promise<HttpResponse> {
-  return new Promise((resolve, reject) => {
-    const client = url.startsWith('https') ? https : http;
-    const req = client.get(url, { timeout: timeoutMs }, (res) => {
-      let body = '';
-      res.on('data', (chunk) => { body += chunk; });
-      res.on('end', () => {
-        resolve({ statusCode: res.statusCode || 0, body });
-      });
-    });
-    req.on('error', reject);
-    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-  });
-}
-
-function httpPost(url: string, data: string, timeoutMs: number): Promise<HttpResponse> {
-  return new Promise((resolve, reject) => {
-    const parsedUrl = new URL(url);
-    const client = parsedUrl.protocol === 'https:' ? https : http;
-    const options = {
-      hostname: parsedUrl.hostname,
-      port: parsedUrl.port,
-      path: parsedUrl.pathname,
-      method: 'POST',
-      timeout: timeoutMs,
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(data),
-      },
-    };
-
-    const req = client.request(options, (res) => {
-      let body = '';
-      res.on('data', (chunk) => { body += chunk; });
-      res.on('end', () => {
-        resolve({ statusCode: res.statusCode || 0, body });
-      });
-    });
-    req.on('error', reject);
-    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-    req.write(data);
-    req.end();
-  });
+function parseBody(body: unknown): unknown {
+  return typeof body === 'string' ? JSON.parse(body) : body;
 }

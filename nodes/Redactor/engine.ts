@@ -943,6 +943,7 @@ export async function enhanceWithPresidio(
         ctx.presidioLanguage || 'en',
         0.4,
         10000,
+        ctx.presidioRequest,
       );
 
       if (entities.length === 0) continue;

@@ -1,7 +1,4 @@
-import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
-import { loadProfile, saveProfile, listProfiles, deleteProfile, TenantProfile } from '../nodes/Redactor/profiles';
+import { parseTenantProfile, TenantProfile } from '../nodes/Redactor/profiles';
 import { generateRopaRecord } from '../nodes/Redactor/ropa';
 import { classifyData } from '../nodes/Redactor/classification';
 import { RedactionHit } from '../nodes/Redactor/types';
@@ -9,90 +6,64 @@ import { RedactionHit } from '../nodes/Redactor/types';
 // ═══════════════════════════════════════════════════════
 // 4.1 PER-TENANT PROFILES
 // ═══════════════════════════════════════════════════════
-describe('Per-Tenant Profiles', () => {
-  let testDir: string;
+describe('Per-Tenant Profiles (JSON)', () => {
+  const full: TenantProfile = {
+    profileId: 'acme-corp',
+    displayName: 'Acme Corporation',
+    enabledPatterns: ['email', 'phone', 'ssn'],
+    redactionMode: 'token',
+    confidenceThreshold: 0.7,
+    allowList: [{ value: '@acme.com', type: 'contains' }],
+    denyList: [{ value: 'Project Falcon', type: 'exact' }],
+    region: 'EU',
+    auditLog: true,
+    retentionMinutes: 30,
+    fieldMode: 'denylist',
+    fieldRules: [{ field: 'internalId', mode: 'exclude' }],
+    customPatterns: [{ label: 'ORDER', regex: 'ORD-\\d{6}' }],
+  };
 
-  beforeEach(() => {
-    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pii-profiles-test-'));
+  test('parses a full profile from a JSON string', () => {
+    const loaded = parseTenantProfile(JSON.stringify(full), ['email', 'phone', 'ssn']);
+    expect(loaded.displayName).toBe('Acme Corporation');
+    expect(loaded.enabledPatterns).toEqual(['email', 'phone', 'ssn']);
+    expect(loaded.confidenceThreshold).toBe(0.7);
+    expect(loaded.allowList![0].value).toBe('@acme.com');
+    expect(loaded.retentionMinutes).toBe(30);
+    expect(loaded.customPatterns![0].regex).toBe('ORD-\\d{6}');
   });
 
-  afterEach(() => {
-    try { fs.rmSync(testDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  test('accepts an already parsed object (n8n json parameters)', () => {
+    expect(parseTenantProfile(full).profileId).toBe('acme-corp');
   });
 
-  test('save and load profile', () => {
-    const profile: TenantProfile = {
-      profileId: 'acme-corp',
-      displayName: 'Acme Corporation',
-      enabledPatterns: ['email', 'phone', 'ssn'],
-      redactionMode: 'token',
-      confidenceThreshold: 0.7,
-      allowList: [{ value: '@acme.com', type: 'contains' }],
-      denyList: [{ value: 'Project Falcon', type: 'exact' }],
-      region: 'EU',
-      auditLog: true,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
-    expect(saveProfile(profile, testDir)).toBe(true);
-
-    const loaded = loadProfile('acme-corp', testDir);
-    expect(loaded).not.toBeNull();
-    expect(loaded!.displayName).toBe('Acme Corporation');
-    expect(loaded!.enabledPatterns).toEqual(['email', 'phone', 'ssn']);
-    expect(loaded!.confidenceThreshold).toBe(0.7);
-    expect(loaded!.allowList![0].value).toBe('@acme.com');
+  test('empty string means no profile', () => {
+    expect(parseTenantProfile('')).toEqual({});
+    expect(parseTenantProfile('   ')).toEqual({});
   });
 
-  test('load nonexistent profile returns null', () => {
-    expect(loadProfile('nonexistent', testDir)).toBeNull();
+  test('defaults allow/deny match types', () => {
+    const p = parseTenantProfile({ allowList: [{ value: 'a' }], denyList: [{ value: 'b' }] });
+    expect(p.allowList![0].type).toBe('contains');
+    expect(p.denyList![0].type).toBe('exact');
   });
 
-  test('load empty profileId returns null', () => {
-    expect(loadProfile('', testDir)).toBeNull();
-  });
-
-  test('list profiles', () => {
-    saveProfile({ profileId: 'tenant-a', displayName: 'Tenant A', createdAt: '', updatedAt: '' }, testDir);
-    saveProfile({ profileId: 'tenant-b', displayName: 'Tenant B', createdAt: '', updatedAt: '' }, testDir);
-
-    const profiles = listProfiles(testDir);
-    expect(profiles).toHaveLength(2);
-    expect(profiles.map((p) => p.profileId).sort()).toEqual(['tenant-a', 'tenant-b']);
-  });
-
-  test('delete profile', () => {
-    saveProfile({ profileId: 'delete-me', displayName: 'Delete Me', createdAt: '', updatedAt: '' }, testDir);
-    expect(loadProfile('delete-me', testDir)).not.toBeNull();
-
-    expect(deleteProfile('delete-me', testDir)).toBe(true);
-    expect(loadProfile('delete-me', testDir)).toBeNull();
-  });
-
-  test('delete nonexistent profile returns false', () => {
-    expect(deleteProfile('nonexistent', testDir)).toBe(false);
-  });
-
-  test('profileId is sanitized against path traversal', () => {
-    const result = saveProfile({
-      profileId: '../../../etc/passwd',
-      displayName: 'Evil',
-      createdAt: '',
-      updatedAt: '',
-    }, testDir);
-
-    // Should save with sanitized name, not escape the directory
-    const files = fs.readdirSync(testDir);
-    expect(files.every((f) => !f.includes('..'))).toBe(true);
-  });
-
-  test('list profiles from empty directory', () => {
-    expect(listProfiles(testDir)).toEqual([]);
-  });
-
-  test('list profiles from nonexistent directory', () => {
-    expect(listProfiles('/tmp/nonexistent-' + Date.now())).toEqual([]);
+  const bad: Array<[string, unknown, RegExp]> = [
+    ['invalid JSON', '{nope', /not valid JSON/],
+    ['an array', '[]', /must be a JSON object/],
+    ['an unknown field', { profileID: 'typo' }, /unknown field\(s\) profileID/],
+    ['unknown pattern names', { enabledPatterns: ['email', 'nope'] }, /unknown pattern name\(s\) nope/],
+    ['a bad redaction mode', { redactionMode: 'shred' }, /redactionMode must be one of/],
+    ['a threshold out of range', { confidenceThreshold: 2 }, /from 0 to 1/],
+    ['a bad custom regex', { customPatterns: [{ label: 'X', regex: '(' }] }, /not a valid regular expression/],
+    ['a negative retention', { retentionMinutes: -1 }, /retentionMinutes/],
+    ['a non-boolean dedup', { dedup: 'yes' }, /dedup must be true or false/],
+    ['a bad field mode', { fieldMode: 'some' }, /fieldMode must be one of/],
+    ['a bad allow-list type', { allowList: [{ value: 'a', type: 'fuzzy' }] }, /allowList\[0\].type/],
+    ['a bad field rule', { fieldRules: [{ field: 'x', mode: 'maybe' }] }, /fieldRules\[0\].mode/],
+  ];
+  test.each(bad)('rejects %s', (_name, input, message) => {
+    expect(() => parseTenantProfile(input, ['email'])).toThrow(message);
   });
 });
 
