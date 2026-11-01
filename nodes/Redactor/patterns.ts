@@ -369,10 +369,12 @@ function ldapAttrAt(text: string, at: number): number {
   return -1;
 }
 
-/** End of an attribute value: the next comma or line break. */
+/** End of an attribute value: the next unescaped comma, or a line break. A backslash escapes the next character (RFC 4514). */
 function ldapValueEnd(text: string, from: number): number {
   let end = from;
-  while (end < text.length && text[end] !== ',' && text[end] !== '\n' && text[end] !== '\r') end++;
+  while (end < text.length && text[end] !== ',' && text[end] !== '\n' && text[end] !== '\r') {
+    end += text[end] === '\\' && end + 1 < text.length && text[end + 1] !== '\n' && text[end + 1] !== '\r' ? 2 : 1;
+  }
   return end;
 }
 
@@ -996,8 +998,9 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'bitcoinAddress',
     label: 'BTC_ADDRESS',
     category: 'crypto',
-    regex: /\b(?:bc1|[13])[a-zA-HJ-NP-Z0-9]{25,39}\b/g,
-    description: 'Bitcoin addresses (Legacy + Bech32)',
+    // Bech32 and Bech32m addresses run to 90 characters and may be all upper case (BIP 173, BIP 350).
+    regex: /\b(?:[13][a-zA-HJ-NP-Z0-9]{25,39}|bc1[ac-hj-np-z02-9]{11,87}|BC1[AC-HJ-NP-Z02-9]{11,87})\b/g,
+    description: 'Bitcoin addresses (Legacy, Bech32 and Taproot, either letter case)',
   },
   {
     name: 'ethereumAddress',
@@ -1325,8 +1328,9 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'bearerToken',
     label: 'BEARER_TOKEN',
     category: 'enterprise',
-    regex: /Bearer\s+[A-Za-z0-9\-._~+/]+=*/g,
-    description: 'Bearer authentication tokens',
+    // Auth schemes are case-insensitive (RFC 9110). Eight characters at least, so prose such as "bearer of" is left alone.
+    regex: /\bBearer\s+[A-Za-z0-9\-._~+/]{8,}=*/gi,
+    description: 'Bearer authentication tokens, in any letter case',
   },
   {
     name: 'jwtToken',
@@ -1356,8 +1360,10 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'genericSecret',
     label: 'SECRET',
     category: 'enterprise',
-    regex: /(?:password|passwd|pwd|secret|token|credential|auth_key|api_key|apikey|api_secret|api_token|access_token|secret_key|private_key|encryption_key)\s*[=:]\s*['"]?[^\s'"]{8,}['"]?/gi,
-    description: 'Secrets in config (password=, api_key=, secret=, token=, etc.)',
+    // A quoted value is taken whole, spaces included. A password may be short, as in password=admin. Other keys need
+    // eight characters unquoted, so prose such as "token: the" is left alone.
+    regex: /(?:(?:password|passwd|pwd|secret)\s*[=:]\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s'"]+)|(?:token|credential|auth_key|api_key|apikey|api_secret|api_token|access_token|secret_key|private_key|encryption_key)\s*[=:]\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s'"]{8,}))/gi,
+    description: 'Secrets in config (password=, api_key=, secret=, token=, etc.), quoted values whole',
   },
   {
     name: 'azureKey',
@@ -1980,8 +1986,8 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'httpBasicAuth',
     label: 'HTTP_BASIC_AUTH',
     category: 'enterprise',
-    regex: /Authorization:\s*Basic\s+[A-Za-z0-9+/=]+/g,
-    description: 'HTTP Basic Authentication headers',
+    regex: /\bAuthorization:\s*Basic\s+[A-Za-z0-9+/=]+/gi,
+    description: 'HTTP Basic Authentication headers, in any letter case',
   },
   {
     name: 'apiKeyInUrl',

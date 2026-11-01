@@ -32,6 +32,14 @@ Fixes every finding from a ninth adversarial review, run against 6.1.0. Each one
 - OpenAI `sk-proj-`, `sk-svcacct-` and `sk-admin-` keys, GitHub fine-grained `github_pat_` tokens, and nine-character German ID card serial numbers were missed. They are detected now.
 - The Presidio setup guide published the analyzer port on every host interface. It now binds to `127.0.0.1`.
 - The example workflows used node version 1, so an imported Verify missed names. Every Redactor node in the examples uses version 2.
+- `bearer` and `authorization: basic` in lower case were missed. Auth schemes now match in any letter case, as RFC 9110 requires. Basic authentication headers join the recommended patterns.
+- Passwords were missed when short, as in `password=admin`, and cut at the first space when quoted. Quoted values are now taken whole and passwords of any length are found.
+- The legacy vault passphrase was read for the first item only. It now follows the same one-value-per-run check as the other settings.
+- An LDAP DN with an escaped comma, as in `CN=Doe\, John`, left the name exposed. Escaped characters now stay inside the value.
+- A five-word name ending in words the dictionary does not know left them exposed. Every part of a name run that holds a known name is covered.
+- Taproot and upper-case Bech32 Bitcoin addresses were missed. They are detected now.
+- A session whose TTL ran out during Redact returned tokens that could never be restored. The run now stops with an error instead.
+- The README placed Detect in the production chain, where its summary item reached Verify. Detect is now described as a dry run.
 - A Prompt Injection setting whose expression failed silently turned scanning off. The error now stops the run before the vault is saved.
 - Presidio was asked for scores of 0.4 and up even when the threshold was lower. The configured threshold is sent.
 - Pseudonym generation, URL redaction next to deny-list matches, and Presidio key traversal took quadratic time. Each is now linear.

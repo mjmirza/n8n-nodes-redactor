@@ -30,7 +30,7 @@ import { buildAuditEntry } from './audit';
 import { resetCircuitBreaker, PresidioRequester } from './presidio';
 import { parseTenantProfile } from './profiles';
 import { generateRopaRecord } from './ropa';
-import { assertUserRegexes, resolvePassphrase, sanitizeInjection, workflowNamespace } from './runtime';
+import { assertUserRegexes, resolvePassphrase, runSetting, sanitizeInjection, workflowNamespace } from './runtime';
 
 /**
  * Curated high-precision pattern set. These patterns have low false-positive
@@ -68,7 +68,7 @@ const RECOMMENDED_PATTERNS = [
   'internalHostname', 'uncPath', 'ldapDN', 'adUsername',
   'dbConnectionString', 'connStringKV',
   'awsAccessKey', 'gcpApiKey', 'stripeKey', 'openaiKey', 'githubToken',
-  'slackToken', 'bearerToken', 'jwtToken', 'pemPrivateKey', 'sshPublicKey',
+  'slackToken', 'bearerToken', 'httpBasicAuth', 'jwtToken', 'pemPrivateKey', 'sshPublicKey',
   'genericSecret', 'azureKey', 'slackWebhook',
   'sendgridKey', 'twilioKey', 'anthropicKey', 'gitlabToken',
   'x509Certificate', 'pgpPrivateKey', 'envSecrets',
@@ -79,35 +79,6 @@ const RECOMMENDED_PATTERNS = [
   // Biometric
   'uuid', 'imei', 'iccid',
 ];
-
-/** Whether a saved parameter value holds an n8n expression anywhere inside it. */
-function hasExpression(value: unknown): boolean {
-  if (typeof value === 'string') return value.startsWith('=');
-  if (Array.isArray(value)) return value.some(hasExpression);
-  if (value !== null && typeof value === 'object') return Object.values(value).some(hasExpression);
-  return false;
-}
-
-/**
- * A setting the whole run uses, such as the session or the tenant profile. An expression is evaluated for every item,
- * and the run stops when items disagree, so a mixed batch never silently runs with the first item's settings.
- */
-function runSetting(fx: IExecuteFunctions, name: string, fallback?: unknown): unknown {
-  const read = (i: number) => (fallback === undefined ? fx.getNodeParameter(name, i) : fx.getNodeParameter(name, i, fallback));
-  const first = read(0);
-  const saved = (fx.getNode().parameters as Record<string, unknown> | undefined)?.[name];
-  if (saved !== undefined && !hasExpression(saved)) return first;
-  const expected = JSON.stringify(first);
-  const count = fx.getInputData().length;
-  for (let i = 1; i < count; i++) {
-    if (JSON.stringify(read(i)) !== expected) {
-      throw new NodeOperationError(fx.getNode(), `The setting "${name}" has a different value for item ${i} than for item 0`, {
-        description: 'One run uses one session and one set of settings. Split the batch first, for example with Loop Over Items, so each run sees one tenant or session.',
-      });
-    }
-  }
-  return first;
-}
 
 function verifyMessage(leaks: number, attachments: number): string {
   if (leaks === 0 && attachments === 0) return 'No PII detected in values. Data appears properly redacted.';
@@ -1378,6 +1349,13 @@ export class Redactor implements INodeType {
 
       // An absent setting means off. A setting whose expression fails stops the run before anything is saved.
       const promptInjection = runSetting(this, 'promptInjection', false) as boolean;
+
+      // A session whose TTL ran out during the run lost the new mappings, so its tokens could never be restored.
+      if (!vault.getSession(sessionId)) {
+        throw new NodeOperationError(this.getNode(), `Session "${sessionId}" expired during the run`, {
+          description: 'Its TTL ran out before Redact finished, so nothing was output. Run again, or raise Session TTL.',
+        });
+      }
 
       // Persist vault
       vault.save(sessionId);

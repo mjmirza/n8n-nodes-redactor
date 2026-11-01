@@ -5,6 +5,36 @@ import { INJECTION_DESCRIPTIONS, PromptInjectionResult } from './injection';
 
 const VAULT_CREDENTIAL = 'redactorVaultApi';
 
+/** Whether a saved parameter value holds an n8n expression anywhere inside it. */
+function hasExpression(value: unknown): boolean {
+  if (typeof value === 'string') return value.startsWith('=');
+  if (Array.isArray(value)) return value.some(hasExpression);
+  if (value !== null && typeof value === 'object') return Object.values(value).some(hasExpression);
+  return false;
+}
+
+/**
+ * A setting the whole run uses, such as the session or the tenant profile. An expression is evaluated for every item,
+ * and the run stops when items disagree, so a mixed batch never silently runs with the first item's settings.
+ */
+export function runSetting(fx: IExecuteFunctions, name: string, fallback?: unknown): unknown {
+  const read = (i: number) => (fallback === undefined ? fx.getNodeParameter(name, i) : fx.getNodeParameter(name, i, fallback));
+  const first = read(0);
+  const saved = (fx.getNode().parameters as Record<string, unknown> | undefined)?.[name];
+  if (saved !== undefined && !hasExpression(saved)) return first;
+  const expected = JSON.stringify(first);
+  const count = fx.getInputData().length;
+  for (let i = 1; i < count; i++) {
+    if (JSON.stringify(read(i)) !== expected) {
+      throw new NodeOperationError(fx.getNode(), `The setting "${name}" has a different value for item ${i} than for item 0`, {
+        description: 'One run uses one session and one set of settings. Split the batch first, for example with Loop Over Items, so each run sees one tenant or session.',
+      });
+    }
+  }
+  return first;
+}
+
+
 /** The credential wins. The legacy plain-text parameter is read only when no credential is attached. */
 export async function resolvePassphrase(fns: IExecuteFunctions): Promise<string> {
   if (fns.getNode().credentials?.[VAULT_CREDENTIAL]) {
@@ -30,8 +60,12 @@ export async function resolvePassphrase(fns: IExecuteFunctions): Promise<string>
 function legacyPassphrase(fns: IExecuteFunctions): string {
   let raw: unknown;
   try {
-    raw = fns.getNodeParameter('vaultPassphrase', 0, '');
+    raw = runSetting(fns, 'vaultPassphrase', '');
   } catch (error) {
+    // Items that disagree already carry a clear error. Only a failed expression is explained here.
+    if (error instanceof NodeOperationError) {
+      throw new NodeOperationError(fns.getNode(), error.message, { description: error.description ?? undefined });
+    }
     throw new NodeOperationError(fns.getNode(), 'The legacy vault passphrase could not be evaluated, so the vault stays locked.', {
       description: `Nothing was stored. Fix the expression, or move the passphrase into a Redactor Vault credential. Cause: ${(error as Error).message}`,
     });

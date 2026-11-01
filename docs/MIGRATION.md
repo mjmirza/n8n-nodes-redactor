@@ -130,6 +130,10 @@ Every version:
 - A run-wide setting given by an expression, such as Session ID or Tenant Profile, must give the same value for every item. When items disagree the run stops. Split mixed batches first, for example with Loop Over Items, so each run sees one tenant.
 - More credentials and identifiers are redacted: OpenAI project, service-account and admin keys, GitHub fine-grained tokens, and nine-character German ID card serial numbers.
 - Verify has a new Verify Output option. The default, Report, is unchanged. Items, Stop on FAIL returns the checked items and stops the run on `FAIL`.
+- Bearer tokens and Basic authentication headers match in any letter case, and Basic authentication is part of the recommended patterns. A bearer token needs at least eight characters.
+- Secrets such as `password=...` are matched with quoted values taken whole, spaces included, and passwords of any length.
+- An unknown word inside a name run that holds a known name, as in `Alice Beth Claire Xochitl Quispe`, is redacted with the rest of the name.
+- A Redact run whose session expires before it finishes stops with an error instead of returning tokens.
 - A tenant profile with a `NaN` confidence threshold is refused.
 - A built-in pattern match that overlaps an earlier replacement no longer causes a rescan from the next character. Its free parts are still redacted.
 

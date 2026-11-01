@@ -71,8 +71,10 @@ Version 4.0.0 uses no local disk. The vault lives in workflow storage and audit 
 The recommended production chain looks like this.
 
 ```
-Data source > Detect > Redact > Verify > LLM > Restore > Output > Purge
+Data source > Redact > Verify > LLM > Restore > Output > Purge
 ```
+
+Detect is for a dry run before you set up redaction. It adds a summary item to its output by default, so keep it out of this chain, or turn on Include Audit Report, which moves the summary to a second output.
 
 Set Verify Output on the Verify node to Items, Stop on FAIL. Verify then passes the redacted items on unchanged when nothing leaks, and stops the run before the LLM when something does, so the model never receives data that failed the check. With the default Report output, Verify returns one report instead of the items, so it cannot sit in this chain. Verify also fails when an item carries a binary attachment, because attachments are not scanned. Redact removes attachments by default. Set Binary Attachments to Keep Unscanned only when the files hold no personal data.
 

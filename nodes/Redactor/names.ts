@@ -1693,22 +1693,23 @@ function nameSegments(words: NameWord[]): NameWord[][] {
 }
 
 /** Name words with any particles before them, as one unit each. Particles never count as words of their own. */
-function nameUnits(segment: NameWord[]): Array<{ start: number; end: number; known: boolean }> {
-  const units: Array<{ start: number; end: number; known: boolean }> = [];
+function nameUnits(segment: NameWord[]): Array<{ start: number; end: number }> {
+  const units: Array<{ start: number; end: number }> = [];
   let particleStart = -1;
   for (const w of segment) {
     if (PARTICLE_SET.has(w.word)) {
       if (particleStart < 0) particleStart = w.at;
       continue;
     }
-    units.push({ start: particleStart >= 0 ? particleStart : w.at, end: w.at + w.word.length, known: isKnownName(w.word) });
+    units.push({ start: particleStart >= 0 ? particleStart : w.at, end: w.at + w.word.length });
     particleStart = -1;
   }
   return units;
 }
 
 /**
- * Splits a long segment into names of up to four words, each with at least two words and a known part.
+ * Splits a long segment into names of up to four words, each with at least two words. The segment already holds a
+ * known name, so every chunk is kept, and an unknown surname after a long run of first names is still covered.
  * Chunks are balanced, so five words split three and two and no word is left on its own.
  */
 function chunkSegment(text: string, segment: NameWord[]): NameSpan[] {
@@ -1723,7 +1724,6 @@ function chunkSegment(text: string, segment: NameWord[]): NameSpan[] {
     if (extra > 0) extra--;
     const chunk = units.slice(i, i + size);
     i += size;
-    if (!chunk.some((u) => u.known)) continue;
     const start = chunk[0].start;
     const end = chunk[chunk.length - 1].end;
     spans.push({ name: text.slice(start, end), start, end });
