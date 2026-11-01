@@ -46,6 +46,8 @@ const notePrefix = fc.array(fc.constantFrom(
 
 function encodeKv(raw: string, grammar: string, quote: string): string {
   if (grammar === 'odbc') return `{${raw.replace(/}/g, '}}')}}`;
+  // Interior quotes, apostrophes, braces and equals are literals in unquoted ADO.NET values.
+  if (quote === 'unquoted' && !raw.includes(';') && !/^[\s]*["'{]/.test(raw)) return raw;
   if (quote === 'plain' && !/[;"']/.test(raw)) return raw;
   const delimiter = quote === "'" ? "'" : '"';
   return delimiter + raw.split(delimiter).join(delimiter.repeat(2)) + delimiter;
@@ -60,7 +62,7 @@ const connection = fc.record({
   secretKey: casedKey(['Access Token', 'Secret']),
   order: fc.shuffledSubarray([0, 1, 2, 3], { minLength: 4, maxLength: 4 }),
   layouts: fc.array(layout, { minLength: 4, maxLength: 4 }),
-  quotes: fc.array(fc.constantFrom('plain', '"', "'"), { minLength: 4, maxLength: 4 }),
+  quotes: fc.array(fc.constantFrom('plain', '"', "'", 'unquoted'), { minLength: 4, maxLength: 4 }),
   scheme: casedKey(['postgres', 'mysql', 'mongodb', 'redis', 'amqp', 'mssql']),
   trailing: fc.boolean(),
 }).map((sample) => {

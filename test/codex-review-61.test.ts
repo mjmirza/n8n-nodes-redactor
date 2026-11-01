@@ -179,8 +179,10 @@ describe('re-review 61-7: pseudonym generation', () => {
       const input = { note: Array.from({ length: count }, (_, i) => `user${i}@example.com`).join(';') };
       return { input, ...roundTrip(input, { mode: 'pseudonymize', enabledPatterns: ['email'], inputText: collectInputText(input) }) };
     };
-    const small = run(8_000);
-    const { input, out, back, ms } = run(32_000);
+    // Each size runs three times and keeps its fastest run, so one garbage-collection pause cannot decide the ratio.
+    const fastest = (count: number) => [run(count), run(count), run(count)].reduce((a, b) => (b.ms < a.ms ? b : a));
+    const small = fastest(8_000);
+    const { input, out, back, ms } = fastest(32_000);
     expect(out.note).not.toMatch(/user\d+@/);
     expect(back).toEqual(input);
     // Four times the input must cost well under the sixteen times a quadratic scan would. Comparing two runs on the

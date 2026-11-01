@@ -6,6 +6,12 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 Planned: random scoped tokens.
 
+## [7.0.2] - 2026-11-01
+
+### Fixed
+- Connection-string segments parse the key and first equals sign before the value. Interior quotes, apostrophes, braces and equals signs in unquoted values no longer hide later credentials. Prose prefixes remain supported.
+- Prior-token filtering uses an Aho-Corasick automaton cached by session entry table. Inputs with matching first characters and many token lengths scan in linear time plus matches, while earlier token literals remain protected as sessions grow.
+
 ## [7.0.1] - 2026-11-01
 
 ### Fixed

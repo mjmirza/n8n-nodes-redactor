@@ -558,8 +558,6 @@ function scanLdapDns(text: string): Span[] {
   return spans;
 }
 
-const isLineBreak = (ch: string | undefined): boolean => ch === '\n' || ch === '\r';
-
 // ADO.NET keyword whitespace includes NEL, which JavaScript's \s omits. Never cross a CR/LF boundary.
 const CONN_SPACE = String.raw`(?:[^\S\r\n]|\u0085)`;
 const connSpace = new RegExp(CONN_SPACE);
@@ -581,18 +579,6 @@ function connValueStart(text: string, from: number): number {
 const connQuoteAt = (text: string, at: number, braceEnd: number): boolean =>
   /["']/.test(text[at] ?? '') || (text[at] === '{' && at < braceEnd);
 const connHasValue = (text: string, at: number): boolean => at < text.length && text[at] !== ';';
-
-/** The index after the closing delimiter, reading a doubled closing delimiter as a literal one. */
-function quotedValueEnd(text: string, at: number, limit: number): number {
-  const opener = text[at++];
-  const quote = opener === '{' ? '}' : opener;
-  while (at < limit) {
-    if (text[at++] !== quote) continue;
-    if (text[at] !== quote) return at;
-    at++;
-  }
-  return at;
-}
 
 interface ConnChain {
   start: number;
@@ -621,43 +607,118 @@ function recordConnKey(chain: ConnChain, key: string): boolean {
   return false;
 }
 
-/** Read each line once, recognising keys inside prose but never inside quoted values, including unknown properties. */
-function connChain(text: string, from: number, limit: number, braceEnd: number): ConnChain {
-  const chain: ConnChain = { start: from, end: from, host: false, password: false };
-  const line = text.slice(from, limit);
-  const elements = new RegExp(`(?<![A-Za-z])(${CONN_KEY})${CONN_SPACE}*=|[=;]`, 'gi');
-  let sensitive = false;
-  let match: RegExpExecArray | null;
-  while ((match = elements.exec(line)) !== null) {
-    if (match[0] === ';') {
-      if (sensitive) chain.end = from + match.index;
-      sensitive = false;
-      continue;
-    }
-    const at = connValueStart(line, elements.lastIndex);
-    if (match[1] && connHasValue(line, at)) sensitive = recordConnKey(chain, match[1]) || sensitive;
-    if (connQuoteAt(line, at, braceEnd - from)) elements.lastIndex = quotedValueEnd(line, at, line.length);
-  }
-  if (sensitive) chain.end = limit;
-  return chain;
+interface ConnSegment {
+  next: number;
+  end: number;
+  host: boolean;
+  password: boolean;
+  quotedEnd: number;
 }
 
-/**
- * Key=value connection strings with credentials, on one line, in any key order.
- * The first recognised keyword can follow a free-text prefix. Each line is read once per grammar.
- */
+interface ConnLine {
+  text: string;
+  semicolons: Int32Array;
+  equals: Int32Array;
+  closes: Record<string, Int32Array>;
+  braceEnd: number;
+  tails: Map<number, ConnChain>;
+  segments: Map<number, ConnSegment>;
+}
+
+/** Value states share suffix tables, so alternate starts in prose never rescan a line's suffix. */
+function connDelimiters(text: string, delimiter: string, doubled = false): Int32Array {
+  const ends = new Int32Array(text.length + 2).fill(text.length);
+  for (let at = text.length - 1; at >= 0; at--) {
+    if (text[at] !== delimiter) ends[at] = ends[at + 1];
+    else if (doubled && text[at + 1] === delimiter) ends[at] = ends[at + 2];
+    else ends[at] = at + (doubled ? 1 : 0);
+  }
+  return ends;
+}
+
+function connLine(text: string, odbc: boolean): ConnLine {
+  return {
+    text, semicolons: connDelimiters(text, ';'), equals: connDelimiters(text, '='),
+    closes: { '"': connDelimiters(text, '"', true), "'": connDelimiters(text, "'", true), '{': connDelimiters(text, '}', true) },
+    braceEnd: odbc ? lastBraceClose(text, 0, text.length) : -1,
+    tails: new Map(), segments: new Map(),
+  };
+}
+
+/** Key -> equals -> value start -> quoted/braced or unquoted value -> semicolon. */
+function connSegment(line: ConnLine, from: number, key: string | undefined, equalsEnd: number): ConnSegment {
+  const at = connValueStart(line.text, equalsEnd);
+  const quotedEnd = connQuoteAt(line.text, at, line.braceEnd) ? line.closes[line.text[at]][at + 1] : at;
+  // After the leading delimiter closes, every further quote, brace and equals is literal until the semicolon.
+  const end = line.semicolons[quotedEnd];
+  const chain: ConnChain = { start: from, end: -1, host: false, password: false };
+  if (key && connHasValue(line.text, at) && recordConnKey(chain, key)) chain.end = end;
+  return { next: end + 1, end: chain.end, host: chain.host, password: chain.password, quotedEnd };
+}
+
+const connSegmentKey = new RegExp(`(?<![A-Za-z])(${CONN_KEY})${CONN_SPACE}*$`, 'i');
+
+/** In the key state, only the first equals can introduce a value, including for unknown properties. */
+function connKeySegment(line: ConnLine, from: number): ConnSegment {
+  const equals = line.equals[from];
+  const end = line.semicolons[from];
+  if (equals >= end) return { next: end + 1, end: -1, host: false, password: false, quotedEnd: from };
+  const key = connSegmentKey.exec(line.text.slice(from, equals))?.[1];
+  return connSegment(line, from, key, equals + 1);
+}
+
+function prependConn(from: number, segment: ConnSegment, tail: ConnChain): ConnChain {
+  return {
+    start: from, end: Math.max(segment.end, tail.end),
+    host: segment.host || tail.host, password: segment.password || tail.password,
+  };
+}
+
+/** Memoized segment tails form a forward-only state machine, evaluated without recursion. */
+function connTail(line: ConnLine, from: number): ConnChain {
+  const trail: number[] = [];
+  let at = from;
+  while (at < line.text.length && !line.tails.has(at)) {
+    trail.push(at);
+    const segment = connKeySegment(line, at);
+    line.segments.set(at, segment);
+    at = segment.next;
+  }
+  let tail = line.tails.get(at) ?? { start: at, end: -1, host: false, password: false };
+  while (trail.length > 0) {
+    const start = trail.pop()!;
+    tail = prependConn(start, line.segments.get(start)!, tail);
+    line.tails.set(start, tail);
+  }
+  return tail;
+}
+
+/** Alternate starts recover connection keys after prose, but never reinterpret equals inside a parsed value. */
+function connChains(text: string, odbc: boolean): Span[] {
+  const line = connLine(text, odbc);
+  const starts = new RegExp(`(?<![A-Za-z])(${CONN_KEY})${CONN_SPACE}*=`, 'gi');
+  const spans: Span[] = [];
+  let match: RegExpExecArray | null;
+  let quotedUntil = 0;
+  while ((match = starts.exec(text)) !== null) {
+    if (match.index < quotedUntil) continue;
+    const segment = connSegment(line, match.index, match[1], starts.lastIndex);
+    quotedUntil = segment.quotedEnd;
+    const chain = prependConn(match.index, segment, connTail(line, segment.next));
+    if (chain.host && chain.password) spans.push({ start: chain.start, end: chain.end });
+  }
+  return spans;
+}
+
+/** Each line is parsed independently, in both ADO.NET and ODBC value states. */
 function scanConnGrammar(text: string, odbc: boolean): Span[] {
   const spans: Span[] = [];
-  const starts = new RegExp(`(?<![A-Za-z])${CONN_KEY}${CONN_SPACE}*=`, 'gi');
+  const lines = /[^\r\n]+/g;
   let match: RegExpExecArray | null;
-  while ((match = starts.exec(text)) !== null) {
-    const start = match.index;
-    let end = starts.lastIndex;
-    while (end < text.length && !isLineBreak(text[end])) end++;
-    const braceEnd = odbc ? lastBraceClose(text, start, end) : -1;
-    const chain = connChain(text, start, end, braceEnd);
-    if (chain.host && chain.password) spans.push({ start: chain.start, end: chain.end });
-    starts.lastIndex = end;
+  while ((match = lines.exec(text)) !== null) {
+    // Avoid building state tables for lines without a recognised key.
+    if (!new RegExp(`${CONN_KEY}${CONN_SPACE}*=`, 'i').test(match[0])) continue;
+    for (const span of connChains(match[0], odbc)) spans.push({ start: match.index + span.start, end: match.index + span.end });
   }
   return spans;
 }
