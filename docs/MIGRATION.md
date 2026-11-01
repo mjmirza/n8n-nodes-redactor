@@ -1,11 +1,11 @@
-# Migrating from 1.x to 2.0
+# Migrating from 1.x to 4.0
 
-Version 2.0 removes every use of the local disk so the node runs on n8n Cloud and passes n8n's verification scanner. Three 1.x features stored data in files. This page shows what replaces each one and what to do before you upgrade.
+Version 4.0 removes every use of the local disk so the node runs on n8n Cloud and passes n8n's verification scanner. Three 1.x features stored data in files. This page shows what replaces each one and what to do before you upgrade. The version jumps from 1.x to 4.0 because 2.0.0 and 3.0.x were published briefly in March 2026 and withdrawn, and npm never allows a version number to be reused.
 
 ## Before you upgrade
 
 1. Let running Redact and Restore pairs finish. Sessions expire after their TTL (60 minutes by default), so waiting one TTL is enough.
-2. If you rely on the JSONL audit files in `~/.n8n/pii-audit/`, copy them somewhere safe. 2.0 does not read or delete them.
+2. If you rely on the JSONL audit files in `~/.n8n/pii-audit/`, copy them somewhere safe. 4.0 does not read or delete them.
 3. If you keep tenant profiles in `~/.n8n/pii-profiles/`, open each `profile_*.json`. You will paste its content into the node.
 
 Need the disk-based behaviour? Stay on the 1.x line, which still gets security and correctness fixes.
@@ -16,7 +16,7 @@ npm install n8n-nodes-redactor@v1-legacy
 
 ## What changed
 
-| 1.x | 2.0 | What to do |
+| 1.x | 4.0 | What to do |
 |---|---|---|
 | File vault in `~/.n8n/pii-vault/` (Vault Storage set to File-Based) | Workflow Storage, kept with the workflow by n8n | Nothing. Workflows that never changed Vault Storage switch automatically. A saved value of `file` is treated as Workflow Storage |
 | Vault Directory parameter | Removed | Nothing. The setting is ignored |
