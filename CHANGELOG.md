@@ -6,6 +6,11 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 Planned: random scoped tokens.
 
+## [7.0.4] - 2026-11-02
+
+### Fixed
+- Runs without any bracketed token no longer build prior-token matchers. 7.0.3 built a delta level for every new token as soon as it was stored, so a bulk Redact run on a session with a cached matcher did about ten times the matcher work it needed. New tokens are now queued and folded into the matcher on the next lookup. Once the queue passes the rebuild threshold, the cache is dropped and rebuilt from the session on demand.
+
 ## [7.0.3] - 2026-11-01
 
 ### Fixed
