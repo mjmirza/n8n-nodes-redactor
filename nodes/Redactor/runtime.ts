@@ -48,6 +48,13 @@ export function runSetting(fx: IExecuteFunctions, name: string, fallback?: unkno
   return first;
 }
 
+/** Every session-bound operation normalizes expressions before validation, vault access or reporting. */
+export function readSessionId(fns: IExecuteFunctions, name: 'sessionId' | 'purgeSessionId'): string {
+  const sessionId = String(runSetting(fns, name, '') ?? '');
+  if (!sessionId) throw new NodeOperationError(fns.getNode(), 'Session ID is required');
+  return sessionId;
+}
+
 
 /** The credential wins. The legacy plain-text parameter is read only when no credential is attached. */
 export async function resolvePassphrase(fns: IExecuteFunctions): Promise<string> {

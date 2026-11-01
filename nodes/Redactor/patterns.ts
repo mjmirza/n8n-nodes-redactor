@@ -560,14 +560,27 @@ function scanLdapDns(text: string): Span[] {
 
 const isLineBreak = (ch: string | undefined): boolean => ch === '\n' || ch === '\r';
 
-/** Quoted and ODBC braced values honour doubled closing delimiters. */
-function connValueEnd(text: string, from: number, limit: number): number {
+// ADO.NET keyword whitespace includes NEL, which JavaScript's \s omits. Never cross a CR/LF boundary.
+const CONN_SPACE = String.raw`(?:[^\S\r\n]|\u0085)`;
+const connSpace = new RegExp(CONN_SPACE);
+const CONN_HOST_KEY = 'Server|Data Source|Host';
+const CONN_PASSWORD_KEY = 'Password|Pwd';
+const CONN_SENSITIVE_KEY = `${CONN_PASSWORD_KEY}|User ID|Uid|User|Access Token|Token|Client Secret|Secret|API Key`;
+const CONN_KEY = `(?:${CONN_HOST_KEY}|${CONN_SENSITIVE_KEY})`;
+const connHostKey = new RegExp(`^(?:${CONN_HOST_KEY})$`, 'i');
+const connPasswordKey = new RegExp(`^(?:${CONN_PASSWORD_KEY})$`, 'i');
+
+/** Skip keyword whitespace without crossing the line being scanned. */
+function connValueStart(text: string, from: number): number {
   let at = from;
-  while (at < limit && /\s/.test(text[at])) at++;
-  if (/["'{]/.test(text[at] ?? '')) at = quotedValueEnd(text, at, limit);
-  while (at < limit && text[at] !== ';') at++;
+  while (at < text.length && connSpace.test(text[at])) at++;
   return at;
 }
+
+/** Only the ODBC pass treats a closed leading brace as a delimiter. */
+const connQuoteAt = (text: string, at: number, braceEnd: number): boolean =>
+  /["']/.test(text[at] ?? '') || (text[at] === '{' && at < braceEnd);
+const connHasValue = (text: string, at: number): boolean => at < text.length && text[at] !== ';';
 
 /** The index after the closing delimiter, reading a doubled closing delimiter as a literal one. */
 function quotedValueEnd(text: string, at: number, limit: number): number {
@@ -581,64 +594,92 @@ function quotedValueEnd(text: string, at: number, limit: number): number {
   return at;
 }
 
-/** Find a segment delimiter without interpreting semicolons inside a quoted value as separators. */
-function connSegmentEnd(text: string, from: number, limit: number): number {
-  let at = from;
-  while (at < limit && text[at] !== '=' && text[at] !== ';') at++;
-  return text[at] === '=' ? connValueEnd(text, at + 1, limit) : at;
+interface ConnChain {
+  start: number;
+  end: number;
+  host: boolean;
+  password: boolean;
 }
 
-/** The line around at, read once: its end and its last password segment. */
-function connLine(text: string, at: number): { end: number; password: { semi: number; end: number } | null; semi: number } {
-  let lineStart = at;
-  while (lineStart > 0 && !isLineBreak(text[lineStart - 1])) lineStart--;
-  let end = at;
-  while (end < text.length && !isLineBreak(text[end])) end++;
-  return { end, password: lastPasswordSegment(text, lineStart, end), semi: -2 };
-}
-
-/** The first ; at or after from on the line, or -1. Searched once and reused, so starts before it never rescan. */
-function nextSemi(text: string, line: { end: number; semi: number }, from: number): number {
-  if (line.semi !== -1 && line.semi < from) {
-    line.semi = connValueEnd(text, from, line.end);
-    if (line.semi === line.end) line.semi = -1;
+/** The final unescaped closing brace, found once so unmatched opening braces never rescan the remaining line. */
+function lastBraceClose(text: string, from: number, limit: number): number {
+  let at = limit;
+  while (at > from) {
+    if (text[--at] !== '}') continue;
+    const end = at + 1;
+    while (at > from && text[at - 1] === '}') at--;
+    if ((end - at) % 2 === 1) return end;
   }
-  return line.semi;
+  return -1;
 }
 
-/** The last segment with a trimmed Password or Pwd key and a value: the ; before it, and its end. */
-function lastPasswordSegment(text: string, lineStart: number, lineEnd: number): { semi: number; end: number } | null {
-  let found: { semi: number; end: number } | null = null;
-  let segStart = lineStart;
-  while (segStart <= lineEnd) {
-    const segEnd = connSegmentEnd(text, segStart, lineEnd);
-    const segment = text.slice(segStart, segEnd);
-    const key = /^[ \t]*(?:Password|Pwd)[ \t]*=/i.exec(segment);
-    if (key && key[0].length < segment.length) found = { semi: segStart - 1, end: segEnd };
-    segStart = segEnd + 1;
+/** Record a recognised key and report whether its segment contains a credential. */
+function recordConnKey(chain: ConnChain, key: string): boolean {
+  if (connPasswordKey.test(key)) chain.password = true;
+  if (!connHostKey.test(key)) return true;
+  chain.host = true;
+  return false;
+}
+
+/** Read each line once, recognising keys inside prose but never inside quoted values, including unknown properties. */
+function connChain(text: string, from: number, limit: number, braceEnd: number): ConnChain {
+  const chain: ConnChain = { start: from, end: from, host: false, password: false };
+  const line = text.slice(from, limit);
+  const elements = new RegExp(`(?<![A-Za-z])(${CONN_KEY})${CONN_SPACE}*=|[=;]`, 'gi');
+  let sensitive = false;
+  let match: RegExpExecArray | null;
+  while ((match = elements.exec(line)) !== null) {
+    if (match[0] === ';') {
+      if (sensitive) chain.end = from + match.index;
+      sensitive = false;
+      continue;
+    }
+    const at = connValueStart(line, elements.lastIndex);
+    if (match[1] && connHasValue(line, at)) sensitive = recordConnKey(chain, match[1]) || sensitive;
+    if (connQuoteAt(line, at, braceEnd - from)) elements.lastIndex = quotedValueEnd(line, at, line.length);
   }
-  return found;
+  if (sensitive) chain.end = limit;
+  return chain;
 }
 
 /**
- * Key=value connection strings with credentials, on one line, from Server=, Data Source= or Host= through the last
- * Password= or Pwd= value, with no length limit. Each line is read once.
+ * Key=value connection strings with credentials, on one line, in any key order.
+ * The first recognised keyword can follow a free-text prefix. Each line is read once per grammar.
  */
-function scanConnStrings(text: string): Span[] {
+function scanConnGrammar(text: string, odbc: boolean): Span[] {
   const spans: Span[] = [];
-  const starts = /(?<![A-Za-z])(?:Server|Data Source|Host)[ \t]*=/gi;
-  let line: { end: number; password: { semi: number; end: number } | null; semi: number } = { end: -1, password: null, semi: -2 };
-  let m: RegExpExecArray | null;
-  while ((m = starts.exec(text)) !== null) {
-    const start = m.index;
-    const valueStart = start + m[0].length;
-    if (start > line.end) line = connLine(text, start);
-    const semi = nextSemi(text, line, valueStart);
-    if (semi <= valueStart || !line.password || line.password.semi < semi) continue;
-    spans.push({ start, end: line.password.end });
-    starts.lastIndex = line.password.end;
+  const starts = new RegExp(`(?<![A-Za-z])${CONN_KEY}${CONN_SPACE}*=`, 'gi');
+  let match: RegExpExecArray | null;
+  while ((match = starts.exec(text)) !== null) {
+    const start = match.index;
+    let end = starts.lastIndex;
+    while (end < text.length && !isLineBreak(text[end])) end++;
+    const braceEnd = odbc ? lastBraceClose(text, start, end) : -1;
+    const chain = connChain(text, start, end, braceEnd);
+    if (chain.host && chain.password) spans.push({ start: chain.start, end: chain.end });
+    starts.lastIndex = end;
   }
   return spans;
+}
+
+/** Merge the two ordered scans in linear time, covering the sensitive spans recognised by either grammar. */
+function mergeConnSpans(ado: Span[], odbc: Span[]): Span[] {
+  const spans: Span[] = [];
+  let a = 0;
+  let b = 0;
+  while (a < ado.length || b < odbc.length) {
+    let next: Span;
+    if (b >= odbc.length || (a < ado.length && ado[a].start <= odbc[b].start)) next = ado[a++];
+    else next = odbc[b++];
+    const previous = spans[spans.length - 1];
+    if (previous && next.start < previous.end) previous.end = Math.max(previous.end, next.end);
+    else spans.push({ ...next });
+  }
+  return spans;
+}
+
+function scanConnStrings(text: string): Span[] {
+  return mergeConnSpans(scanConnGrammar(text, false), scanConnGrammar(text, true));
 }
 
 // A labelled name word: any letters and marks, with inner apostrophes or hyphens, as in O'Connor or Smith-Jones.
@@ -1468,8 +1509,8 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'dbConnectionString',
     label: 'DB_CONN_STRING',
     category: 'enterprise',
-    regex: /(?:jdbc|mongodb(?:\+srv)?|postgres(?:ql)?|mysql|redis(?:s)?|mssql|mariadb):\/\/[^\s"']+/gi,
-    description: 'Database connection strings (JDBC, MongoDB, PostgreSQL, MySQL, Redis)',
+    regex: /(?:jdbc|mongodb(?:\+srv)?|postgres(?:ql)?|mysql|redis(?:s)?|amqps?|mssql|mariadb):\/\/[^\s"]+/gi,
+    description: 'Database and broker connection strings (JDBC, MongoDB, PostgreSQL, MySQL, Redis, AMQP)',
   },
   {
     name: 'connStringKV',

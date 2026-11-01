@@ -15,7 +15,7 @@ import {
 import { getPatternOptions } from './patterns';
 import { createVault } from './vault';
 import {
-  redactValue, restoreFromSession, buildReport, enhanceWithPresidio, collectTokenLike, collectInputText, priorTokenMatcher, ensureRestorable,
+  redactValue, restoreFromSession, buildReport, enhanceWithPresidio, collectTokenLike, collectInputText, priorTokensInInput, ensureRestorable,
 } from './engine';
 import {
   CustomPattern,
@@ -30,7 +30,7 @@ import { buildAuditEntry } from './audit';
 import { markUnscanned, presidioUnscanned, PresidioRequester } from './presidio';
 import { MODES, parseTenantProfile } from './profiles';
 import { generateRopaRecord } from './ropa';
-import { assertUserRegexes, resolvePassphrase, runSetting, sanitizeInjection, selectedPatterns, workflowNamespace } from './runtime';
+import { assertUserRegexes, readSessionId, resolvePassphrase, runSetting, sanitizeInjection, selectedPatterns, workflowNamespace } from './runtime';
 
 /**
  * Curated high-precision pattern set. These patterns have low false-positive
@@ -1180,10 +1180,7 @@ export class Redactor implements INodeType {
     // Only Redact and Restore are bound to a session. Purge and Stats are not.
     let sessionId = '';
     if (operation === 'redact' || operation === 'restore') {
-      sessionId = String(runSetting(this, 'sessionId') ?? '');
-      if (!sessionId) {
-        throw new NodeOperationError(this.getNode(), 'Session ID is required');
-      }
+      sessionId = readSessionId(this, 'sessionId');
     }
 
     // ─── REDACT ──────────────────────────────
@@ -1348,8 +1345,8 @@ export class Redactor implements INodeType {
         inputIndex: {},
         lockedSpans: new WeakMap(),
         keyLocks: new WeakMap(),
-        priorTokens: priorTokenMatcher(vault.getSession(sessionId)?.entries),
       };
+      ctx.priorTokens = priorTokensInInput(ctx, vault.getSession(sessionId)?.entries);
 
       const allHits: RedactionHit[] = [];
       const returnData: INodeExecutionData[] = [];
@@ -1507,10 +1504,7 @@ export class Redactor implements INodeType {
       const purgeScope = runSetting(this, 'purgeScope', 'all') as string;
 
       if (purgeScope === 'specific') {
-        const purgeSessionId = runSetting(this, 'purgeSessionId', '') as string;
-        if (!purgeSessionId) {
-          throw new NodeOperationError(this.getNode(), 'Session ID is required for purging a specific session.');
-        }
+        const purgeSessionId = readSessionId(this, 'purgeSessionId');
         const purged = vault.purgeSession(purgeSessionId);
         return [[{
           json: {

@@ -1,12 +1,12 @@
 # Resolved findings
 
-Every finding from the reviews of 6.1.0 (round 0) and of the 7.0.0 branch (rounds 1 to 9, then the final scoped round 10) is fixed and pinned by a
+Every finding from the reviews of 6.1.0 (round 0) and of the 7.0.0 branch (rounds 1 to 9, then the final scoped round 10) and of published 7.0.0 (round 11) is fixed and pinned by a
 regression test that fails on the code before its fix. Reviewers should not re-raise a finding listed here unless they
 show that its pinned test is wrong.
 
 The test column names the `describe` block. Unless the column names another file, it lives in
-`test/codex-review-<NN>.test.ts`, where `<NN>` is the number in the block name (round 0 is `61`, rounds 1 to 10 are
-`70` to `79`). The location is where the reviewer found the defect, so line numbers refer to the code at that time.
+`test/codex-review-<NN>.test.ts`, where `<NN>` is the number in the block name (round 0 is `61`, rounds 1 to 11 are
+`70` to `80`). The location is where the reviewer found the defect, so line numbers refer to the code at that time.
 
 Maintainer decisions that are out of scope for review are listed in [DESIGN-DECISIONS.md](DESIGN-DECISIONS.md).
 
@@ -106,3 +106,12 @@ Maintainer decisions that are out of scope for review are listed in [DESIGN-DECI
 | R10-4 | Medium | patterns.ts:415 | Empty-signature JWTs remain undetected | re-review 79-4: empty-signature unsecured JWTs | 6b724f7 |
 | R10-5 | Medium | audit.ts:13 | Numeric personal Session IDs escape through a new error | re-review 79-5: numeric personal Session IDs | 6b724f7 |
 | R10-6 | Medium | engine.ts:1670 | The final restoration check falsely rejects valid output | re-review 79-6: restoration ignores object property enumeration order | 6b724f7 |
+| R11-1 | High | patterns.ts:616 | Leading Unicode whitespace disables connection-string detection | re-review 80-1: leading Unicode whitespace in connection-string keywords | 181bea8 |
+| R11-2 | High | patterns.ts:567 | ODBC brace handling suppresses valid ADO.NET credentials | re-review 80-2: distinguish ADO.NET literal braces from ODBC delimiters | 181bea8 |
+| R11-3 | Medium | Redactor.node.ts:1510 | Purge omits the numeric Session ID normalization | re-review 80-3: normalize numeric Session IDs for Purge | 181bea8 |
+| R11-P1 | High | patterns.ts | Property test counterexample: credentials missed in other key orders | re-review 80-4: connection-string credentials in arbitrary segment order | 181bea8 |
+| R11-P2 | High | patterns.ts | Property test counterexample: AMQP URLs and apostrophes in URL credentials | re-review 80-5: authenticated connection URLs | 181bea8 |
+| R11-P | Class | patterns.ts | Connection-string class: ADO.NET, ODBC and URL forms, Unicode whitespace, literal braces, semicolons and equals signs, any key order and casing | test/connstring-property.test.ts, 10,000 runs, seed 7012026 | 181bea8 |
+| R11-G | Medium | engine.ts:1476 | Each Redact run matched every token the session had ever stored, so long-lived sessions slowed every run | re-review 80-session-growth: a long-lived session keeps each run cheap | 181bea8 |
+| R12-1 | High | patterns.ts:653 | Prose with a key=value pair, such as User=guest., hid a later connection string | re-review 80-6 (codex-review-80) and the generated prose prefix in test/connstring-property.test.ts | 63d316a |
+| R12-2 | Medium | engine.ts:1488 | Prior-token filtering built a suffix array, so long inputs cost far more than in 7.0.0 | re-review 80-7 (codex-review-80) | 63d316a |
