@@ -179,16 +179,22 @@ describe('finding 7: a different passphrase never overwrites an encrypted sessio
 describe('finding 8: read-only operations never rewrite workflow static data', () => {
   it('stats and restore without delete leave the store untouched', async () => {
     const store: IDataObject = {};
-    await run({ operation: 'redact', sessionId: 'expired', sessionTtl: 0.0001 }, [{ email: 'gone@example.com' }], { staticData: store });
+    // A one-minute session is aged past its TTL with a clock offset, never a real wait a slow run could exceed.
+    await run({ operation: 'redact', sessionId: 'expired', sessionTtl: 1 }, [{ email: 'gone@example.com' }], { staticData: store });
     const [out] = await run({ operation: 'redact', sessionId: 'ro' }, [{ email: 'ro@example.com' }], { staticData: store });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const snapshot = persist(store);
-    const statsStore = persist(store);
-    await run({ operation: 'stats' }, [{}], { staticData: statsStore });
-    expect(statsStore).toEqual(snapshot);
-    const restoreStore = persist(store);
-    await run({ operation: 'restore', sessionId: 'ro', deleteAfterRestore: false }, [out[0].json], { staticData: restoreStore });
-    expect(restoreStore).toEqual(snapshot);
+    const realNow = Date.now.bind(Date);
+    const clock = jest.spyOn(Date, 'now').mockImplementation(() => realNow() + 2 * 60 * 1000);
+    try {
+      const snapshot = persist(store);
+      const statsStore = persist(store);
+      await run({ operation: 'stats' }, [{}], { staticData: statsStore });
+      expect(statsStore).toEqual(snapshot);
+      const restoreStore = persist(store);
+      await run({ operation: 'restore', sessionId: 'ro', deleteAfterRestore: false }, [out[0].json], { staticData: restoreStore });
+      expect(restoreStore).toEqual(snapshot);
+    } finally {
+      clock.mockRestore();
+    }
   });
 });
 
