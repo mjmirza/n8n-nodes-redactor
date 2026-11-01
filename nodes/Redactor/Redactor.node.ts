@@ -27,8 +27,8 @@ import {
 import { classifyData } from './classification';
 import { scanForInjection } from './injection';
 import { buildAuditEntry } from './audit';
-import { resetCircuitBreaker, PresidioRequester } from './presidio';
-import { parseTenantProfile } from './profiles';
+import type { PresidioRequester } from './presidio';
+import { MODES, parseTenantProfile } from './profiles';
 import { generateRopaRecord } from './ropa';
 import { assertUserRegexes, resolvePassphrase, runSetting, sanitizeInjection, workflowNamespace } from './runtime';
 
@@ -68,7 +68,7 @@ const RECOMMENDED_PATTERNS = [
   'internalHostname', 'uncPath', 'ldapDN', 'adUsername',
   'dbConnectionString', 'connStringKV',
   'awsAccessKey', 'gcpApiKey', 'stripeKey', 'openaiKey', 'githubToken',
-  'slackToken', 'bearerToken', 'httpBasicAuth', 'jwtToken', 'pemPrivateKey', 'sshPublicKey',
+  'slackToken', 'bearerToken', 'httpBasicAuth', 'httpBasicCredential', 'jwtToken', 'pemPrivateKey', 'sshPublicKey',
   'genericSecret', 'azureKey', 'slackWebhook',
   'sendgridKey', 'twilioKey', 'anthropicKey', 'gitlabToken',
   'x509Certificate', 'pgpPrivateKey', 'envSecrets',
@@ -713,7 +713,7 @@ export class Redactor implements INodeType {
           },
         },
         default: false,
-        description: 'Whether to add NLP-based detection using Microsoft Presidio. Catches person names, locations, and organizations in free text that regex cannot detect. Requires a Presidio Docker container running locally. Setup: docker run -d -p 5002:3000 mcr.microsoft.com/presidio-analyzer',
+        description: 'Whether to add NLP-based detection using Microsoft Presidio. Catches person names, locations, and organizations in free text that regex cannot detect. Requires a Presidio Docker container running locally. Setup: docker run -d -p 127.0.0.1:5002:3000 mcr.microsoft.com/presidio-analyzer',
       },
       {
         displayName: 'Presidio URL',
@@ -972,12 +972,9 @@ export class Redactor implements INodeType {
     const operation = runSetting(this, 'operation') as string;
     const startTime = Date.now();
 
-    // Reset Presidio circuit breaker at start of each execution
-    resetCircuitBreaker();
-
     // ─── DETECT / VERIFY (zero-config, scans everything) ──
     if (operation === 'detect' || operation === 'verify') {
-      // Detect and Verify always scan ALL 217 patterns.
+      // Detect and Verify always scan ALL 218 patterns.
       // No parameters needed. Simple, reliable, no "Could not get parameter".
       const enabledPatterns = getPatternOptions().map((p) => p.value);
       const customPatterns: CustomPattern[] = [];
@@ -1167,6 +1164,11 @@ export class Redactor implements INodeType {
     // ─── REDACT ──────────────────────────────
     if (operation === 'redact') {
       let mode = runSetting(this, 'redactionMode', 'token') as RedactionMode;
+      if (!MODES.includes(mode)) {
+        throw new NodeOperationError(this.getNode(), `Unknown redaction mode "${String(mode)}"`, {
+          description: `Use one of: ${MODES.join(', ')}.`,
+        });
+      }
       const detectionScope = runSetting(this, 'detectionScope', 'recommended') as string;
       let enabledPatterns: string[];
       if (detectionScope === 'all') {

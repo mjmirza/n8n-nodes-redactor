@@ -15,7 +15,7 @@
   <a href="https://github.com/mjmirza/n8n-nodes-redactor/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/mjmirza/n8n-nodes-redactor/ci.yml?branch=master&label=CI" alt="CI status" /></a>
   <a href="https://www.npmjs.com/package/n8n-nodes-redactor#provenance"><img src="https://img.shields.io/badge/npm-provenance%20signed-brightgreen" alt="npm provenance" /></a>
   <a href="#license"><img src="https://img.shields.io/npm/l/n8n-nodes-redactor" alt="MIT License" /></a>
-  <img src="https://img.shields.io/badge/PII%20patterns-217-blue" alt="217 PII patterns" />
+  <img src="https://img.shields.io/badge/PII%20patterns-218-blue" alt="218 PII patterns" />
   <img src="https://img.shields.io/badge/n8n-Cloud%20%2B%20self--hosted-FF6D5A" alt="n8n Cloud and self-hosted" />
 </p>
 
@@ -92,7 +92,7 @@ Set Verify Output on the Verify node to Items, Stop on FAIL. Verify then passes 
 
 ## What it detects
 
-217 patterns across 11 categories.
+218 patterns across 11 categories.
 
 | Category | Examples |
 |---|---|

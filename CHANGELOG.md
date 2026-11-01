@@ -49,6 +49,10 @@ Fixes every finding from a ninth adversarial review, run against 6.1.0. Each one
 - Presidio was asked for scores of 0.4 and up even when the threshold was lower. The configured threshold is sent.
 - Pseudonym generation, URL redaction next to deny-list matches, and Presidio key traversal took quadratic time. Each is now linear.
 - A tenant profile accepted a `NaN` confidence threshold. It is refused.
+- A Redaction Mode expression that gave an unknown value, such as `TOKEN`, left the data unchanged and put it in the report. The run now stops with an error that lists the valid modes.
+- Basic credentials stored as a header value, as in `{"headers":{"Authorization":"Basic ..."}}`, or inside serialized JSON were not redacted, and Verify passed them. A new `httpBasicCredential` pattern and `authorization` as a credential key catch both, bringing the total to 218 patterns. The Basic header pattern now replaces only the credential, so `Authorization:` and the JSON around it stay intact.
+- The Presidio circuit breaker was shared by every execution, so failures in one run turned Presidio off for another. Each execution now has its own breaker.
+- The Presidio setup notice in the node still published port 5002 on every network interface. It binds to `127.0.0.1`, like the setup guide.
 
 ## [6.1.0] - 2026-11-01
 

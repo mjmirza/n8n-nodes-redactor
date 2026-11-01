@@ -38,7 +38,7 @@ export interface TenantProfile {
   updatedAt?: string;
 }
 
-const MODES: RedactionMode[] = ['token', 'mask', 'hash', 'redact', 'pseudonymize', 'blackout', 'remove'];
+export const MODES: RedactionMode[] = ['token', 'mask', 'hash', 'redact', 'pseudonymize', 'blackout', 'remove'];
 const FIELD_MODES = ['all', 'allowlist', 'denylist'];
 const MATCH_TYPES = ['exact', 'contains', 'regex'];
 

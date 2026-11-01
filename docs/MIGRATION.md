@@ -140,6 +140,9 @@ Every version:
 - On Detect, a failed Include Audit Report or Audit Log expression stops the run instead of dropping the report.
 - A tenant profile with a `NaN` confidence threshold is refused.
 - A built-in pattern match that overlaps an earlier replacement no longer causes a rescan from the next character. Its free parts are still redacted.
+- A Redaction Mode expression must give one of the listed modes. An unknown value stops the run instead of passing data through.
+- Basic credentials are redacted wherever they appear: as a header value, under an `authorization` or `proxy_authorization` key, and inside serialized JSON. The Basic header pattern replaces only the `Basic ...` part, so `Authorization: Basic abc` becomes `Authorization: [HTTP_BASIC_AUTH_0]` where 6.x replaced the whole line.
+- Any value under an `authorization` key, including a bearer token, is redacted as a credential.
 
 ## Tenant profile fields
 

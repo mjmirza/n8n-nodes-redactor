@@ -157,8 +157,9 @@ function applyRedaction(
     // The pseudonym is stored as the token so Restore can map it back.
     return storeReversible(match, pattern, ctx, vault, sessionId, () => uniquePseudonym(vault, sessionId, match, pattern.label, ctx));
   }
-  const irreversible = IRREVERSIBLE[ctx.mode];
-  return irreversible ? irreversible(match, pattern.label) : match;
+  const irreversible = Object.prototype.hasOwnProperty.call(IRREVERSIBLE, ctx.mode) ? IRREVERSIBLE[ctx.mode] : undefined;
+  if (!irreversible) throw new Error(`Unknown redaction mode "${String(ctx.mode)}"`);
+  return irreversible(match, pattern.label);
 }
 
 // The next index per session's entry table, so a fresh token never recounts every entry.
@@ -720,7 +721,7 @@ const SEMANTIC_FIELD_MAP: Array<{
   // CREDENTIALS / AUTH / SECRETS / TOKENS
   // ═══════════════════════════════════════════
   {
-    keys: /^(?:password|passwd|pwd|pass_?word|secret|secret_?key|api_?key|api_?secret|api_?token|access_?token|refresh_?token|auth_?token|bearer_?token|session_?token|session_?key|private_?key|encryption_?key|signing_?key|master_?key|client_?secret|consumer_?key|consumer_?secret|oauth_?token|credentials|passwort|kennwort|schluessel|mot_?de_?passe|contrasena|clave|senha|wachtwoord|sleutel|losenord|haslo|parol|mima|sifre)$/i,
+    keys: /^(?:password|passwd|pwd|pass_?word|secret|secret_?key|api_?key|api_?secret|api_?token|access_?token|refresh_?token|auth_?token|bearer_?token|session_?token|session_?key|private_?key|encryption_?key|signing_?key|master_?key|client_?secret|consumer_?key|consumer_?secret|oauth_?token|credentials|authorization|proxy_?authorization|passwort|kennwort|schluessel|mot_?de_?passe|contrasena|clave|senha|wachtwoord|sleutel|losenord|haslo|parol|mima|sifre)$/i,
     label: 'CREDENTIAL',
     category: 'enterprise',
   },

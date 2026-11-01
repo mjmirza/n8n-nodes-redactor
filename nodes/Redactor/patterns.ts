@@ -3,6 +3,27 @@ import { PiiPattern } from './types';
 /**
  * Luhn algorithm — validates credit card numbers, IBANs (partial), etc.
  */
+const BASE64_DIGITS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+/** Whether base64 text decodes to bytes that include a colon, the user:password separator. */
+function base64HasColon(text: string): boolean {
+  const body = text.replace(/=+$/, '');
+  if (body.length % 4 === 1) return false;
+  let bits = 0;
+  let count = 0;
+  for (const ch of body) {
+    const value = BASE64_DIGITS.indexOf(ch);
+    if (value < 0) return false;
+    bits = ((bits << 6) | value) & 0xffff;
+    count += 6;
+    if (count >= 8) {
+      count -= 8;
+      if (((bits >> count) & 0xff) === 0x3a) return true;
+    }
+  }
+  return false;
+}
+
 function luhnCheck(num: string): boolean {
   const digits = num.replace(/\D/g, '');
   let sum = 0;
@@ -2023,8 +2044,17 @@ export const PII_PATTERNS: PiiPattern[] = [
     name: 'httpBasicAuth',
     label: 'HTTP_BASIC_AUTH',
     category: 'enterprise',
-    regex: /\bAuthorization:\s*Basic\s+[A-Za-z0-9+/=]+/gi,
+    regex: /(?<=\bAuthorization["']?\s*[:=]\s*["']?)Basic\s+[A-Za-z0-9+/=]+/gi,
     description: 'HTTP Basic Authentication headers, in any letter case',
+  },
+  {
+    name: 'httpBasicCredential',
+    label: 'HTTP_BASIC_AUTH',
+    category: 'enterprise',
+    // A whole value such as a header object's "Basic dXNlcjpwYXNz", kept only when it decodes to user:password.
+    regex: /^\s*Basic\s+[A-Za-z0-9+/]{4,}={0,2}(?=\s*$)/gi,
+    validate: (match: string) => base64HasColon(match.trim().replace(/^Basic\s+/i, '')),
+    description: 'HTTP Basic credentials stored as a header value',
   },
   {
     name: 'apiKeyInUrl',

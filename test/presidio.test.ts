@@ -1,3 +1,6 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
+
 import {
   checkPresidioHealth,
   analyzeWithPresidio,
@@ -297,12 +300,10 @@ describe('enhanceWithPresidio', () => {
 // ═══════════════════════════════════════════════════════
 describe('Presidio Docker Setup', () => {
   test('docker command is documented correctly', () => {
-    // Verify the Docker image reference is correct
-    const dockerImage = 'mcr.microsoft.com/presidio-analyzer';
-    const defaultPort = 5002;
-    const internalPort = 3000;
-    expect(dockerImage).toContain('presidio-analyzer');
-    expect(defaultPort).toBe(5002);
-    expect(internalPort).toBe(3000);
+    // Reads the real setup guide, so a drift in the documented command fails this test.
+    const doc = readFileSync(join(__dirname, '..', 'docs', 'PRESIDIO_SETUP.md'), 'utf8');
+    expect(doc).toContain('mcr.microsoft.com/presidio-analyzer');
+    expect(doc).toContain('127.0.0.1:5002:3000');
+    expect(doc).not.toMatch(/-p 5002:3000/);
   });
 });

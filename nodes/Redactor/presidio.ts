@@ -10,7 +10,7 @@
  * and enable "Enhanced NLP Detection" in the node settings.
  *
  * Docker setup (one command):
- *   docker run -d -p 5002:3000 mcr.microsoft.com/presidio-analyzer
+ *   docker run -d -p 127.0.0.1:5002:3000 mcr.microsoft.com/presidio-analyzer
  *
  * Or with docker-compose alongside n8n:
  *   services:
@@ -19,7 +19,7 @@
  *       ports: ["5678:5678"]
  *     presidio:
  *       image: mcr.microsoft.com/presidio-analyzer
- *       ports: ["5002:3000"]
+ *       ports: ["127.0.0.1:5002:3000"]
  */
 import { PII_PATTERNS } from './patterns';
 
@@ -125,29 +125,34 @@ const PRESIDIO_TO_CATEGORY: Record<string, string> = {
 };
 
 /**
- * Circuit breaker: after 3 consecutive failures, stop calling Presidio
- * for the rest of this execution. Per-URL to prevent cross-workflow bleed.
- * Resets on success or at start of each n8n execution.
+ * Circuit breaker: after 3 consecutive failures, stop calling Presidio for this URL.
+ * State is keyed by the requester, so each execution (one requester each) has its own breaker.
  */
-const failureCountByUrl: Map<string, number> = new Map();
+let breakers = new WeakMap<PresidioRequester, Map<string, number>>();
 const MAX_FAILURES = 3;
 
-function circuitOpen(url?: string): boolean {
-  if (!url) return false;
-  return (failureCountByUrl.get(url) || 0) >= MAX_FAILURES;
+function failures(request: PresidioRequester): Map<string, number> {
+  let table = breakers.get(request);
+  if (!table) breakers.set(request, (table = new Map()));
+  return table;
 }
 
-function recordSuccess(url?: string): void {
-  if (url) failureCountByUrl.set(url, 0);
+function circuitOpen(request: PresidioRequester, url: string): boolean {
+  return (failures(request).get(url) || 0) >= MAX_FAILURES;
 }
 
-function recordFailure(url?: string): void {
-  if (url) failureCountByUrl.set(url, (failureCountByUrl.get(url) || 0) + 1);
+function recordSuccess(request: PresidioRequester, url: string): void {
+  failures(request).set(url, 0);
 }
 
-/** Reset circuit breaker (call at start of each n8n execution) */
+function recordFailure(request: PresidioRequester, url: string): void {
+  const table = failures(request);
+  table.set(url, (table.get(url) || 0) + 1);
+}
+
+/** Forget every breaker state (tests use this to start clean). */
 export function resetCircuitBreaker(): void {
-  failureCountByUrl.clear();
+  breakers = new WeakMap();
 }
 
 /**
@@ -179,7 +184,7 @@ export async function analyzeWithPresidio(
   if (!request || !isHttpUrl(baseUrl)) return [];
 
   // Circuit breaker: skip if too many consecutive failures for this URL
-  if (circuitOpen(baseUrl)) return [];
+  if (circuitOpen(request, baseUrl)) return [];
 
   const requestBody: PresidioAnalyzeRequest = {
     text,
@@ -197,20 +202,20 @@ export async function analyzeWithPresidio(
     });
 
     if (result.statusCode !== 200) {
-      recordFailure(baseUrl);
+      recordFailure(request, baseUrl);
       return [];
     }
 
     const entities = parseBody(result.body) as PresidioEntity[];
     if (!Array.isArray(entities)) {
-      recordFailure(baseUrl);
+      recordFailure(request, baseUrl);
       return [];
     }
 
-    recordSuccess(baseUrl);
+    recordSuccess(request, baseUrl);
     return entities;
   } catch {
-    recordFailure(baseUrl);
+    recordFailure(request, baseUrl);
     return [];
   }
 }
