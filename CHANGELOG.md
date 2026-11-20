@@ -6,6 +6,11 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 Planned: random scoped tokens.
 
+## [7.0.5] - 2026-11-20
+
+### Fixed
+- A longer IBAN candidate that fails its checksum no longer hides a valid IBAN inside it. A span is skipped only when an earlier span was actually redacted, so the valid number is replaced and restores.
+
 ## [7.0.4] - 2026-11-02
 
 ### Fixed
