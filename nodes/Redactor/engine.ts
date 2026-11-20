@@ -1359,8 +1359,10 @@ function replaceSpans(pass: TextPass, spans: Array<{ start: number; end: number 
   let reach = -1;
   for (const span of ordered) {
     if (span.end <= reach) continue;
-    claimOne(pass, cursor, pending, span.start, span.end, decide);
-    reach = span.end;
+    const outcome = claimOne(pass, cursor, pending, span.start, span.end, decide);
+    // Only redacted text is covered. A rejected candidate, such as an IBAN whose checksum fails,
+    // must not hide a valid match inside it.
+    if (outcome === 'locked' || outcome === 'queued') reach = span.end;
   }
   pass.segs = cursor.finish();
   claimPending(pass, pending);
