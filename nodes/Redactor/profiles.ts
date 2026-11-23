@@ -4,7 +4,7 @@
  * parseTenantProfile validates the shape and throws a readable Error on bad input.
  */
 
-import { RedactionMode, CustomPattern, AllowDenyEntry, FieldRule } from './types';
+import { RedactionMode, CustomPattern, AllowDenyEntry, FieldRule, TOKEN_STYLES, TokenStyle } from './types';
 import { checkRegex } from './regexSafety';
 
 export interface TenantProfile {
@@ -19,6 +19,7 @@ export interface TenantProfile {
   // Redaction behavior
   redactionMode?: RedactionMode;
   dedup?: boolean;
+  tokenStyle?: TokenStyle;
 
   // Field targeting
   fieldMode?: 'all' | 'allowlist' | 'denylist';
@@ -135,6 +136,7 @@ const PARSERS: Record<keyof TenantProfile, FieldParser> = {
   confidenceThreshold: parseThreshold,
   redactionMode: oneOf('redactionMode', MODES),
   dedup: bool('dedup'),
+  tokenStyle: oneOf('tokenStyle', [...TOKEN_STYLES]),
   fieldMode: oneOf('fieldMode', FIELD_MODES),
   fieldRules: parseFieldRules,
   allowList: (v) => entries(v, 'allowList', 'contains'),

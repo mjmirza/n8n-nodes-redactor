@@ -4,7 +4,10 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
-Planned: random scoped tokens.
+## [7.1.0] - 2026-11-23
+
+### Added
+- Token Style on Redact, in Token mode. Sequential, the default, still writes `[EMAIL_0]`, `[EMAIL_1]`. Random writes a nine-digit id such as `[EMAIL_482910337]`, still scoped to the label, so a token no longer shows how many values of that type the session has stored or the order they were stored in. Deduplicate and Restore are unchanged. A tenant profile sets it with `tokenStyle`.
 
 ## [7.0.4] - 2026-11-02
 

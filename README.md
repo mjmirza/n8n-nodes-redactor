@@ -90,6 +90,8 @@ Set Verify Output on the Verify node to Items, Stop on FAIL. Verify then passes 
 | Blackout | `████████` | No | Visual censoring |
 | Remove | empty string | No | Leaving no trace |
 
+Token mode numbers tokens from zero: `[EMAIL_0]`, `[EMAIL_1]`. Set Token Style to Random when a token should not show how many values of that type the session has already stored. The label stays, so the model still sees the type, and the id is nine digits, as in `[EMAIL_482910337]`. Deduplicate still gives one value one token, and Restore puts the original back.
+
 ## What it detects
 
 218 patterns across 11 categories.
@@ -112,6 +114,7 @@ Set Verify Output on the Verify node to Items, Stop on FAIL. Verify then passes 
 | Feature | Detail |
 |---|---|
 | Deduplication | The same value gets the same token everywhere, so the model keeps relationships between fields |
+| Token style | Sequential `[EMAIL_0]` by default. Random uses a nine-digit id, `[EMAIL_482910337]`, so the token does not reveal how many values of that type the session has stored |
 | Field targeting | Allowlist or denylist paths such as `user.email`, `*.phone` or `metadata.*` |
 | Vault | Workflow Storage by default, so Restore works in later production runs of the same workflow, or In-Memory. Sessions expire after 60 minutes by default |
 | Vault encryption | AES-256-GCM with scrypt key derivation, one passphrase per tenant, kept in a Redactor Vault credential. See [Vault encryption](#vault-encryption) |

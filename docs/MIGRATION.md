@@ -185,6 +185,7 @@ All fields are optional. Unknown fields are rejected so a typo never passes sile
 | `confidenceThreshold` | number from 0 to 1 | Confidence Threshold |
 | `redactionMode` | token, mask, hash, redact, pseudonymize, blackout or remove | Redaction Mode |
 | `dedup` | true or false | Deduplicate |
+| `tokenStyle` | sequential or random | Token Style. Sequential numbers from 0. Random uses a nine-digit id |
 | `fieldMode` | all, allowlist or denylist | Field Targeting |
 | `fieldRules` | array of `{ "field", "mode" }`, mode include or exclude | Field Rules |
 | `allowList`, `denyList` | array of `{ "value", "type" }`, type exact, contains or regex | Allow List (Never Redact) and Deny List (Always Redact) |

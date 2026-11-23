@@ -19,6 +19,7 @@ import {
 } from './engine';
 import {
   CustomPattern,
+  isTokenStyle,
   RedactionContext,
   RedactionHit,
   RedactionMode,
@@ -379,6 +380,33 @@ export class Redactor implements INodeType {
         default: true,
         description:
           'Whether the same PII value always gets the same token. This keeps relationships in the data, e.g. an email in 3 fields becomes [EMAIL_0] in all 3.',
+      },
+      {
+        displayName: 'Token Style',
+        name: 'tokenStyle',
+        type: 'options',
+        displayOptions: {
+          show: {
+            operation: ['redact'],
+            redactionMode: ['token'],
+          },
+        },
+        options: [
+          {
+            name: 'Sequential',
+            value: 'sequential',
+            description: 'Number tokens from 0, as in [EMAIL_0], [EMAIL_1]. Matches tokens from earlier versions.',
+          },
+          {
+            name: 'Random',
+            value: 'random',
+            description:
+              'Use a random nine-digit number, as in [EMAIL_482910337]. The label stays, so the type is still visible, but the number does not show how many values of that type the session has stored.',
+          },
+        ],
+        default: 'sequential',
+        description:
+          'How the number in a reversible token is chosen. Sequential is the default. Random keeps the label and hides the session count.',
       },
 
       // ═══════════════════════════════════════
@@ -859,7 +887,7 @@ export class Redactor implements INodeType {
         },
         default: '{}',
         description:
-          'Optional per-client settings that override this node: enabledPatterns, customPatterns, confidenceThreshold, redactionMode, dedup, fieldMode, fieldRules, allowList, denyList, retentionMinutes, auditLog. Unknown fields are rejected.',
+          'Optional per-client settings that override this node: enabledPatterns, customPatterns, confidenceThreshold, redactionMode, dedup, tokenStyle, fieldMode, fieldRules, allowList, denyList, retentionMinutes, auditLog. Unknown fields are rejected.',
       },
 
       // ═══════════════════════════════════════
@@ -1193,6 +1221,7 @@ export class Redactor implements INodeType {
       }
       let enabledPatterns = selectedPatterns(this, getPatternOptions().map((p) => p.value), RECOMMENDED_PATTERNS);
       let dedup = runSetting(this, 'dedup', true) as boolean;
+      let tokenStyle = runSetting(this, 'tokenStyle', 'sequential');
       let fieldMode = runSetting(this, 'fieldMode', 'all') as 'all' | 'allowlist' | 'denylist';
       let sessionTtl = runSetting(this, 'sessionTtl', 60) as number;
       const includeReport = runSetting(this, 'includeReport', false) as boolean;
@@ -1285,6 +1314,7 @@ export class Redactor implements INodeType {
         if (profile.confidenceThreshold !== undefined) confidenceThreshold = profile.confidenceThreshold;
         if (profile.redactionMode) mode = profile.redactionMode;
         if (profile.dedup !== undefined) dedup = profile.dedup;
+        if (profile.tokenStyle) tokenStyle = profile.tokenStyle;
         if (profile.fieldMode) fieldMode = profile.fieldMode;
         if (profile.fieldRules) fieldRules = profile.fieldRules;
         if (profile.allowList) allowList = profile.allowList;
@@ -1298,6 +1328,10 @@ export class Redactor implements INodeType {
             mode: fieldMode === 'allowlist' ? ('include' as const) : ('exclude' as const),
           }));
         }
+      }
+
+      if (!isTokenStyle(tokenStyle)) {
+        throw new NodeOperationError(this.getNode(), `Token Style must be sequential or random, got ${String(tokenStyle)}`);
       }
 
       if (typeof confidenceThreshold !== 'number' || !Number.isFinite(confidenceThreshold) || confidenceThreshold < 0 || confidenceThreshold > 1) {
@@ -1329,6 +1363,7 @@ export class Redactor implements INodeType {
         customPatterns,
         mode,
         dedup,
+        tokenStyle,
         fieldRules,
         fieldMode,
         allowList,
