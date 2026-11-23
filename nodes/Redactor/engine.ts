@@ -58,9 +58,10 @@ function isAllowListed(value: string, allowList?: AllowDenyEntry[]): boolean {
 }
 
 /**
- * Generate a deterministic token for a given label + index.
+ * A bracketed token for a label. A numeric index is written as-is. A string index keeps leading zeros,
+ * so a random nine-digit id cannot collide with a shorter sequential token.
  */
-function generateToken(label: string, index: number): string {
+function generateToken(label: string, index: number | string): string {
   // Labels are reduced to the token grammar, so every generated token is reserved against the input.
   const safe = label.toUpperCase().replace(/[^A-Z0-9_]/g, '_');
   return `[${/^[A-Z]/.test(safe) ? safe : `X${safe}`}_${index}]`;
@@ -157,7 +158,7 @@ function applyRedaction(
   sessionId: string,
 ): string {
   if (ctx.mode === 'token') {
-    return storeReversible(match, pattern, ctx, vault, sessionId, () => freshToken(pattern.label, vault, sessionId, ctx.reservedTokens));
+    return storeReversible(match, pattern, ctx, vault, sessionId, () => freshToken(pattern.label, vault, sessionId, ctx));
   }
   if (ctx.mode === 'pseudonymize') {
     // The pseudonym is stored as the token so Restore can map it back.
@@ -171,9 +172,39 @@ function applyRedaction(
 // The next index per session's entry table, so a fresh token never recounts every entry.
 const nextIndex = new WeakMap<object, number>();
 
+// Nine digits, zero-padded. The width hides the session count, and the padding cannot spell a shorter sequential id.
+const RANDOM_TOKEN_SPAN = 1_000_000_000;
+const RANDOM_TOKEN_ATTEMPTS = 64;
+
+/** A free nine-digit token. Retries when the draw is already stored or already written in the input. */
+function randomToken(
+  label: string,
+  entries: Record<string, unknown>,
+  reserved: Set<string> | undefined,
+  draw: (span: number) => number,
+): string {
+  for (let attempt = 0; attempt < RANDOM_TOKEN_ATTEMPTS; attempt++) {
+    const suffix = draw(RANDOM_TOKEN_SPAN).toString().padStart(9, '0');
+    const token = generateToken(label, suffix);
+    if (!entries[token] && !reserved?.has(token)) return token;
+  }
+  throw new Error('Could not allocate a random token');
+}
+
 /** Next unused token for the label, skipping vault tokens and token-shaped input text. */
-function freshToken(label: string, vault: IVault, sessionId: string, reserved?: Set<string>): string {
+function freshToken(
+  label: string,
+  vault: IVault,
+  sessionId: string,
+  ctx: RedactionContext,
+  alsoReserved?: Iterable<string>,
+): string {
+  const reserved = alsoReserved ? new Set([...(ctx.reservedTokens ?? []), ...alsoReserved]) : ctx.reservedTokens;
   const entries = vault.getSession(sessionId)?.entries ?? {};
+  if (ctx.tokenStyle === 'random') {
+    const draw = ctx.tokenRandom ?? ((span: number) => crypto.randomInt(0, span));
+    return randomToken(label, entries, reserved, draw);
+  }
   let index = nextIndex.get(entries) ?? Object.keys(entries).length;
   let token = generateToken(label, index);
   while (entries[token] || reserved?.has(token)) token = generateToken(label, ++index);
@@ -225,7 +256,7 @@ function uniquePseudonym(vault: IVault, sessionId: string, original: string, lab
     const taken = entries[candidate];
     if (!taken || reusable(taken, original, ctx)) return candidate;
   }
-  return freshToken(label, vault, sessionId, ctx.reservedTokens);
+  return freshToken(label, vault, sessionId, ctx);
 }
 
 // Short input is searched directly. Longer input gets a suffix array once per run, kept on the run's context and
@@ -484,7 +515,7 @@ function separatePseudonyms(pass: TextPass): void {
 /** Gives one replacement a bracketed token of its own, and points its report hit at it. */
 function rebracket(pass: TextPass, seg: Segment, entry: VaultEntry): void {
   const { vault, sessionId, ctx } = pass;
-  const token = freshToken(entry.patternLabel || 'PSEUDONYM', vault, sessionId, ctx.reservedTokens);
+  const token = freshToken(entry.patternLabel || 'PSEUDONYM', vault, sessionId, ctx);
   addMapping(vault, sessionId, {
     token, original: pass.source.slice(seg.src, seg.end), patternLabel: entry.patternLabel, category: entry.category,
     createdAt: new Date().toISOString(),
@@ -991,7 +1022,7 @@ function numericMapping(out: string, text: string, ctx: RedactionContext, vault:
     if (same) return same.token;
   }
   // A composite like [DIG_0][DIG_1] can also come from a string, so the number gets its own token.
-  const token = freshToken('NUMBER', vault, sessionId, ctx.reservedTokens);
+  const token = freshToken('NUMBER', vault, sessionId, ctx);
   addMapping(vault, sessionId, {
     token, original: text, patternLabel: 'NUMBER', category: 'other', createdAt: new Date().toISOString(), numeric: true,
   });
@@ -1060,7 +1091,7 @@ function distinctKey(
   reserved: Iterable<string>,
 ): string {
   if (ctx.mode === 'token' || ctx.mode === 'pseudonymize') {
-    const token = freshToken('KEY', vault, sessionId, new Set([...(ctx.reservedTokens ?? []), ...reserved]));
+    const token = freshToken('KEY', vault, sessionId, ctx, reserved);
     addMapping(vault, sessionId, { token, original, patternLabel: 'KEY', category: 'other', createdAt: new Date().toISOString() });
     ctx.lastLocked = [[0, token.length]];
     return token;
@@ -1631,7 +1662,7 @@ function literalStage(pass: TextPass): void {
   const decision: Decision = {
     pattern: { label: 'LITERAL', category: 'other' },
     store: (match) => {
-      const token = freshToken('LITERAL', vault, sessionId, ctx.reservedTokens);
+      const token = freshToken('LITERAL', vault, sessionId, ctx);
       addMapping(vault, sessionId, { token, original: match, patternLabel: 'LITERAL', category: 'other', createdAt: new Date().toISOString() });
       return token;
     },
@@ -1719,7 +1750,7 @@ function restoreWith(value: unknown, restore: (text: string) => string, entries:
 
 /** One bracketed token for a whole original string, so no text around it can be read as another mapping. */
 function wholeToken(original: string, vault: IVault, sessionId: string, ctx: RedactionContext): string {
-  const token = freshToken('TEXT', vault, sessionId, ctx.reservedTokens);
+  const token = freshToken('TEXT', vault, sessionId, ctx);
   addMapping(vault, sessionId, { token, original, patternLabel: 'TEXT', category: 'other', createdAt: new Date().toISOString() });
   return token;
 }

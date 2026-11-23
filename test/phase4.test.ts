@@ -58,6 +58,7 @@ describe('Per-Tenant Profiles (JSON)', () => {
     ['a bad custom regex', { customPatterns: [{ label: 'X', regex: '(' }] }, /not a valid regular expression/],
     ['a negative retention', { retentionMinutes: -1 }, /retentionMinutes/],
     ['a non-boolean dedup', { dedup: 'yes' }, /dedup must be true or false/],
+    ['a bad token style', { tokenStyle: 'shuffle' }, /tokenStyle must be one of/],
     ['a bad field mode', { fieldMode: 'some' }, /fieldMode must be one of/],
     ['a bad allow-list type', { allowList: [{ value: 'a', type: 'fuzzy' }] }, /allowList\[0\].type/],
     ['a bad field rule', { fieldRules: [{ field: 'x', mode: 'maybe' }] }, /fieldRules\[0\].mode/],

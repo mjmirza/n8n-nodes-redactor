@@ -51,6 +51,14 @@ export type RedactionMode =
   | 'blackout'        // ████████ — visual black bars, NOT reversible
   | 'remove';         // (empty string) — complete removal, no trace, NOT reversible
 
+/** How the id in a bracketed token is chosen. Sequential is the historical counter. */
+export const TOKEN_STYLES = ['sequential', 'random'] as const;
+export type TokenStyle = (typeof TOKEN_STYLES)[number];
+
+export function isTokenStyle(value: unknown): value is TokenStyle {
+  return typeof value === 'string' && (TOKEN_STYLES as readonly string[]).includes(value);
+}
+
 export type VaultStorage = 'memory' | 'workflow' | 'file';
 
 export interface RedactionHit {
@@ -114,6 +122,10 @@ export interface RedactionContext {
   customPatterns: CustomPattern[];
   mode: RedactionMode;
   dedup: boolean;
+  /** Sequential numbers tokens from 0. Random uses a nine-digit id that hides the session count. */
+  tokenStyle?: TokenStyle;
+  /** Draws an integer in [0, span). Random tokens use crypto.randomInt when this is unset. */
+  tokenRandom?: (span: number) => number;
   fieldRules: FieldRule[];
   fieldMode: 'all' | 'allowlist' | 'denylist';
   skipSemantic?: boolean;
